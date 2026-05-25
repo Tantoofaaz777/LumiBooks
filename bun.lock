@@ -1,0 +1,18 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "lumiverse-memory-books",
+      "devDependencies": {
+        "lumiverse-spindle-types": "0.4.74",
+        "typescript": "^5.9.3",
+      },
+    },
+  },
+  "packages": {
+    "lumiverse-spindle-types": ["lumiverse-spindle-types@0.4.74", "", {}, "sha512-jy6xV+LcNUNt+Rh1zmam/eEdf6bQ7PRkDsPf9v4NyrcfbBSgf9oB8wAux4G2skt+GxutPiS/JwAXxJxc8mWDFA=="],
+
+    "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+  }
+}
