@@ -57,6 +57,7 @@ export interface MessageStub {
   hidden: boolean;
   covered: boolean;
   coveredByEntryId: string | null;
+  indexInChat: number;
 }
 
 export interface BuiltInPreset {

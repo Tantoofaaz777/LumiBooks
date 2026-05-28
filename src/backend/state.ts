@@ -142,6 +142,7 @@ export async function buildState(userId: string, requestedChatId?: string | null
       hidden,
       covered: !!covered,
       coveredByEntryId: covered,
+      indexInChat: m.index_in_chat,
     };
   });
 

@@ -1384,9 +1384,9 @@ function buildRows(c, _send, countsEl, compressBtn) {
   if (visible.length === 0) {
     return [textNode("No messages match", "lmb-empty")];
   }
-  return visible.map((m, idx) => buildMessageRow(m, idx, c, countsEl, compressBtn));
+  return visible.map((m) => buildMessageRow(m, c, countsEl, compressBtn));
 }
-function buildMessageRow(m, idx, c, countsEl, compressBtn) {
+function buildMessageRow(m, c, countsEl, compressBtn) {
   const row = document.createElement("label");
   row.className = `lmb-message-row${m.covered ? " covered" : ""}${c.selectedMessages.has(m.id) ? " selected" : ""}`;
   row.title = "Shift+click to select a range";
@@ -1420,7 +1420,7 @@ function buildMessageRow(m, idx, c, countsEl, compressBtn) {
   });
   const idxSpan = document.createElement("span");
   idxSpan.className = "lmb-msg-role";
-  idxSpan.textContent = `#${idx + 1}`;
+  idxSpan.textContent = `#${m.indexInChat + 1}`;
   const roleSpan = document.createElement("span");
   roleSpan.className = "lmb-msg-role";
   roleSpan.style.opacity = "0.5";

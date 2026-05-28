@@ -159,12 +159,11 @@ function buildRows(
   if (visible.length === 0) {
     return [textNode("No messages match", "lmb-empty")];
   }
-  return visible.map((m, idx) => buildMessageRow(m, idx, c, countsEl, compressBtn));
+  return visible.map((m) => buildMessageRow(m, c, countsEl, compressBtn));
 }
 
 function buildMessageRow(
   m: MessageStub,
-  idx: number,
   c: MakeTabContext,
   countsEl: HTMLElement,
   compressBtn: HTMLButtonElement,
@@ -198,7 +197,7 @@ function buildMessageRow(
   });
   const idxSpan = document.createElement("span");
   idxSpan.className = "lmb-msg-role";
-  idxSpan.textContent = `#${idx + 1}`;
+  idxSpan.textContent = `#${m.indexInChat + 1}`;
   const roleSpan = document.createElement("span");
   roleSpan.className = "lmb-msg-role";
   roleSpan.style.opacity = "0.5";

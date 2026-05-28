@@ -2969,7 +2969,8 @@ async function buildState(userId, requestedChatId) {
       approxTokens: approximateTokensFromChars(charCount),
       hidden,
       covered: !!covered,
-      coveredByEntryId: covered
+      coveredByEntryId: covered,
+      indexInChat: m.index_in_chat
     };
   });
   let characterName = null;
