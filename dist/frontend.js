@@ -899,12 +899,12 @@ function promptForString(ctx, title, initial) {
     const actions = document.createElement("div");
     actions.className = "lmb-modal-actions";
     actions.append(makeButton("Cancel", () => {
-      handle.dismiss();
       settle(null);
+      handle.dismiss();
     }), makeButton("OK", () => {
       const v = input.value.trim();
-      handle.dismiss();
       settle(v || null);
+      handle.dismiss();
     }, { primary: true }));
     form.appendChild(actions);
     try {
