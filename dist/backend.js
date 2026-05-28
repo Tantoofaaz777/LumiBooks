@@ -1826,15 +1826,13 @@ ${c.raw.content}`).join(`
 function parseSummaryJson(raw) {
   const cleaned = stripThinkBlocks(raw);
   const normalized = normalizeText(cleaned);
-  const safeFallback = (title) => {
-    const looksDegenerate = normalized === "" || normalized === "null" || normalized === "undefined";
-    return { title, opener: "", content: looksDegenerate ? "" : normalized, keywords: [], shortComment: "" };
-  };
   const candidates = collectJsonCandidates(normalized);
+  let sawParseableObject = false;
   for (const cand of candidates) {
     const obj = tryParseJsonObject(cand);
     if (!obj)
       continue;
+    sawParseableObject = true;
     const title = typeof obj["title"] === "string" ? obj["title"] : "";
     const opener = typeof obj["opener"] === "string" ? obj["opener"] : "";
     const contentRaw = obj["content"] ?? obj["summary"] ?? obj["memory_content"];
@@ -1845,7 +1843,10 @@ function parseSummaryJson(raw) {
     const sc = typeof obj["short_comment"] === "string" ? obj["short_comment"] : "";
     return { title, opener, content: contentRaw, keywords, shortComment: sc };
   }
-  return safeFallback("");
+  if (sawParseableObject) {
+    throw new Error("Model returned JSON but no string `content` field was found");
+  }
+  throw new Error("Model output was not valid JSON");
 }
 function stripThinkBlocks(raw) {
   return raw.replace(/<(?:think(?:ing)?|reasoning)>[\s\S]*?<\/(?:think(?:ing)?|reasoning)>/gi, "");
