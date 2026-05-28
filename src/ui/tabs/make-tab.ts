@@ -3,6 +3,7 @@ import {
   HIDDEN_ICON,
   formatTokens,
   makeButton,
+  preserveScroll,
   section,
   select,
   textInput,
@@ -24,6 +25,7 @@ const localState = {
   messageFilter: "uncovered" as "all" | "uncovered" | "covered",
   messageQuery: "",
   lastChatId: null as string | null,
+  anchorMessageId: null as string | null,
 };
 
 export function renderMakeTab(
@@ -34,24 +36,27 @@ export function renderMakeTab(
   if (localState.lastChatId !== state.activeChatId) {
     localState.selectedMessages.clear();
     localState.selectedChapters.clear();
+    localState.anchorMessageId = null;
     localState.lastChatId = state.activeChatId;
   }
   const draw = () => {
-    host.replaceChildren();
-    const c: MakeTabContext = {
-      state,
-      selectedMessages: localState.selectedMessages,
-      selectedChapters: localState.selectedChapters,
-      messageFilter: localState.messageFilter,
-      messageQuery: localState.messageQuery,
-      rerender: draw,
-    };
-    if (!state.activeChatId) {
-      host.appendChild(textNode("Open a chat to pick messages", "lmb-empty"));
-      return;
-    }
-    renderChapterPicker(host, c, send);
-    renderArcPicker(host, c, send);
+    preserveScroll(host, () => {
+      host.replaceChildren();
+      const c: MakeTabContext = {
+        state,
+        selectedMessages: localState.selectedMessages,
+        selectedChapters: localState.selectedChapters,
+        messageFilter: localState.messageFilter,
+        messageQuery: localState.messageQuery,
+        rerender: draw,
+      };
+      if (!state.activeChatId) {
+        host.appendChild(textNode("Open a chat to pick messages", "lmb-empty"));
+        return;
+      }
+      renderChapterPicker(host, c, send);
+      renderArcPicker(host, c, send);
+    });
   };
   draw();
 }
@@ -65,7 +70,7 @@ function renderChapterPicker(
   const help = document.createElement("div");
   help.className = "lmb-help";
   help.textContent =
-    "Covered messages are already filed and stay greyed. Tap to select what Memoria should compress next.";
+    "Covered messages are already filed and are greyed. Shift+click to select ranges.";
   sec.body.appendChild(help);
 
   const filterRow = document.createElement("div");
@@ -110,6 +115,7 @@ function renderChapterPicker(
     send({ type: "create_chapter_range", chatId, messageIds: ids });
     localState.selectedMessages.clear();
     c.selectedMessages.clear();
+    localState.anchorMessageId = null;
     c.rerender();
   }, { primary: true, disabled: c.selectedMessages.size === 0 });
 
@@ -134,6 +140,7 @@ function renderChapterPicker(
     makeButton("Clear", () => {
       localState.selectedMessages.clear();
       c.selectedMessages.clear();
+      localState.anchorMessageId = null;
       c.rerender();
     }),
   );
@@ -164,13 +171,26 @@ function buildMessageRow(
 ): HTMLElement {
   const row = document.createElement("label");
   row.className = `lmb-message-row${m.covered ? " covered" : ""}${c.selectedMessages.has(m.id) ? " selected" : ""}`;
+  row.title = "Shift+click to select a range";
   const cb = document.createElement("input");
   cb.type = "checkbox";
   cb.checked = c.selectedMessages.has(m.id);
   cb.disabled = m.covered;
+  row.addEventListener("click", (e) => {
+    const mouseEvent = e as MouseEvent;
+    if (!mouseEvent.shiftKey || m.covered) return;
+    const anchorId = localState.anchorMessageId;
+    if (!anchorId || anchorId === m.id) return;
+    e.preventDefault();
+    const newState = !c.selectedMessages.has(m.id);
+    applyRangeSelection(c, anchorId, m.id, newState);
+    localState.anchorMessageId = m.id;
+    c.rerender();
+  });
   cb.addEventListener("change", () => {
     if (cb.checked) c.selectedMessages.add(m.id);
     else c.selectedMessages.delete(m.id);
+    localState.anchorMessageId = m.id;
     row.classList.toggle("selected", cb.checked);
     const tokens = sumSelectedTokens(c);
     countsEl.textContent = `${c.selectedMessages.size} selected (~${formatTokens(tokens)} tokens before)`;
@@ -196,6 +216,25 @@ function buildMessageRow(
   }
   row.append(cb, idxSpan, roleSpan, preview, icons);
   return row;
+}
+
+function applyRangeSelection(
+  c: MakeTabContext,
+  anchorId: string,
+  targetId: string,
+  newState: boolean,
+): void {
+  const visible = filterMessages(c);
+  const anchorIdx = visible.findIndex((m) => m.id === anchorId);
+  const targetIdx = visible.findIndex((m) => m.id === targetId);
+  if (anchorIdx === -1 || targetIdx === -1) return;
+  const [from, to] = anchorIdx < targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx];
+  for (let i = from; i <= to; i++) {
+    const m = visible[i];
+    if (!m || m.covered) continue;
+    if (newState) c.selectedMessages.add(m.id);
+    else c.selectedMessages.delete(m.id);
+  }
 }
 
 function sumSelectedTokens(c: MakeTabContext): number {

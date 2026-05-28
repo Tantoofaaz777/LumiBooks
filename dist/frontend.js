@@ -761,6 +761,51 @@ function formatTokens(n) {
     return `${(n / 1000).toFixed(1)}k`;
   return String(n);
 }
+function findScrollingAncestor(el) {
+  let cur = el?.parentElement ?? null;
+  while (cur && cur !== document.body && cur !== document.documentElement) {
+    const style = getComputedStyle(cur);
+    const oy = style.overflowY;
+    if (oy === "auto" || oy === "scroll")
+      return cur;
+    cur = cur.parentElement;
+  }
+  return null;
+}
+function collectScrollableDescendants(root) {
+  const out = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  let node = walker.currentNode;
+  while (node) {
+    if (node !== root && node instanceof HTMLElement) {
+      const style = getComputedStyle(node);
+      const oy = style.overflowY;
+      if (oy === "auto" || oy === "scroll")
+        out.push(node);
+    }
+    node = walker.nextNode();
+  }
+  return out;
+}
+function preserveScroll(anchor, fn) {
+  if (!anchor) {
+    fn();
+    return;
+  }
+  const ancestor = findScrollingAncestor(anchor);
+  const ancestorScroll = ancestor ? ancestor.scrollTop : 0;
+  const innerBefore = collectScrollableDescendants(anchor).map((el) => el.scrollTop);
+  fn();
+  if (ancestor && ancestorScroll > 0)
+    ancestor.scrollTop = ancestorScroll;
+  const innerAfter = collectScrollableDescendants(anchor);
+  if (innerAfter.length === innerBefore.length) {
+    for (let i = 0;i < innerAfter.length; i++) {
+      if (innerBefore[i] > 0)
+        innerAfter[i].scrollTop = innerBefore[i];
+    }
+  }
+}
 var HIDDEN_ICON = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a19.77 19.77 0 0 1 4.22-5.42"/><path d="M22.54 16.88A10.94 10.94 0 0 0 23 12s-4-8-11-8a10.84 10.84 0 0 0-5.34 1.4"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
 
 // src/ui/modals.ts
@@ -1230,30 +1275,34 @@ var localState = {
   selectedChapters: new Set,
   messageFilter: "uncovered",
   messageQuery: "",
-  lastChatId: null
+  lastChatId: null,
+  anchorMessageId: null
 };
 function renderMakeTab(host, state, send) {
   if (localState.lastChatId !== state.activeChatId) {
     localState.selectedMessages.clear();
     localState.selectedChapters.clear();
+    localState.anchorMessageId = null;
     localState.lastChatId = state.activeChatId;
   }
   const draw = () => {
-    host.replaceChildren();
-    const c = {
-      state,
-      selectedMessages: localState.selectedMessages,
-      selectedChapters: localState.selectedChapters,
-      messageFilter: localState.messageFilter,
-      messageQuery: localState.messageQuery,
-      rerender: draw
-    };
-    if (!state.activeChatId) {
-      host.appendChild(textNode("Open a chat to pick messages", "lmb-empty"));
-      return;
-    }
-    renderChapterPicker(host, c, send);
-    renderArcPicker(host, c, send);
+    preserveScroll(host, () => {
+      host.replaceChildren();
+      const c = {
+        state,
+        selectedMessages: localState.selectedMessages,
+        selectedChapters: localState.selectedChapters,
+        messageFilter: localState.messageFilter,
+        messageQuery: localState.messageQuery,
+        rerender: draw
+      };
+      if (!state.activeChatId) {
+        host.appendChild(textNode("Open a chat to pick messages", "lmb-empty"));
+        return;
+      }
+      renderChapterPicker(host, c, send);
+      renderArcPicker(host, c, send);
+    });
   };
   draw();
 }
@@ -1261,7 +1310,7 @@ function renderChapterPicker(host, c, send) {
   const sec = section("Pick messages for a chapter");
   const help = document.createElement("div");
   help.className = "lmb-help";
-  help.textContent = "Covered messages are already filed and stay greyed. Tap to select what Memoria should compress next.";
+  help.textContent = "Covered messages are already filed and are greyed. Shift+click to select ranges.";
   sec.body.appendChild(help);
   const filterRow = document.createElement("div");
   filterRow.className = "lmb-message-filter-row";
@@ -1304,6 +1353,7 @@ function renderChapterPicker(host, c, send) {
     send({ type: "create_chapter_range", chatId, messageIds: ids });
     localState.selectedMessages.clear();
     c.selectedMessages.clear();
+    localState.anchorMessageId = null;
     c.rerender();
   }, { primary: true, disabled: c.selectedMessages.size === 0 });
   const listEl = document.createElement("div");
@@ -1323,6 +1373,7 @@ function renderChapterPicker(host, c, send) {
   }), makeButton("Clear", () => {
     localState.selectedMessages.clear();
     c.selectedMessages.clear();
+    localState.anchorMessageId = null;
     c.rerender();
   }));
   sec.body.appendChild(actions);
@@ -1338,15 +1389,30 @@ function buildRows(c, _send, countsEl, compressBtn) {
 function buildMessageRow(m, idx, c, countsEl, compressBtn) {
   const row = document.createElement("label");
   row.className = `lmb-message-row${m.covered ? " covered" : ""}${c.selectedMessages.has(m.id) ? " selected" : ""}`;
+  row.title = "Shift+click to select a range";
   const cb = document.createElement("input");
   cb.type = "checkbox";
   cb.checked = c.selectedMessages.has(m.id);
   cb.disabled = m.covered;
+  row.addEventListener("click", (e) => {
+    const mouseEvent = e;
+    if (!mouseEvent.shiftKey || m.covered)
+      return;
+    const anchorId = localState.anchorMessageId;
+    if (!anchorId || anchorId === m.id)
+      return;
+    e.preventDefault();
+    const newState = !c.selectedMessages.has(m.id);
+    applyRangeSelection(c, anchorId, m.id, newState);
+    localState.anchorMessageId = m.id;
+    c.rerender();
+  });
   cb.addEventListener("change", () => {
     if (cb.checked)
       c.selectedMessages.add(m.id);
     else
       c.selectedMessages.delete(m.id);
+    localState.anchorMessageId = m.id;
     row.classList.toggle("selected", cb.checked);
     const tokens = sumSelectedTokens(c);
     countsEl.textContent = `${c.selectedMessages.size} selected (~${formatTokens(tokens)} tokens before)`;
@@ -1372,6 +1438,23 @@ function buildMessageRow(m, idx, c, countsEl, compressBtn) {
   }
   row.append(cb, idxSpan, roleSpan, preview, icons);
   return row;
+}
+function applyRangeSelection(c, anchorId, targetId, newState) {
+  const visible = filterMessages(c);
+  const anchorIdx = visible.findIndex((m) => m.id === anchorId);
+  const targetIdx = visible.findIndex((m) => m.id === targetId);
+  if (anchorIdx === -1 || targetIdx === -1)
+    return;
+  const [from, to] = anchorIdx < targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx];
+  for (let i = from;i <= to; i++) {
+    const m = visible[i];
+    if (!m || m.covered)
+      continue;
+    if (newState)
+      c.selectedMessages.add(m.id);
+    else
+      c.selectedMessages.delete(m.id);
+  }
 }
 function sumSelectedTokens(c) {
   let total = 0;
@@ -2449,21 +2532,31 @@ function setup(ctx) {
     const type = (active.type || "text").toLowerCase();
     return type === "text" || type === "number" || type === "search" || type === "email" || type === "url" || type === "tel" || type === "password";
   };
+  let lastRenderedTab = null;
   const doRender = () => {
     if (!lastState) {
       content.replaceChildren();
+      lastRenderedTab = null;
       return;
     }
-    if (activeTab === "books")
-      renderBooksTab(content, lastState, ctx, send);
-    else if (activeTab === "make")
-      renderMakeTab(content, lastState, send);
-    else if (activeTab === "profile")
-      renderProfileTab(content, lastState, ctx, send);
-    else if (activeTab === "prompts")
-      renderPromptsTab(content, lastState, ctx, send);
-    else
-      renderAboutTab(content, lastState, send);
+    const renderInner = () => {
+      if (activeTab === "books")
+        renderBooksTab(content, lastState, ctx, send);
+      else if (activeTab === "make")
+        renderMakeTab(content, lastState, send);
+      else if (activeTab === "profile")
+        renderProfileTab(content, lastState, ctx, send);
+      else if (activeTab === "prompts")
+        renderPromptsTab(content, lastState, ctx, send);
+      else
+        renderAboutTab(content, lastState, send);
+    };
+    if (lastRenderedTab === activeTab) {
+      preserveScroll(content, renderInner);
+    } else {
+      renderInner();
+    }
+    lastRenderedTab = activeTab;
   };
   const renderActive = () => {
     if (hasFocusedEditableChild()) {

@@ -1,6 +1,7 @@
 import type { SpindleFrontendContext } from "lumiverse-spindle-types";
 import type { BackendToFrontend, FrontendState, FrontendToBackend } from "../types";
 import { ICON_SVG, STYLES } from "./styles";
+import { preserveScroll } from "./components";
 import { showDryRunModal } from "./modals";
 import { renderBooksTab, tryUpdateBusyLabelsInPlace } from "./tabs/books-tab";
 import { renderMakeTab } from "./tabs/make-tab";
@@ -82,16 +83,26 @@ export function setup(ctx: SpindleFrontendContext): () => void {
       || type === "password";
   };
 
+  let lastRenderedTab: TabKey | null = null;
   const doRender = () => {
     if (!lastState) {
       content.replaceChildren();
+      lastRenderedTab = null;
       return;
     }
-    if (activeTab === "books") renderBooksTab(content, lastState, ctx, send);
-    else if (activeTab === "make") renderMakeTab(content, lastState, send);
-    else if (activeTab === "profile") renderProfileTab(content, lastState, ctx, send);
-    else if (activeTab === "prompts") renderPromptsTab(content, lastState, ctx, send);
-    else renderAboutTab(content, lastState, send);
+    const renderInner = () => {
+      if (activeTab === "books") renderBooksTab(content, lastState!, ctx, send);
+      else if (activeTab === "make") renderMakeTab(content, lastState!, send);
+      else if (activeTab === "profile") renderProfileTab(content, lastState!, ctx, send);
+      else if (activeTab === "prompts") renderPromptsTab(content, lastState!, ctx, send);
+      else renderAboutTab(content, lastState!, send);
+    };
+    if (lastRenderedTab === activeTab) {
+      preserveScroll(content, renderInner);
+    } else {
+      renderInner();
+    }
+    lastRenderedTab = activeTab;
   };
 
   const renderActive = () => {

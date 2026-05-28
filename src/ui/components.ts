@@ -263,4 +263,45 @@ export function formatTokens(n: number): string {
   return String(n);
 }
 
+export function findScrollingAncestor(el: HTMLElement | null): HTMLElement | null {
+  let cur: HTMLElement | null = el?.parentElement ?? null;
+  while (cur && cur !== document.body && cur !== document.documentElement) {
+    const style = getComputedStyle(cur);
+    const oy = style.overflowY;
+    if (oy === "auto" || oy === "scroll") return cur;
+    cur = cur.parentElement;
+  }
+  return null;
+}
+
+function collectScrollableDescendants(root: HTMLElement): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  let node: Node | null = walker.currentNode;
+  while (node) {
+    if (node !== root && node instanceof HTMLElement) {
+      const style = getComputedStyle(node);
+      const oy = style.overflowY;
+      if (oy === "auto" || oy === "scroll") out.push(node);
+    }
+    node = walker.nextNode();
+  }
+  return out;
+}
+
+export function preserveScroll(anchor: HTMLElement | null, fn: () => void): void {
+  if (!anchor) { fn(); return; }
+  const ancestor = findScrollingAncestor(anchor);
+  const ancestorScroll = ancestor ? ancestor.scrollTop : 0;
+  const innerBefore = collectScrollableDescendants(anchor).map((el) => el.scrollTop);
+  fn();
+  if (ancestor && ancestorScroll > 0) ancestor.scrollTop = ancestorScroll;
+  const innerAfter = collectScrollableDescendants(anchor);
+  if (innerAfter.length === innerBefore.length) {
+    for (let i = 0; i < innerAfter.length; i++) {
+      if (innerBefore[i]! > 0) innerAfter[i]!.scrollTop = innerBefore[i]!;
+    }
+  }
+}
+
 export const HIDDEN_ICON = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a19.77 19.77 0 0 1 4.22-5.42"/><path d="M22.54 16.88A10.94 10.94 0 0 0 23 12s-4-8-11-8a10.84 10.84 0 0 0-5.34 1.4"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
