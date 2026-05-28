@@ -355,6 +355,10 @@ var STYLES = `
   border-radius: 3px;
   cursor: pointer;
   font-size: 12px;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
 }
 .lmb-message-row:hover { background: var(--lumiverse-fill-hover, rgba(255,255,255,0.05)); }
 .lmb-message-row.selected { background: var(--lumiverse-primary-020, rgba(107, 143, 240, 0.18)); }
@@ -1276,8 +1280,11 @@ var localState = {
   messageFilter: "uncovered",
   messageQuery: "",
   lastChatId: null,
-  anchorMessageId: null
+  anchorMessageId: null,
+  suppressNextClick: false
 };
+var LONG_PRESS_MS = 500;
+var LONG_PRESS_MOVE_PX = 10;
 function renderMakeTab(host, state, send) {
   if (localState.lastChatId !== state.activeChatId) {
     localState.selectedMessages.clear();
@@ -1310,7 +1317,7 @@ function renderChapterPicker(host, c, send) {
   const sec = section("Pick messages for a chapter");
   const help = document.createElement("div");
   help.className = "lmb-help";
-  help.textContent = "Covered messages are already filed and are greyed. Shift+click to select ranges.";
+  help.textContent = "Covered messages are already filed and are greyed. Shift+click (or long-press on touch) to select ranges.";
   sec.body.appendChild(help);
   const filterRow = document.createElement("div");
   filterRow.className = "lmb-message-filter-row";
@@ -1389,23 +1396,74 @@ function buildRows(c, _send, countsEl, compressBtn) {
 function buildMessageRow(m, c, countsEl, compressBtn) {
   const row = document.createElement("label");
   row.className = `lmb-message-row${m.covered ? " covered" : ""}${c.selectedMessages.has(m.id) ? " selected" : ""}`;
-  row.title = "Shift+click to select a range";
+  row.title = "Shift+click (or long-press on touch) to select a range";
   const cb = document.createElement("input");
   cb.type = "checkbox";
   cb.checked = c.selectedMessages.has(m.id);
   cb.disabled = m.covered;
-  row.addEventListener("click", (e) => {
-    const mouseEvent = e;
-    if (!mouseEvent.shiftKey || m.covered)
-      return;
+  const triggerRangeFromAnchor = () => {
     const anchorId = localState.anchorMessageId;
     if (!anchorId || anchorId === m.id)
-      return;
-    e.preventDefault();
+      return false;
     const newState = !c.selectedMessages.has(m.id);
     applyRangeSelection(c, anchorId, m.id, newState);
     localState.anchorMessageId = m.id;
     c.rerender();
+    return true;
+  };
+  row.addEventListener("click", (e) => {
+    if (localState.suppressNextClick) {
+      localState.suppressNextClick = false;
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    const mouseEvent = e;
+    if (!mouseEvent.shiftKey || m.covered)
+      return;
+    if (!triggerRangeFromAnchor())
+      return;
+    e.preventDefault();
+  });
+  row.addEventListener("pointerdown", (e) => {
+    const pe = e;
+    if (pe.pointerType !== "touch" || m.covered)
+      return;
+    const startX = pe.clientX;
+    const startY = pe.clientY;
+    let timer = null;
+    const cleanup = () => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      row.removeEventListener("pointermove", onMove);
+      row.removeEventListener("pointerup", cleanup);
+      row.removeEventListener("pointercancel", cleanup);
+      row.removeEventListener("pointerleave", cleanup);
+    };
+    const onMove = (mv) => {
+      const m2 = mv;
+      if (Math.abs(m2.clientX - startX) > LONG_PRESS_MOVE_PX || Math.abs(m2.clientY - startY) > LONG_PRESS_MOVE_PX)
+        cleanup();
+    };
+    row.addEventListener("pointermove", onMove);
+    row.addEventListener("pointerup", cleanup);
+    row.addEventListener("pointercancel", cleanup);
+    row.addEventListener("pointerleave", cleanup);
+    timer = setTimeout(() => {
+      timer = null;
+      cleanup();
+      if (!triggerRangeFromAnchor())
+        return;
+      localState.suppressNextClick = true;
+      setTimeout(() => {
+        localState.suppressNextClick = false;
+      }, 150);
+      try {
+        navigator.vibrate?.(30);
+      } catch {}
+    }, LONG_PRESS_MS);
   });
   cb.addEventListener("change", () => {
     if (cb.checked)

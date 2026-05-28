@@ -26,7 +26,11 @@ const localState = {
   messageQuery: "",
   lastChatId: null as string | null,
   anchorMessageId: null as string | null,
+  suppressNextClick: false,
 };
+
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_MOVE_PX = 10;
 
 export function renderMakeTab(
   host: HTMLElement,
@@ -70,7 +74,7 @@ function renderChapterPicker(
   const help = document.createElement("div");
   help.className = "lmb-help";
   help.textContent =
-    "Covered messages are already filed and are greyed. Shift+click to select ranges.";
+    "Covered messages are already filed and are greyed. Shift+click (or long-press on touch) to select ranges.";
   sec.body.appendChild(help);
 
   const filterRow = document.createElement("div");
@@ -170,21 +174,62 @@ function buildMessageRow(
 ): HTMLElement {
   const row = document.createElement("label");
   row.className = `lmb-message-row${m.covered ? " covered" : ""}${c.selectedMessages.has(m.id) ? " selected" : ""}`;
-  row.title = "Shift+click to select a range";
+  row.title = "Shift+click (or long-press on touch) to select a range";
   const cb = document.createElement("input");
   cb.type = "checkbox";
   cb.checked = c.selectedMessages.has(m.id);
   cb.disabled = m.covered;
-  row.addEventListener("click", (e) => {
-    const mouseEvent = e as MouseEvent;
-    if (!mouseEvent.shiftKey || m.covered) return;
+  const triggerRangeFromAnchor = (): boolean => {
     const anchorId = localState.anchorMessageId;
-    if (!anchorId || anchorId === m.id) return;
-    e.preventDefault();
+    if (!anchorId || anchorId === m.id) return false;
     const newState = !c.selectedMessages.has(m.id);
     applyRangeSelection(c, anchorId, m.id, newState);
     localState.anchorMessageId = m.id;
     c.rerender();
+    return true;
+  };
+  row.addEventListener("click", (e) => {
+    if (localState.suppressNextClick) {
+      localState.suppressNextClick = false;
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    const mouseEvent = e as MouseEvent;
+    if (!mouseEvent.shiftKey || m.covered) return;
+    if (!triggerRangeFromAnchor()) return;
+    e.preventDefault();
+  });
+  row.addEventListener("pointerdown", (e) => {
+    const pe = e as PointerEvent;
+    if (pe.pointerType !== "touch" || m.covered) return;
+    const startX = pe.clientX;
+    const startY = pe.clientY;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const cleanup = () => {
+      if (timer !== null) { clearTimeout(timer); timer = null; }
+      row.removeEventListener("pointermove", onMove);
+      row.removeEventListener("pointerup", cleanup);
+      row.removeEventListener("pointercancel", cleanup);
+      row.removeEventListener("pointerleave", cleanup);
+    };
+    const onMove = (mv: Event) => {
+      const m2 = mv as PointerEvent;
+      if (Math.abs(m2.clientX - startX) > LONG_PRESS_MOVE_PX
+        || Math.abs(m2.clientY - startY) > LONG_PRESS_MOVE_PX) cleanup();
+    };
+    row.addEventListener("pointermove", onMove);
+    row.addEventListener("pointerup", cleanup);
+    row.addEventListener("pointercancel", cleanup);
+    row.addEventListener("pointerleave", cleanup);
+    timer = setTimeout(() => {
+      timer = null;
+      cleanup();
+      if (!triggerRangeFromAnchor()) return;
+      localState.suppressNextClick = true;
+      setTimeout(() => { localState.suppressNextClick = false; }, 150);
+      try { navigator.vibrate?.(30); } catch { void 0; }
+    }, LONG_PRESS_MS);
   });
   cb.addEventListener("change", () => {
     if (cb.checked) c.selectedMessages.add(m.id);
