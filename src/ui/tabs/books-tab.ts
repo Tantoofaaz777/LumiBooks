@@ -345,6 +345,16 @@ function renderEntryItem(
         send({ type: "update_entry", chatId, entryId: view.entryId, patch });
       });
     }, { small: true, title: "Edit this entry's label and content" }),
+    makeButton("Regenerate", async () => {
+      const ok = await confirmDelete(ctx, "Regenerate?", "Memoria will delete this entry and resummarize the same range. The old summary text will be lost.");
+      if (!ok || !chatId) return;
+      send({ type: "regenerate_entry", chatId, entryId: view.entryId });
+    }, { small: true, title: "Delete and resummarize the same range" }),
+    makeButton("Release", async () => {
+      const ok = await confirmDelete(ctx, "Release to lorebook?", "Memoria will hand this entry to your regular lorebook (prefixed with [orphaned]) and stop managing it. Those messages will become uncovered.");
+      if (!ok || !chatId) return;
+      send({ type: "release_entry", chatId, entryId: view.entryId });
+    }, { small: true, title: "Strip the LumiBooks marker so the entry becomes a regular lorebook entry" }),
     makeButton("Delete", async () => {
       const ok = await confirmDelete(ctx, "Delete?", "Memoria will let those messages back into the prompt.");
       if (!ok || !chatId) return;

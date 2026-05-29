@@ -562,6 +562,17 @@ async function updateEntry(entryId, patch, userId) {
 async function deleteEntry(entryId, userId) {
   await spindle.world_books.entries.delete(entryId, userId);
 }
+async function setEntryDisabled(entryId, disabled, userId) {
+  return spindle.world_books.entries.update(entryId, { disabled }, userId);
+}
+async function releaseEntry(entry, userId) {
+  const ext = entry.raw.extensions || {};
+  const nextExt = { ...ext };
+  delete nextExt[EXTENSION_KEY];
+  const currentComment = entry.raw.comment || "";
+  const nextComment = currentComment.startsWith("[orphaned]") ? currentComment : `[orphaned] ${currentComment}`.trim();
+  return spindle.world_books.entries.update(entry.raw.id, { extensions: nextExt, comment: nextComment }, userId);
+}
 async function patchEntryMeta(entry, metaPatch, userId) {
   const next = { ...entry.meta, ...metaPatch };
   const ext = entry.raw.extensions || {};
@@ -3505,6 +3516,110 @@ spindle.onFrontendMessage(async (raw, userId) => {
             await unhideCoveredMessages(msg.chatId, toUnhide, userId).catch(() => {});
           }
         }
+        await pushState(userId, msg.chatId);
+        break;
+      }
+      case "release_entry": {
+        const entries = await listLmbEntries(msg.chatId, userId);
+        const entry = entries.find((e) => e.raw.id === msg.entryId);
+        if (!entry) {
+          send({ type: "toast", tone: "warn", text: "Memoria can't find that entry to release" }, userId);
+          break;
+        }
+        if (entry.meta.tier === 2 && Array.isArray(entry.meta.sourceChapterEntryIds)) {
+          const sourceIds = new Set(entry.meta.sourceChapterEntryIds);
+          for (const ch of entries) {
+            if (ch.meta.tier !== 1)
+              continue;
+            if (!sourceIds.has(ch.raw.id))
+              continue;
+            if (ch.meta.supersededByEntryId !== msg.entryId)
+              continue;
+            try {
+              await patchEntryMeta(ch, { supersededByEntryId: null }, userId);
+            } catch (err) {
+              warn(`failed to clear supersededByEntryId on chapter ${ch.raw.id}: ${describeError(err)}`);
+            }
+          }
+        }
+        await releaseEntry(entry, userId);
+        invalidateBookCache(userId, msg.chatId);
+        const remaining = entries.filter((e) => e.raw.id !== msg.entryId);
+        const newCoverage = await buildCoverage(msg.chatId, userId, remaining);
+        const toUnhide = entry.meta.msgIds.filter((id) => !newCoverage.coveredBy.has(id));
+        if (toUnhide.length > 0) {
+          await unhideCoveredMessages(msg.chatId, toUnhide, userId).catch(() => {});
+        }
+        send({ type: "toast", tone: "success", text: "Memoria released the entry to your lorebook" }, userId);
+        await pushState(userId, msg.chatId);
+        break;
+      }
+      case "regenerate_entry": {
+        const cur = await loadSettings(userId);
+        const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
+        if (!profile)
+          break;
+        const entries = await listLmbEntries(msg.chatId, userId);
+        const entry = entries.find((e) => e.raw.id === msg.entryId);
+        if (!entry) {
+          send({ type: "toast", tone: "warn", text: "Memoria can't find that entry to regenerate" }, userId);
+          break;
+        }
+        const busyKind = entry.meta.tier === 2 ? "arc" : "chapter";
+        if (getBusy(userId).some((b) => b.kind === busyKind && b.chatId === msg.chatId)) {
+          send({ type: "toast", tone: "warn", text: `Memoria is already busy with a ${busyKind}` }, userId);
+          break;
+        }
+        const isArc = entry.meta.tier === 2;
+        const msgIds = entry.meta.msgIds.slice();
+        const chapterIds = Array.isArray(entry.meta.sourceChapterEntryIds) ? entry.meta.sourceChapterEntryIds.slice() : [];
+        if (isArc && chapterIds.length === 0) {
+          send({ type: "toast", tone: "warn", text: "Memoria has no chapter sources to regenerate this arc from" }, userId);
+          break;
+        }
+        if (!isArc && msgIds.length === 0) {
+          send({ type: "toast", tone: "warn", text: "Memoria has no messages to regenerate this chapter from" }, userId);
+          break;
+        }
+        if (!isArc) {
+          const otherEntries = entries.filter((e) => e.raw.id !== msg.entryId);
+          const otherCoverage = await buildCoverage(msg.chatId, userId, otherEntries);
+          const blockingIds = entry.meta.msgIds.filter((id) => otherCoverage.coveredBy.has(id));
+          if (blockingIds.length > 0) {
+            const blockerEntryId = otherCoverage.coveredBy.get(blockingIds[0]);
+            const blocker = otherEntries.find((e) => e.raw.id === blockerEntryId);
+            const blockerLabel = blocker?.meta.tier === 2 ? "an arc" : "another entry";
+            send({
+              type: "toast",
+              tone: "warn",
+              text: `Memoria can't regenerate this chapter, its messages are bound into ${blockerLabel}. Release/delete the arc first.`
+            }, userId);
+            break;
+          }
+        }
+        try {
+          await setEntryDisabled(msg.entryId, true, userId);
+        } catch (err) {
+          send({ type: "toast", tone: "error", text: `Memoria couldn't pause the old entry: ${describeError(err)}` }, userId);
+          break;
+        }
+        invalidateBookCache(userId, msg.chatId);
+        await pushState(userId, msg.chatId);
+        const newId = isArc ? await createArcFromChapters(msg.chatId, chapterIds, profile, cur, userId) : await createChapterFromRange(msg.chatId, msgIds, profile, cur, userId);
+        if (newId) {
+          try {
+            await deleteEntry(msg.entryId, userId);
+          } catch (err) {
+            warn(`regen: failed to delete old entry ${msg.entryId}: ${describeError(err)}`);
+          }
+        } else {
+          try {
+            await setEntryDisabled(msg.entryId, false, userId);
+          } catch (err) {
+            warn(`regen: failed to re-enable old entry ${msg.entryId} after failure: ${describeError(err)}`);
+          }
+        }
+        invalidateBookCache(userId, msg.chatId);
         await pushState(userId, msg.chatId);
         break;
       }

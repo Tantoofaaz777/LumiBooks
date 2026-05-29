@@ -229,6 +229,25 @@ export async function deleteEntry(entryId: string, userId: string): Promise<void
   await spindle.world_books.entries.delete(entryId, userId);
 }
 
+export async function setEntryDisabled(entryId: string, disabled: boolean, userId: string): Promise<WorldBookEntryDTO> {
+  return spindle.world_books.entries.update(entryId, { disabled }, userId);
+}
+
+export async function releaseEntry(entry: LMBEntry, userId: string): Promise<WorldBookEntryDTO> {
+  const ext = (entry.raw.extensions || {}) as Record<string, unknown>;
+  const nextExt: Record<string, unknown> = { ...ext };
+  delete nextExt[EXTENSION_KEY];
+  const currentComment = entry.raw.comment || "";
+  const nextComment = currentComment.startsWith("[orphaned]")
+    ? currentComment
+    : `[orphaned] ${currentComment}`.trim();
+  return spindle.world_books.entries.update(
+    entry.raw.id,
+    { extensions: nextExt, comment: nextComment },
+    userId,
+  );
+}
+
 export async function patchEntryMeta(
   entry: LMBEntry,
   metaPatch: Partial<LMBEntryMeta>,

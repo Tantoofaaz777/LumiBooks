@@ -131,6 +131,8 @@ export type FrontendToBackend =
   | { type: "create_all_arcs"; chatId: string }
   | { type: "retry_last_failure"; chatId: string }
   | { type: "delete_entry"; chatId: string; entryId: string }
+  | { type: "release_entry"; chatId: string; entryId: string }
+  | { type: "regenerate_entry"; chatId: string; entryId: string }
   | { type: "update_entry"; chatId: string; entryId: string; patch: { content?: string; comment?: string } }
   | { type: "resync_hidden"; chatId: string }
   | { type: "resync_visibility"; chatId: string }
