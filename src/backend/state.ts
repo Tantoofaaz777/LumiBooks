@@ -10,6 +10,7 @@ import { findBookForChat, listLmbEntries, type LMBEntry } from "./world-book";
 import { listConnections, resolveConnection } from "./summarizer";
 import { listRegexScripts } from "./regex";
 import { getBusy, getLastFailure, getPendingPreviews } from "./pipeline";
+import { ensureForkAdoption } from "./fork";
 import { describeError, warn } from "./runtime";
 import { BUILTIN_ARC_PRESETS, BUILTIN_CHAPTER_PRESETS } from "./presets";
 
@@ -76,6 +77,10 @@ export async function buildState(userId: string, requestedChatId?: string | null
   };
 
   if (!chat) return baseState;
+
+  if (settings.enabled) {
+    await ensureForkAdoption(chat.id, userId).catch(() => {});
+  }
 
   const bookId = await findBookForChat(chat.id, userId);
   const bookName =

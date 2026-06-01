@@ -11,7 +11,7 @@ import {
   selectNextChapterWindow,
   syncHiddenForCoveredMessages,
 } from "./coverage";
-import { createChapterEntry, ensureBookForChat, invalidateBookCache, listLmbEntries, patchEntryMeta, type LMBEntry } from "./world-book";
+import { createChapterEntry, deleteEntry, ensureBookForChat, invalidateBookCache, listLmbEntries, patchEntryMeta, type LMBEntry } from "./world-book";
 import { loadSettings } from "./storage";
 import {
   AbortedSummarizerError,
@@ -26,6 +26,7 @@ import {
 import { describeError, info, warn } from "./runtime";
 import { publishChapterCreated, publishArcCreated } from "./hooks";
 import { pickPhrase } from "./memoria";
+import { ensureForkAdoption } from "./fork";
 
 type ChatMessageDTO = ChatMessage;
 
@@ -337,6 +338,7 @@ export async function createChapterFromRange(
   profile: LMBProfile,
   settings: LMBSettings,
   userId: string,
+  opts: { replacesEntryId?: string } = {},
 ): Promise<string | null> {
   if (!setBusy(userId, chatId, "chapter", "Memoria is filing a chapter")) return null;
   try {
@@ -345,7 +347,7 @@ export async function createChapterFromRange(
     const set = new Set(messageIds);
     const window = messages.filter((m) => set.has(m.id));
     if (window.length === 0) return null;
-    return await runChapter(chatId, profile, settings, userId, messages, window);
+    return await runChapter(chatId, profile, settings, userId, messages, window, opts.replacesEntryId);
   } finally {
     clearBusy(userId, chatId, "chapter");
   }
@@ -358,6 +360,7 @@ async function runChapter(
   userId: string,
   allMessages: ChatMessageDTO[],
   window: ChatMessageDTO[],
+  replacesEntryId?: string,
 ): Promise<string | null> {
   nyaaToast(userId, "fire");
   const entries = await listLmbEntries(chatId, userId);
@@ -408,13 +411,13 @@ async function runChapter(
   const lastIdx = allMessages.findIndex((m) => m.id === window[window.length - 1]!.id);
 
   if (profile.showMemoryPreviews) {
-    const draft: PendingPreview = makePreview("chapter", chatId, window, result, firstIdx, lastIdx);
+    const draft: PendingPreview = makePreview("chapter", chatId, window, result, firstIdx, lastIdx, replacesEntryId);
     pushPreview(userId, chatId, draft);
     cb?.onStateChange(userId, chatId);
     return null;
   }
   try {
-    const entryId = await commitChapter(chatId, profile, userId, window, result, firstIdx, lastIdx, allMessages, false);
+    const entryId = await commitChapter(chatId, profile, userId, window, result, firstIdx, lastIdx, allMessages, false, replacesEntryId);
     nyaaToast(userId, "success");
     return entryId;
   } catch (err) {
@@ -436,10 +439,16 @@ async function commitChapter(
   lastIdx: number,
   allMessages: ChatMessageDTO[],
   fromPreview: boolean,
+  replacesEntryId?: string,
 ): Promise<string> {
   return withCommitMutex(userId, chatId, 1, async () => {
   const freshEntries = await listLmbEntries(chatId, userId);
-  const freshCoverage = await buildCoverage(chatId, userId, freshEntries);
+  // The entry being regenerated still covers this window; exclude it so its own
+  // messages read as free, then delete it once the replacement is committed.
+  const entriesForCoverage = replacesEntryId
+    ? freshEntries.filter((e) => e.raw.id !== replacesEntryId)
+    : freshEntries;
+  const freshCoverage = await buildCoverage(chatId, userId, entriesForCoverage);
   const validWindow = window.filter((m) => !freshCoverage.coveredBy.has(m.id));
   if (validWindow.length === 0) {
     throw new Error("All messages in this window were just bound by another chapter");
@@ -483,6 +492,15 @@ async function commitChapter(
   const finalContent = `${opener}\n\n${result.content}`;
   const entry = await createChapterEntry(book.id, meta, finalContent, comment, userId, result.keywords ?? [], settings.forceConstantEntries);
   invalidateBookCache(userId, chatId);
+
+  if (replacesEntryId) {
+    try {
+      await deleteEntry(replacesEntryId, userId);
+      invalidateBookCache(userId, chatId);
+    } catch (err) {
+      warn(`regen: failed to delete replaced chapter ${replacesEntryId}: ${describeError(err)}`);
+    }
+  }
 
   if (profile.hideCoveredMessages) {
     try {
@@ -570,17 +588,23 @@ export async function createArcFromChapters(
   profile: LMBProfile,
   settings: LMBSettings,
   userId: string,
+  opts: { replacesEntryId?: string } = {},
 ): Promise<string | null> {
   if (!setBusy(userId, chatId, "arc", "Memoria is binding an arc")) return null;
   try {
     const entries = await listLmbEntries(chatId, userId);
-    const coverage = await buildCoverage(chatId, userId, entries);
+    // When regenerating an arc, exclude it from coverage so the chapters it
+    // currently supersedes become selectable again.
+    const entriesForSelection = opts.replacesEntryId
+      ? entries.filter((e) => e.raw.id !== opts.replacesEntryId)
+      : entries;
+    const coverage = await buildCoverage(chatId, userId, entriesForSelection);
     const wanted = new Set(chapterEntryIds);
     const chapters = coverage.activeEntries
       .filter((e) => e.meta.tier === 1 && wanted.has(e.raw.id))
       .sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
     if (chapters.length === 0) return null;
-    return await runArc(chatId, profile, settings, userId, chapters);
+    return await runArc(chatId, profile, settings, userId, chapters, opts.replacesEntryId);
   } finally {
     clearBusy(userId, chatId, "arc");
   }
@@ -592,6 +616,7 @@ async function runArc(
   settings: LMBSettings,
   userId: string,
   selected: LMBEntry[],
+  replacesEntryId?: string,
 ): Promise<string | null> {
   nyaaToast(userId, "arc_fire");
   const totalTurns = selected.reduce((acc, c) => acc + c.meta.msgIds.length, 0);
@@ -636,13 +661,13 @@ async function runArc(
   const lastIdx = lastIdxs.length ? Math.max(...lastIdxs) : firstIdx;
 
   if (profile.showMemoryPreviews) {
-    const draft = makeArcPreview(chatId, selected, result, firstIdx, lastIdx);
+    const draft = makeArcPreview(chatId, selected, result, firstIdx, lastIdx, replacesEntryId);
     pushPreview(userId, chatId, draft);
     cb?.onStateChange(userId, chatId);
     return null;
   }
   try {
-    const entryId = await commitArc(chatId, userId, selected, result, firstIdx, lastIdx);
+    const entryId = await commitArc(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId);
     nyaaToast(userId, "arc_success");
     return entryId;
   } catch (err) {
@@ -661,10 +686,16 @@ async function commitArc(
   result: SummarizationResult,
   firstIdx: number,
   lastIdx: number,
+  replacesEntryId?: string,
 ): Promise<string> {
   return withCommitMutex(userId, chatId, 2, async () => {
   const freshEntries = await listLmbEntries(chatId, userId);
-  const freshCoverage = await buildCoverage(chatId, userId, freshEntries);
+  // When regenerating an arc, exclude it so the chapters it supersedes count as
+  // active/selectable; it is deleted once the replacement is committed.
+  const entriesForCoverage = replacesEntryId
+    ? freshEntries.filter((e) => e.raw.id !== replacesEntryId)
+    : freshEntries;
+  const freshCoverage = await buildCoverage(chatId, userId, entriesForCoverage);
   const stillActive = new Set(freshCoverage.activeEntries.filter((e) => e.meta.tier === 1).map((e) => e.raw.id));
   const filtered = selected.filter((c) => stillActive.has(c.raw.id));
   if (filtered.length === 0) {
@@ -722,6 +753,14 @@ async function commitArc(
     );
   }
   invalidateBookCache(userId, chatId);
+  if (replacesEntryId) {
+    try {
+      await deleteEntry(replacesEntryId, userId);
+      invalidateBookCache(userId, chatId);
+    } catch (err) {
+      warn(`regen: failed to delete replaced arc ${replacesEntryId}: ${describeError(err)}`);
+    }
+  }
   publishArcCreated(userId, {
     chatId,
     arcEntryId: arcEntry.id,
@@ -751,7 +790,11 @@ export async function acceptPreview(
   try {
     if (preview.kind === "chapter") {
       const messages = await spindle.chat.getMessages(chatId);
-      const coverage = await buildCoverage(chatId, userId);
+      // Exclude the entry being regenerated so its own window reads as free.
+      const acceptEntries = preview.replacesEntryId
+        ? (await listLmbEntries(chatId, userId)).filter((e) => e.raw.id !== preview.replacesEntryId)
+        : undefined;
+      const coverage = await buildCoverage(chatId, userId, acceptEntries);
       const intent = new Set(preview.sourceMessageIds);
       const window = messages.filter((m) => intent.has(m.id) && !coverage.coveredBy.has(m.id));
       if (window.length === 0) {
@@ -781,7 +824,7 @@ export async function acceptPreview(
       try {
         const entryId = await commitChapter(
           chatId, profile, userId, window, fakeResult,
-          firstIdx, lastIdx, messages, true,
+          firstIdx, lastIdx, messages, true, preview.replacesEntryId,
         );
         dropPendingPreview(userId, chatId, draftId);
         nyaaToast(userId, "success");
@@ -795,7 +838,11 @@ export async function acceptPreview(
       }
     }
     const entries = await listLmbEntries(chatId, userId);
-    const coverage = await buildCoverage(chatId, userId, entries);
+    // Exclude the arc being regenerated so the chapters it supersedes are selectable.
+    const arcSelectionEntries = preview.replacesEntryId
+      ? entries.filter((e) => e.raw.id !== preview.replacesEntryId)
+      : entries;
+    const coverage = await buildCoverage(chatId, userId, arcSelectionEntries);
     const wanted = new Set(preview.sourceChapterEntryIds ?? []);
     const selected = coverage.activeEntries.filter((e) => e.meta.tier === 1 && wanted.has(e.raw.id));
     if (selected.length === 0) {
@@ -820,7 +867,7 @@ export async function acceptPreview(
     try {
       const entryId = await commitArc(
         chatId, userId, selected, fakeResult,
-        preview.firstMsgIdx ?? 0, preview.lastMsgIdx ?? 0,
+        preview.firstMsgIdx ?? 0, preview.lastMsgIdx ?? 0, preview.replacesEntryId,
       );
       dropPendingPreview(userId, chatId, draftId);
       nyaaToast(userId, "arc_success");
@@ -928,6 +975,7 @@ export async function maybeRunPipeline(
   userId: string,
 ): Promise<void> {
   if (!profile.autoCreate) return;
+  await ensureForkAdoption(chatId, userId).catch(() => {});
   if (profile.autoCreateChapter) {
     await drainChapterBacklog(chatId, profile, settings, userId);
   }
@@ -973,6 +1021,7 @@ function makePreview(
   result: SummarizationResult,
   firstIdx: number,
   lastIdx: number,
+  replacesEntryId?: string,
 ): PendingPreview {
   void chatId;
   return {
@@ -989,6 +1038,7 @@ function makePreview(
     firstMsgIdx: firstIdx,
     lastMsgIdx: lastIdx,
     presetKey: result.presetKey,
+    replacesEntryId,
   };
 }
 
@@ -998,6 +1048,7 @@ function makeArcPreview(
   result: SummarizationResult,
   firstIdx: number,
   lastIdx: number,
+  replacesEntryId?: string,
 ): PendingPreview {
   void chatId;
   return {
@@ -1015,6 +1066,7 @@ function makeArcPreview(
     firstMsgIdx: firstIdx,
     lastMsgIdx: lastIdx,
     presetKey: result.presetKey,
+    replacesEntryId,
   };
 }
 

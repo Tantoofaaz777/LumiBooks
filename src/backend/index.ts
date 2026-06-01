@@ -25,7 +25,6 @@ import {
   deleteEntry,
   patchEntryMeta,
   releaseEntry,
-  setEntryDisabled,
   updateEntry,
   listLmbEntries,
   invalidateBookCache,
@@ -53,7 +52,7 @@ import {
   patchPendingPreview,
   registerPipelineCallbacks,
 } from "./pipeline";
-import { buildCoverage, pickOrphanedHiddenIds, syncHiddenForCoveredMessages, unhideCoveredMessages } from "./coverage";
+import { buildCoverage, resyncVisibility, syncHiddenForCoveredMessages, unhideCoveredMessages } from "./coverage";
 import { invalidateConnectionsCache } from "./summarizer";
 import { invalidateRegexCache } from "./regex";
 import { registerHookEndpoints } from "./hooks";
@@ -228,31 +227,6 @@ spindle.on("CONNECTION_PROFILE_LOADED", (_payload: unknown, hostUserId?: string)
 spindle.on("MAIN_API_CHANGED", (_payload: unknown, hostUserId?: string) => {
   if (hostUserId) invalidateConnectionsCache(hostUserId);
 });
-
-async function resyncVisibility(
-  chatId: string,
-  userId: string,
-  desiredHiddenForCovered: boolean,
-): Promise<{ unhidden: number; hidden: number }> {
-  const messages = await spindle.chat.getMessages(chatId);
-  const coverage = await buildCoverage(chatId, userId);
-  const orphanedHidden = pickOrphanedHiddenIds(messages, coverage);
-  let hiddenBefore = 0;
-  let unhiddenAfter = 0;
-  if (orphanedHidden.length > 0) {
-    await unhideCoveredMessages(chatId, orphanedHidden, userId).catch(() => {});
-    unhiddenAfter = orphanedHidden.length;
-  }
-  for (const m of messages) {
-    if (!coverage.coveredBy.has(m.id)) continue;
-    const currentlyHidden = !!(m.extra && (m.extra as Record<string, unknown>).hidden);
-    if (currentlyHidden !== desiredHiddenForCovered) hiddenBefore++;
-  }
-  if (hiddenBefore > 0) {
-    await syncHiddenForCoveredMessages(chatId, messages, coverage, userId, desiredHiddenForCovered).catch(() => {});
-  }
-  return { unhidden: unhiddenAfter, hidden: desiredHiddenForCovered ? hiddenBefore : 0 };
-}
 
 async function handleExternalEntryDeletion(userId: string, bookId: string, isBookDeletion: boolean): Promise<void> {
   const chatId = isBookDeletion
@@ -627,31 +601,16 @@ spindle.onFrontendMessage(async (raw, userId) => {
             break;
           }
         }
-        try {
-          await setEntryDisabled(msg.entryId, true, userId);
-        } catch (err) {
-          send({ type: "toast", tone: "error", text: `Memoria couldn't pause the old entry: ${describeError(err)}` }, userId);
-          break;
-        }
-        invalidateBookCache(userId, msg.chatId);
-        await pushState(userId, msg.chatId);
-        const newId = isArc
-          ? await createArcFromChapters(msg.chatId, chapterIds, profile, cur, userId)
-          : await createChapterFromRange(msg.chatId, msgIds, profile, cur, userId);
-        if (newId) {
-          try {
-            await deleteEntry(msg.entryId, userId);
-          } catch (err) {
-            warn(`regen: failed to delete old entry ${msg.entryId}: ${describeError(err)}`);
-          }
+        // Generate a replacement. The commit step atomically deletes the original
+        // once the new entry is filed (immediate mode), or — when "Preview before
+        // saving" is on — stages a preview tagged with replacesEntryId and leaves
+        // the original active until the user accepts. On failure, the original is
+        // untouched. So there is nothing to clean up here.
+        if (isArc) {
+          await createArcFromChapters(msg.chatId, chapterIds, profile, cur, userId, { replacesEntryId: msg.entryId });
         } else {
-          try {
-            await setEntryDisabled(msg.entryId, false, userId);
-          } catch (err) {
-            warn(`regen: failed to re-enable old entry ${msg.entryId} after failure: ${describeError(err)}`);
-          }
+          await createChapterFromRange(msg.chatId, msgIds, profile, cur, userId, { replacesEntryId: msg.entryId });
         }
-        invalidateBookCache(userId, msg.chatId);
         await pushState(userId, msg.chatId);
         break;
       }

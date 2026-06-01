@@ -275,3 +275,33 @@ export async function unhideCoveredMessages(
     }
   }
 }
+
+/**
+ * Reconcile message visibility with current coverage: unhide any messages that
+ * are hidden but no longer covered by a live entry, and (when desired) hide
+ * covered messages that aren't hidden yet. Returns how many were flipped each way.
+ */
+export async function resyncVisibility(
+  chatId: string,
+  userId: string,
+  desiredHiddenForCovered: boolean,
+): Promise<{ unhidden: number; hidden: number }> {
+  const messages = await spindle.chat.getMessages(chatId);
+  const coverage = await buildCoverage(chatId, userId);
+  const orphanedHidden = pickOrphanedHiddenIds(messages, coverage);
+  let hiddenBefore = 0;
+  let unhiddenAfter = 0;
+  if (orphanedHidden.length > 0) {
+    await unhideCoveredMessages(chatId, orphanedHidden, userId).catch(() => {});
+    unhiddenAfter = orphanedHidden.length;
+  }
+  for (const m of messages) {
+    if (!coverage.coveredBy.has(m.id)) continue;
+    const currentlyHidden = !!(m.extra && (m.extra as Record<string, unknown>).hidden);
+    if (currentlyHidden !== desiredHiddenForCovered) hiddenBefore++;
+  }
+  if (hiddenBefore > 0) {
+    await syncHiddenForCoveredMessages(chatId, messages, coverage, userId, desiredHiddenForCovered).catch(() => {});
+  }
+  return { unhidden: unhiddenAfter, hidden: desiredHiddenForCovered ? hiddenBefore : 0 };
+}

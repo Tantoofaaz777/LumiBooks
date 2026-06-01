@@ -562,9 +562,6 @@ async function updateEntry(entryId, patch, userId) {
 async function deleteEntry(entryId, userId) {
   await spindle.world_books.entries.delete(entryId, userId);
 }
-async function setEntryDisabled(entryId, disabled, userId) {
-  return spindle.world_books.entries.update(entryId, { disabled }, userId);
-}
 async function releaseEntry(entry, userId) {
   const ext = entry.raw.extensions || {};
   const nextExt = { ...ext };
@@ -842,6 +839,28 @@ async function unhideCoveredMessages(chatId, msgIds, userId) {
       }
     }
   }
+}
+async function resyncVisibility(chatId, userId, desiredHiddenForCovered) {
+  const messages = await spindle.chat.getMessages(chatId);
+  const coverage = await buildCoverage(chatId, userId);
+  const orphanedHidden = pickOrphanedHiddenIds(messages, coverage);
+  let hiddenBefore = 0;
+  let unhiddenAfter = 0;
+  if (orphanedHidden.length > 0) {
+    await unhideCoveredMessages(chatId, orphanedHidden, userId).catch(() => {});
+    unhiddenAfter = orphanedHidden.length;
+  }
+  for (const m of messages) {
+    if (!coverage.coveredBy.has(m.id))
+      continue;
+    const currentlyHidden = !!(m.extra && m.extra.hidden);
+    if (currentlyHidden !== desiredHiddenForCovered)
+      hiddenBefore++;
+  }
+  if (hiddenBefore > 0) {
+    await syncHiddenForCoveredMessages(chatId, messages, coverage, userId, desiredHiddenForCovered).catch(() => {});
+  }
+  return { unhidden: unhiddenAfter, hidden: desiredHiddenForCovered ? hiddenBefore : 0 };
 }
 
 // src/backend/injection.ts
@@ -2035,8 +2054,234 @@ function publishArcCreated(userId, event) {
   }
 }
 
-// src/backend/pipeline.ts
+// src/backend/fork.ts
+var FORK_ADOPTED_FLAG = "lumibooks_fork_adopted";
+var MAX_ANCESTRY_HOPS = 100;
+var checked = new Set;
 var inflight = new Map;
+function key(userId, chatId) {
+  return `${userId}::${chatId}`;
+}
+async function ensureForkAdoption(chatId, userId) {
+  const k = key(userId, chatId);
+  if (checked.has(k))
+    return;
+  const existing = inflight.get(k);
+  if (existing)
+    return existing;
+  const p = (async () => {
+    try {
+      await doForkAdoption(chatId, userId);
+      checked.add(k);
+    } catch (err) {
+      warn(`fork adoption failed for ${chatId.slice(0, 8)}: ${describeError(err)}`);
+    } finally {
+      inflight.delete(k);
+    }
+  })();
+  inflight.set(k, p);
+  return p;
+}
+async function doForkAdoption(forkChatId, userId) {
+  const chat = await spindle.chats.get(forkChatId, userId).catch(() => null);
+  if (!chat)
+    return;
+  const meta = chat.metadata && typeof chat.metadata === "object" ? chat.metadata : null;
+  const branchedFrom = meta && typeof meta["branched_from"] === "string" ? meta["branched_from"] : null;
+  if (!branchedFrom)
+    return;
+  if (meta && meta[FORK_ADOPTED_FLAG] === true)
+    return;
+  const owned = await findBookForChat(forkChatId, userId).catch(() => null);
+  if (owned)
+    return;
+  const ancestor = await findAncestorBook(branchedFrom, userId);
+  if (!ancestor)
+    return;
+  await cloneShelfForFork(forkChatId, chat.name ?? null, ancestor.chatId, userId);
+}
+async function findAncestorBook(startChatId, userId) {
+  const seen = new Set;
+  let cur = startChatId;
+  let hops = 0;
+  while (cur && hops < MAX_ANCESTRY_HOPS) {
+    const chatId = cur;
+    if (seen.has(chatId))
+      break;
+    seen.add(chatId);
+    hops++;
+    const bookId = await findBookForChat(chatId, userId).catch(() => null);
+    if (bookId)
+      return { chatId, bookId };
+    const chat = await spindle.chats.get(chatId, userId).catch(() => null);
+    const meta = chat && chat.metadata && typeof chat.metadata === "object" ? chat.metadata : null;
+    cur = meta && typeof meta["branched_from"] === "string" ? meta["branched_from"] : null;
+  }
+  return null;
+}
+async function cloneShelfForFork(forkChatId, forkChatName, parentChatId, userId) {
+  const parentEntries = await listLmbEntries(parentChatId, userId);
+  if (parentEntries.length === 0)
+    return;
+  const [forkMsgs, parentMsgs] = await Promise.all([
+    spindle.chat.getMessages(forkChatId),
+    spindle.chat.getMessages(parentChatId)
+  ]);
+  const parentIdxById = new Map;
+  for (const m of parentMsgs)
+    parentIdxById.set(m.id, m.index_in_chat);
+  const forkIdByIdx = new Map;
+  for (const m of forkMsgs) {
+    if (forkIdByIdx.has(m.index_in_chat)) {
+      warn(`fork adoption: duplicate index_in_chat ${m.index_in_chat} in fork ${forkChatId.slice(0, 8)}; remap may be imprecise`);
+      continue;
+    }
+    forkIdByIdx.set(m.index_in_chat, m.id);
+  }
+  const remap = (msgIds) => {
+    const ids = [];
+    let first = Number.POSITIVE_INFINITY;
+    let last = -1;
+    for (const id of msgIds) {
+      const idx = parentIdxById.get(id);
+      if (idx === undefined)
+        continue;
+      const forkId = forkIdByIdx.get(idx);
+      if (forkId === undefined)
+        continue;
+      ids.push(forkId);
+      if (idx < first)
+        first = idx;
+      if (idx > last)
+        last = idx;
+    }
+    return {
+      ids,
+      first: first === Number.POSITIVE_INFINITY ? undefined : first,
+      last: last === -1 ? undefined : last
+    };
+  };
+  const chapters = parentEntries.filter((e) => e.meta.tier === 1);
+  const arcs = parentEntries.filter((e) => e.meta.tier === 2);
+  const newBook = await spindle.world_books.create({
+    name: bookNameFor(forkChatName, forkChatId),
+    description: "Memoria's shelf for this chat. Chapters and arcs live here.",
+    metadata: {
+      lumibooks_chat_id: forkChatId,
+      lumibooks_created_at: Date.now(),
+      lumibooks_forked_from: parentChatId
+    }
+  }, userId);
+  const idMap = new Map;
+  const clonedChapterMeta = new Map;
+  try {
+    for (const ch of chapters) {
+      const { ids, first, last } = remap(ch.meta.msgIds);
+      if (ids.length === 0)
+        continue;
+      const meta = {
+        ...ch.meta,
+        chatId: forkChatId,
+        msgIds: ids,
+        firstMsgIdx: first,
+        lastMsgIdx: last,
+        supersededByEntryId: null
+      };
+      const created = await createClone(newBook.id, ch.raw, meta, userId);
+      idMap.set(ch.raw.id, created.id);
+      clonedChapterMeta.set(ch.raw.id, meta);
+    }
+    for (const arc of arcs) {
+      const { ids, first, last } = remap(arc.meta.msgIds);
+      const sourceChapterEntryIds = (arc.meta.sourceChapterEntryIds ?? []).map((oldId) => idMap.get(oldId)).filter((x) => typeof x === "string");
+      if (ids.length === 0 && sourceChapterEntryIds.length === 0)
+        continue;
+      let firstIdx = first;
+      let lastIdx = last;
+      if (firstIdx === undefined || lastIdx === undefined) {
+        for (const oldId of arc.meta.sourceChapterEntryIds ?? []) {
+          const cm = clonedChapterMeta.get(oldId);
+          if (!cm)
+            continue;
+          if (cm.firstMsgIdx !== undefined)
+            firstIdx = firstIdx === undefined ? cm.firstMsgIdx : Math.min(firstIdx, cm.firstMsgIdx);
+          if (cm.lastMsgIdx !== undefined)
+            lastIdx = lastIdx === undefined ? cm.lastMsgIdx : Math.max(lastIdx, cm.lastMsgIdx);
+        }
+      }
+      const meta = {
+        ...arc.meta,
+        chatId: forkChatId,
+        msgIds: ids,
+        sourceChapterEntryIds,
+        firstMsgIdx: firstIdx,
+        lastMsgIdx: lastIdx
+      };
+      const created = await createClone(newBook.id, arc.raw, meta, userId);
+      idMap.set(arc.raw.id, created.id);
+    }
+    for (const ch of chapters) {
+      const newChId = idMap.get(ch.raw.id);
+      if (!newChId)
+        continue;
+      const oldArcId = ch.meta.supersededByEntryId;
+      if (!oldArcId)
+        continue;
+      const newArcId = idMap.get(oldArcId);
+      if (!newArcId)
+        continue;
+      const baseMeta = clonedChapterMeta.get(ch.raw.id);
+      if (!baseMeta)
+        continue;
+      const ext = ch.raw.extensions || {};
+      await spindle.world_books.entries.update(newChId, { extensions: { ...ext, [EXTENSION_KEY]: { ...baseMeta, supersededByEntryId: newArcId } } }, userId);
+    }
+    await rebindForkShelf(forkChatId, newBook.id, userId);
+  } catch (err) {
+    await spindle.world_books.delete(newBook.id, userId).catch(() => {});
+    throw err;
+  }
+  invalidateBookCache(userId, forkChatId);
+  try {
+    const settings = await loadSettings(userId);
+    const profile = settings.profiles.find((p) => p.id === settings.activeProfileId);
+    const desiredHidden = profile ? profile.hideCoveredMessages : true;
+    await resyncVisibility(forkChatId, userId, desiredHidden);
+  } catch (err) {
+    warn(`fork adoption: visibility resync failed: ${describeError(err)}`);
+  }
+  info(`adopted fork ${forkChatId.slice(0, 8)} from ${parentChatId.slice(0, 8)} (${idMap.size} entries cloned)`);
+}
+async function createClone(bookId, source, meta, userId) {
+  const ext = source.extensions || {};
+  return spindle.world_books.entries.create(bookId, {
+    content: source.content,
+    comment: source.comment,
+    disabled: source.disabled,
+    constant: source.constant,
+    key: source.key ?? [],
+    keysecondary: source.keysecondary ?? [],
+    vectorized: source.vectorized ?? false,
+    extensions: { ...ext, [EXTENSION_KEY]: meta }
+  }, userId);
+}
+async function rebindForkShelf(forkChatId, newBookId, userId) {
+  const chat = await spindle.chats.get(forkChatId, userId).catch(() => null);
+  if (!chat)
+    return;
+  const metadata = chat.metadata && typeof chat.metadata === "object" ? { ...chat.metadata } : {};
+  const inheritedBookId = typeof metadata["lumibooks_book_id"] === "string" ? metadata["lumibooks_book_id"] : null;
+  const existing = Array.isArray(metadata["chat_world_book_ids"]) ? metadata["chat_world_book_ids"].filter((x) => typeof x === "string") : [];
+  const nextBookIds = existing.filter((id) => id !== inheritedBookId && id !== newBookId);
+  nextBookIds.push(newBookId);
+  metadata["chat_world_book_ids"] = nextBookIds;
+  metadata["lumibooks_book_id"] = newBookId;
+  metadata[FORK_ADOPTED_FLAG] = true;
+  await spindle.chats.update(forkChatId, { metadata }, userId);
+}
+
+// src/backend/pipeline.ts
+var inflight2 = new Map;
 var busyByUser = new Map;
 var aborters = new Map;
 var progressLastPush = new Map;
@@ -2049,16 +2294,16 @@ var committingDrafts = new Set;
 var PROGRESS_PUSH_INTERVAL_MS = 250;
 var commitChain = new Map;
 function withCommitMutex(userId, chatId, tier, fn) {
-  const key = `${userId}::${chatId}::t${tier}`;
-  const prev = commitChain.get(key) ?? Promise.resolve();
+  const key2 = `${userId}::${chatId}::t${tier}`;
+  const prev = commitChain.get(key2) ?? Promise.resolve();
   const tail = prev.then(fn, fn);
   const guarded = tail.catch(() => {
     return;
   });
-  commitChain.set(key, guarded);
+  commitChain.set(key2, guarded);
   guarded.then(() => {
-    if (commitChain.get(key) === guarded)
-      commitChain.delete(key);
+    if (commitChain.get(key2) === guarded)
+      commitChain.delete(key2);
   });
   return tail;
 }
@@ -2083,12 +2328,12 @@ function registerPipelineCallbacks(c) {
   cb = c;
 }
 function setBusy(userId, chatId, kind, label) {
-  const key = busyKey(userId, chatId, kind);
-  if (inflight.has(key))
+  const key2 = busyKey(userId, chatId, kind);
+  if (inflight2.has(key2))
     return false;
   const entry = { kind, chatId, label, startedAt: Date.now() };
-  inflight.set(key, entry);
-  progressState.set(key, { kind, chars: 0, thinkingChars: 0, userId, chatId });
+  inflight2.set(key2, entry);
+  progressState.set(key2, { kind, chars: 0, thinkingChars: 0, userId, chatId });
   const list = busyByUser.get(userId) ?? [];
   list.push(entry);
   busyByUser.set(userId, list);
@@ -2097,16 +2342,16 @@ function setBusy(userId, chatId, kind, label) {
   return true;
 }
 function clearBusy(userId, chatId, kind) {
-  const key = busyKey(userId, chatId, kind);
-  inflight.delete(key);
-  aborters.delete(key);
-  progressLastPush.delete(key);
-  progressState.delete(key);
+  const key2 = busyKey(userId, chatId, kind);
+  inflight2.delete(key2);
+  aborters.delete(key2);
+  progressLastPush.delete(key2);
+  progressState.delete(key2);
   const fresh = [];
-  for (const k of inflight.keys()) {
+  for (const k of inflight2.keys()) {
     if (!k.startsWith(`${userId}::`))
       continue;
-    const found = inflight.get(k);
+    const found = inflight2.get(k);
     if (found)
       fresh.push(found);
   }
@@ -2172,8 +2417,8 @@ function ensureHeartbeat() {
       return;
     }
     const touched = new Set;
-    for (const [key, ps] of progressState) {
-      const entry = inflight.get(key);
+    for (const [key2, ps] of progressState) {
+      const entry = inflight2.get(key2);
       if (!entry)
         continue;
       const elapsed = Date.now() - entry.startedAt;
@@ -2187,20 +2432,20 @@ function ensureHeartbeat() {
   }, HEARTBEAT_INTERVAL_MS);
 }
 function updateProgressNumbers(userId, chatId, kind, chars, thinkingChars) {
-  const key = busyKey(userId, chatId, kind);
-  const ps = progressState.get(key);
+  const key2 = busyKey(userId, chatId, kind);
+  const ps = progressState.get(key2);
   if (!ps)
     return;
   ps.chars = chars;
   ps.thinkingChars = thinkingChars;
-  const entry = inflight.get(key);
+  const entry = inflight2.get(key2);
   if (!entry)
     return;
   const now = Date.now();
-  const last = progressLastPush.get(key) ?? 0;
+  const last = progressLastPush.get(key2) ?? 0;
   if (now - last < PROGRESS_PUSH_INTERVAL_MS)
     return;
-  progressLastPush.set(key, now);
+  progressLastPush.set(key2, now);
   entry.label = formatBusyLabel(ps, now - entry.startedAt);
   const list = busyByUser.get(userId) ?? [];
   cb?.onBusyChange(userId, list.slice());
@@ -2225,8 +2470,8 @@ function dropPendingPreview(userId, chatId, draftId) {
   previewsByChat.set(chatKey(userId, chatId), list.filter((p) => p.draftId !== draftId));
 }
 function patchPendingPreview(userId, chatId, draftId, patch) {
-  const key = chatKey(userId, chatId);
-  const list = previewsByChat.get(key) ?? [];
+  const key2 = chatKey(userId, chatId);
+  const list = previewsByChat.get(key2) ?? [];
   const idx = list.findIndex((p) => p.draftId === draftId);
   if (idx === -1)
     return;
@@ -2236,17 +2481,17 @@ function patchPendingPreview(userId, chatId, draftId, patch) {
     title: patch.title !== undefined ? patch.title : old.title,
     content: patch.content !== undefined ? patch.content : old.content
   };
-  previewsByChat.set(key, list);
+  previewsByChat.set(key2, list);
 }
 function pushPreview(userId, chatId, preview) {
-  const key = chatKey(userId, chatId);
-  const existing = previewsByChat.get(key);
+  const key2 = chatKey(userId, chatId);
+  const existing = previewsByChat.get(key2);
   if (existing) {
-    previewsByChat.delete(key);
+    previewsByChat.delete(key2);
     existing.push(preview);
-    previewsByChat.set(key, existing);
+    previewsByChat.set(key2, existing);
   } else {
-    previewsByChat.set(key, [preview]);
+    previewsByChat.set(key2, [preview]);
   }
   capMap(previewsByChat, PREVIEW_MAP_CAP);
 }
@@ -2269,10 +2514,10 @@ async function runWithRetry(attempts, fn, onRetry) {
   return { ok: false, err: lastErr, retries: tries - 1 };
 }
 function recordFailure(userId, chatId, kind, retries, err) {
-  const key = chatKey(userId, chatId);
-  if (failureByChat.has(key))
-    failureByChat.delete(key);
-  failureByChat.set(key, {
+  const key2 = chatKey(userId, chatId);
+  if (failureByChat.has(key2))
+    failureByChat.delete(key2);
+  failureByChat.set(key2, {
     kind,
     message: describeError(err),
     retriedTimes: retries,
@@ -2306,7 +2551,7 @@ async function createChapterAuto(chatId, profile, settings, userId) {
     clearBusy(userId, chatId, "chapter");
   }
 }
-async function createChapterFromRange(chatId, messageIds, profile, settings, userId) {
+async function createChapterFromRange(chatId, messageIds, profile, settings, userId, opts = {}) {
   if (!setBusy(userId, chatId, "chapter", "Memoria is filing a chapter"))
     return null;
   try {
@@ -2317,12 +2562,12 @@ async function createChapterFromRange(chatId, messageIds, profile, settings, use
     const window = messages.filter((m) => set.has(m.id));
     if (window.length === 0)
       return null;
-    return await runChapter(chatId, profile, settings, userId, messages, window);
+    return await runChapter(chatId, profile, settings, userId, messages, window, opts.replacesEntryId);
   } finally {
     clearBusy(userId, chatId, "chapter");
   }
 }
-async function runChapter(chatId, profile, settings, userId, allMessages, window) {
+async function runChapter(chatId, profile, settings, userId, allMessages, window, replacesEntryId) {
   nyaaToast(userId, "fire");
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
@@ -2361,13 +2606,13 @@ async function runChapter(chatId, profile, settings, userId, allMessages, window
   const firstIdx = allMessages.findIndex((m) => m.id === window[0].id);
   const lastIdx = allMessages.findIndex((m) => m.id === window[window.length - 1].id);
   if (profile.showMemoryPreviews) {
-    const draft = makePreview("chapter", chatId, window, result, firstIdx, lastIdx);
+    const draft = makePreview("chapter", chatId, window, result, firstIdx, lastIdx, replacesEntryId);
     pushPreview(userId, chatId, draft);
     cb?.onStateChange(userId, chatId);
     return null;
   }
   try {
-    const entryId = await commitChapter(chatId, profile, userId, window, result, firstIdx, lastIdx, allMessages, false);
+    const entryId = await commitChapter(chatId, profile, userId, window, result, firstIdx, lastIdx, allMessages, false, replacesEntryId);
     nyaaToast(userId, "success");
     return entryId;
   } catch (err) {
@@ -2378,10 +2623,11 @@ async function runChapter(chatId, profile, settings, userId, allMessages, window
     return null;
   }
 }
-async function commitChapter(chatId, profile, userId, window, result, firstIdx, lastIdx, allMessages, fromPreview) {
+async function commitChapter(chatId, profile, userId, window, result, firstIdx, lastIdx, allMessages, fromPreview, replacesEntryId) {
   return withCommitMutex(userId, chatId, 1, async () => {
     const freshEntries = await listLmbEntries(chatId, userId);
-    const freshCoverage = await buildCoverage(chatId, userId, freshEntries);
+    const entriesForCoverage = replacesEntryId ? freshEntries.filter((e) => e.raw.id !== replacesEntryId) : freshEntries;
+    const freshCoverage = await buildCoverage(chatId, userId, entriesForCoverage);
     const validWindow = window.filter((m) => !freshCoverage.coveredBy.has(m.id));
     if (validWindow.length === 0) {
       throw new Error("All messages in this window were just bound by another chapter");
@@ -2428,6 +2674,14 @@ async function commitChapter(chatId, profile, userId, window, result, firstIdx, 
 ${result.content}`;
     const entry = await createChapterEntry(book.id, meta, finalContent, comment, userId, result.keywords ?? [], settings.forceConstantEntries);
     invalidateBookCache(userId, chatId);
+    if (replacesEntryId) {
+      try {
+        await deleteEntry(replacesEntryId, userId);
+        invalidateBookCache(userId, chatId);
+      } catch (err) {
+        warn(`regen: failed to delete replaced chapter ${replacesEntryId}: ${describeError(err)}`);
+      }
+    }
     if (profile.hideCoveredMessages) {
       try {
         await syncHiddenForCoveredMessages(chatId, allMessages, {
@@ -2499,22 +2753,23 @@ async function createArcAuto(chatId, profile, settings, userId) {
     clearBusy(userId, chatId, "arc");
   }
 }
-async function createArcFromChapters(chatId, chapterEntryIds, profile, settings, userId) {
+async function createArcFromChapters(chatId, chapterEntryIds, profile, settings, userId, opts = {}) {
   if (!setBusy(userId, chatId, "arc", "Memoria is binding an arc"))
     return null;
   try {
     const entries = await listLmbEntries(chatId, userId);
-    const coverage = await buildCoverage(chatId, userId, entries);
+    const entriesForSelection = opts.replacesEntryId ? entries.filter((e) => e.raw.id !== opts.replacesEntryId) : entries;
+    const coverage = await buildCoverage(chatId, userId, entriesForSelection);
     const wanted = new Set(chapterEntryIds);
     const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && wanted.has(e.raw.id)).sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
     if (chapters.length === 0)
       return null;
-    return await runArc(chatId, profile, settings, userId, chapters);
+    return await runArc(chatId, profile, settings, userId, chapters, opts.replacesEntryId);
   } finally {
     clearBusy(userId, chatId, "arc");
   }
 }
-async function runArc(chatId, profile, settings, userId, selected) {
+async function runArc(chatId, profile, settings, userId, selected, replacesEntryId) {
   nyaaToast(userId, "arc_fire");
   const totalTurns = selected.reduce((acc, c) => acc + c.meta.msgIds.length, 0);
   const provisionalSceneNumber = await nextSceneNumber(chatId, 2, userId);
@@ -2552,13 +2807,13 @@ async function runArc(chatId, profile, settings, userId, selected) {
   const firstIdx = firstIdxs.length ? Math.min(...firstIdxs) : 0;
   const lastIdx = lastIdxs.length ? Math.max(...lastIdxs) : firstIdx;
   if (profile.showMemoryPreviews) {
-    const draft = makeArcPreview(chatId, selected, result, firstIdx, lastIdx);
+    const draft = makeArcPreview(chatId, selected, result, firstIdx, lastIdx, replacesEntryId);
     pushPreview(userId, chatId, draft);
     cb?.onStateChange(userId, chatId);
     return null;
   }
   try {
-    const entryId = await commitArc(chatId, userId, selected, result, firstIdx, lastIdx);
+    const entryId = await commitArc(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId);
     nyaaToast(userId, "arc_success");
     return entryId;
   } catch (err) {
@@ -2569,10 +2824,11 @@ async function runArc(chatId, profile, settings, userId, selected) {
     return null;
   }
 }
-async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx) {
+async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId) {
   return withCommitMutex(userId, chatId, 2, async () => {
     const freshEntries = await listLmbEntries(chatId, userId);
-    const freshCoverage = await buildCoverage(chatId, userId, freshEntries);
+    const entriesForCoverage = replacesEntryId ? freshEntries.filter((e) => e.raw.id !== replacesEntryId) : freshEntries;
+    const freshCoverage = await buildCoverage(chatId, userId, entriesForCoverage);
     const stillActive = new Set(freshCoverage.activeEntries.filter((e) => e.meta.tier === 1).map((e) => e.raw.id));
     const filtered = selected.filter((c) => stillActive.has(c.raw.id));
     if (filtered.length === 0) {
@@ -2628,6 +2884,14 @@ ${result.content}`;
       cb?.onToast(userId, "warn", `Memoria's arc is shelved but ${failedSupersedes.length} chapter${failedSupersedes.length === 1 ? "" : "s"} resisted being marked superseded`);
     }
     invalidateBookCache(userId, chatId);
+    if (replacesEntryId) {
+      try {
+        await deleteEntry(replacesEntryId, userId);
+        invalidateBookCache(userId, chatId);
+      } catch (err) {
+        warn(`regen: failed to delete replaced arc ${replacesEntryId}: ${describeError(err)}`);
+      }
+    }
     publishArcCreated(userId, {
       chatId,
       arcEntryId: arcEntry.id,
@@ -2653,7 +2917,8 @@ async function acceptPreview(chatId, draftId, profile, userId) {
   try {
     if (preview.kind === "chapter") {
       const messages = await spindle.chat.getMessages(chatId);
-      const coverage2 = await buildCoverage(chatId, userId);
+      const acceptEntries = preview.replacesEntryId ? (await listLmbEntries(chatId, userId)).filter((e) => e.raw.id !== preview.replacesEntryId) : undefined;
+      const coverage2 = await buildCoverage(chatId, userId, acceptEntries);
       const intent = new Set(preview.sourceMessageIds);
       const window = messages.filter((m) => intent.has(m.id) && !coverage2.coveredBy.has(m.id));
       if (window.length === 0) {
@@ -2681,7 +2946,7 @@ async function acceptPreview(chatId, draftId, profile, userId) {
         presetKey: preview.presetKey
       };
       try {
-        const entryId = await commitChapter(chatId, profile, userId, window, fakeResult2, firstIdx, lastIdx, messages, true);
+        const entryId = await commitChapter(chatId, profile, userId, window, fakeResult2, firstIdx, lastIdx, messages, true, preview.replacesEntryId);
         dropPendingPreview(userId, chatId, draftId);
         nyaaToast(userId, "success");
         cb?.onStateChange(userId, chatId);
@@ -2694,7 +2959,8 @@ async function acceptPreview(chatId, draftId, profile, userId) {
       }
     }
     const entries = await listLmbEntries(chatId, userId);
-    const coverage = await buildCoverage(chatId, userId, entries);
+    const arcSelectionEntries = preview.replacesEntryId ? entries.filter((e) => e.raw.id !== preview.replacesEntryId) : entries;
+    const coverage = await buildCoverage(chatId, userId, arcSelectionEntries);
     const wanted = new Set(preview.sourceChapterEntryIds ?? []);
     const selected = coverage.activeEntries.filter((e) => e.meta.tier === 1 && wanted.has(e.raw.id));
     if (selected.length === 0) {
@@ -2717,7 +2983,7 @@ async function acceptPreview(chatId, draftId, profile, userId) {
       presetKey: preview.presetKey
     };
     try {
-      const entryId = await commitArc(chatId, userId, selected, fakeResult, preview.firstMsgIdx ?? 0, preview.lastMsgIdx ?? 0);
+      const entryId = await commitArc(chatId, userId, selected, fakeResult, preview.firstMsgIdx ?? 0, preview.lastMsgIdx ?? 0, preview.replacesEntryId);
       dropPendingPreview(userId, chatId, draftId);
       nyaaToast(userId, "arc_success");
       cb?.onStateChange(userId, chatId);
@@ -2793,6 +3059,7 @@ async function drainArcBacklog(chatId, profile, settings, userId) {
 async function maybeRunPipeline(chatId, profile, settings, userId) {
   if (!profile.autoCreate)
     return;
+  await ensureForkAdoption(chatId, userId).catch(() => {});
   if (profile.autoCreateChapter) {
     await drainChapterBacklog(chatId, profile, settings, userId);
   }
@@ -2829,7 +3096,7 @@ function deriveTitle(result, firstMsg, lastMsg) {
     return `${trimmed}${trimmed.length === 60 ? "..." : ""} (msgs ${firstMsg}-${lastMsg})`;
   return `Compressed - msgs ${firstMsg}-${lastMsg}`;
 }
-function makePreview(kind, chatId, window, result, firstIdx, lastIdx) {
+function makePreview(kind, chatId, window, result, firstIdx, lastIdx, replacesEntryId) {
   return {
     kind,
     draftId: `draft_${kind}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
@@ -2843,10 +3110,11 @@ function makePreview(kind, chatId, window, result, firstIdx, lastIdx) {
     tokenCountOutput: result.usageCompletionTokens || 0,
     firstMsgIdx: firstIdx,
     lastMsgIdx: lastIdx,
-    presetKey: result.presetKey
+    presetKey: result.presetKey,
+    replacesEntryId
   };
 }
-function makeArcPreview(chatId, selected, result, firstIdx, lastIdx) {
+function makeArcPreview(chatId, selected, result, firstIdx, lastIdx, replacesEntryId) {
   return {
     kind: "arc",
     draftId: `draft_arc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
@@ -2861,7 +3129,8 @@ function makeArcPreview(chatId, selected, result, firstIdx, lastIdx) {
     tokenCountOutput: result.usageCompletionTokens || 0,
     firstMsgIdx: firstIdx,
     lastMsgIdx: lastIdx,
-    presetKey: result.presetKey
+    presetKey: result.presetKey,
+    replacesEntryId
   };
 }
 
@@ -2923,6 +3192,9 @@ async function buildState(userId, requestedChatId) {
   };
   if (!chat)
     return baseState;
+  if (settings.enabled) {
+    await ensureForkAdoption(chat.id, userId).catch(() => {});
+  }
   const bookId = await findBookForChat(chat.id, userId);
   const bookName = bookId !== null ? (await spindle.world_books.get(bookId, userId).catch(() => null))?.name ?? null : null;
   let messages = [];
@@ -3220,28 +3492,6 @@ spindle.on("MAIN_API_CHANGED", (_payload, hostUserId) => {
   if (hostUserId)
     invalidateConnectionsCache(hostUserId);
 });
-async function resyncVisibility(chatId, userId, desiredHiddenForCovered) {
-  const messages = await spindle.chat.getMessages(chatId);
-  const coverage = await buildCoverage(chatId, userId);
-  const orphanedHidden = pickOrphanedHiddenIds(messages, coverage);
-  let hiddenBefore = 0;
-  let unhiddenAfter = 0;
-  if (orphanedHidden.length > 0) {
-    await unhideCoveredMessages(chatId, orphanedHidden, userId).catch(() => {});
-    unhiddenAfter = orphanedHidden.length;
-  }
-  for (const m of messages) {
-    if (!coverage.coveredBy.has(m.id))
-      continue;
-    const currentlyHidden = !!(m.extra && m.extra.hidden);
-    if (currentlyHidden !== desiredHiddenForCovered)
-      hiddenBefore++;
-  }
-  if (hiddenBefore > 0) {
-    await syncHiddenForCoveredMessages(chatId, messages, coverage, userId, desiredHiddenForCovered).catch(() => {});
-  }
-  return { unhidden: unhiddenAfter, hidden: desiredHiddenForCovered ? hiddenBefore : 0 };
-}
 async function handleExternalEntryDeletion(userId, bookId, isBookDeletion) {
   const chatId = isBookDeletion ? findCachedChatIdForBook(userId, bookId) : await findChatIdForBook(userId, bookId).catch(() => null);
   if (!chatId)
@@ -3597,29 +3847,11 @@ spindle.onFrontendMessage(async (raw, userId) => {
             break;
           }
         }
-        try {
-          await setEntryDisabled(msg.entryId, true, userId);
-        } catch (err) {
-          send({ type: "toast", tone: "error", text: `Memoria couldn't pause the old entry: ${describeError(err)}` }, userId);
-          break;
-        }
-        invalidateBookCache(userId, msg.chatId);
-        await pushState(userId, msg.chatId);
-        const newId = isArc ? await createArcFromChapters(msg.chatId, chapterIds, profile, cur, userId) : await createChapterFromRange(msg.chatId, msgIds, profile, cur, userId);
-        if (newId) {
-          try {
-            await deleteEntry(msg.entryId, userId);
-          } catch (err) {
-            warn(`regen: failed to delete old entry ${msg.entryId}: ${describeError(err)}`);
-          }
+        if (isArc) {
+          await createArcFromChapters(msg.chatId, chapterIds, profile, cur, userId, { replacesEntryId: msg.entryId });
         } else {
-          try {
-            await setEntryDisabled(msg.entryId, false, userId);
-          } catch (err) {
-            warn(`regen: failed to re-enable old entry ${msg.entryId} after failure: ${describeError(err)}`);
-          }
+          await createChapterFromRange(msg.chatId, msgIds, profile, cur, userId, { replacesEntryId: msg.entryId });
         }
-        invalidateBookCache(userId, msg.chatId);
         await pushState(userId, msg.chatId);
         break;
       }

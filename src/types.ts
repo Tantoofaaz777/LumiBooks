@@ -86,6 +86,8 @@ export interface PendingPreview {
   firstMsgIdx?: number;
   lastMsgIdx?: number;
   presetKey: string;
+  /** When set, accepting this preview replaces (deletes) the given entry — used by regenerate. */
+  replacesEntryId?: string;
 }
 
 export interface FrontendState {
