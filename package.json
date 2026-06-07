@@ -1,6 +1,6 @@
 {
   "name": "lumi-books",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-only",
@@ -12,7 +12,7 @@
     "deploy": "powershell.exe -File local/scripts/deploy.ps1"
   },
   "devDependencies": {
-    "lumiverse-spindle-types": "0.4.74",
+    "lumiverse-spindle-types": "0.5.21",
     "typescript": "^5.9.3"
   }
 }

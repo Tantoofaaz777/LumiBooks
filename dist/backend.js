@@ -864,11 +864,15 @@ async function resyncVisibility(chatId, userId, desiredHiddenForCovered) {
 }
 
 // src/backend/injection.ts
-function buildPlan(coverage, messages) {
-  const msgIdToIdx = new Map;
-  for (let i = 0;i < messages.length; i++)
-    msgIdToIdx.set(messages[i].id, i);
-  const byEntry = new Map;
+function isAssembledHistory(lm) {
+  return lm["__isChatHistory"] === true;
+}
+function sourceMessageId(lm) {
+  const v = lm["sourceMessageId"];
+  return typeof v === "string" && v ? v : undefined;
+}
+function orderEntries(coverage, msgIdToIdx) {
+  const ordered = [];
   for (const entry of coverage.activeEntries) {
     let firstIdx = Number.POSITIVE_INFINITY;
     let lastIdx = -1;
@@ -881,21 +885,14 @@ function buildPlan(coverage, messages) {
       if (idx > lastIdx)
         lastIdx = idx;
     }
-    if (firstIdx === Number.POSITIVE_INFINITY)
-      continue;
-    byEntry.set(entry.raw.id, { entry, firstIdx, lastIdx });
+    const haveIdx = firstIdx !== Number.POSITIVE_INFINITY;
+    const resolvedFirst = haveIdx ? firstIdx : typeof entry.meta.firstMsgIdx === "number" ? entry.meta.firstMsgIdx : 0;
+    const resolvedLast = haveIdx ? lastIdx : typeof entry.meta.lastMsgIdx === "number" ? entry.meta.lastMsgIdx : resolvedFirst;
+    const label = entry.raw.comment || (entry.meta.tier === 2 ? haveIdx ? `Arc msgs ${firstIdx + 1}-${lastIdx + 1}` : "Arc" : haveIdx ? `Chapter msgs ${firstIdx + 1}-${lastIdx + 1}` : "Chapter");
+    ordered.push({ entry, label, firstIdx: resolvedFirst, lastIdx: resolvedLast, emitted: false });
   }
-  const removeMessageIds = new Set;
-  for (const m of messages)
-    if (coverage.coveredBy.has(m.id))
-      removeMessageIds.add(m.id);
-  const insertions = [];
-  for (const { entry, firstIdx, lastIdx } of byEntry.values()) {
-    const label = entry.raw.comment || (entry.meta.tier === 2 ? `Arc msgs ${firstIdx + 1}-${lastIdx + 1}` : `Chapter msgs ${firstIdx + 1}-${lastIdx + 1}`);
-    insertions.push({ atOriginalIdx: firstIdx, entry, label });
-  }
-  insertions.sort((a, b) => a.atOriginalIdx - b.atOriginalIdx);
-  return { insertions, removeMessageIds };
+  ordered.sort((a, b) => a.firstIdx - b.firstIdx);
+  return ordered;
 }
 async function buildInjection(chatId, llmMessages, userId) {
   const [activated, allEntries] = await Promise.all([
@@ -915,64 +912,72 @@ async function buildInjection(chatId, llmMessages, userId) {
   const chatMessages = await spindle.chat.getMessages(chatId).catch(() => null);
   if (!chatMessages || chatMessages.length === 0)
     return null;
-  const plan = buildPlan(coverage, chatMessages);
-  if (plan.insertions.length === 0 && plan.removeMessageIds.size === 0)
+  const msgIdToIdx = new Map;
+  for (let i = 0;i < chatMessages.length; i++)
+    msgIdToIdx.set(chatMessages[i].id, i);
+  const ordered = orderEntries(coverage, msgIdToIdx);
+  if (ordered.length === 0)
     return null;
-  const queueByFingerprint = new Map;
-  for (const m of chatMessages) {
-    const ent = coverage.coveredBy.get(m.id);
-    if (!ent)
-      continue;
-    const fp = fingerprint(m.role, (m.content || "").trim());
-    const existing = queueByFingerprint.get(fp);
-    if (existing)
-      existing.push(ent);
-    else
-      queueByFingerprint.set(fp, [ent]);
+  const hasVisibleMessage = chatMessages.some((m) => !(m.extra && m.extra.hidden));
+  const historyMsgs = llmMessages.filter(isAssembledHistory);
+  if (historyMsgs.length === 0) {
+    if (hasVisibleMessage) {
+      error(`injection: no "__isChatHistory" messages on ${llmMessages.length} assembled message(s) despite ` + `visible chat messages. Lumiverse's chat-history contract likely changed \u2014 skipping injection.`);
+    }
+    return null;
+  }
+  const plan = [];
+  for (const m of historyMsgs) {
+    const id = sourceMessageId(m);
+    if (id === undefined) {
+      error(`injection: a "__isChatHistory" message is missing sourceMessageId. Host identity contract ` + `looks inconsistent \u2014 skipping injection.`);
+      return null;
+    }
+    const idx = msgIdToIdx.get(id);
+    if (idx === undefined) {
+      error(`injection: sourceMessageId "${id}" is not in the chat \u2014 skipping injection.`);
+      return null;
+    }
+    plan.push({ idx, covered: coverage.coveredBy.has(id) });
   }
   const out = [];
-  const breakdown = [];
-  const emittedEntryIds = new Set;
-  for (const lm of llmMessages) {
-    const fp = typeof lm.content === "string" ? fingerprint(lm.role, lm.content.trim()) : "";
-    const queue = fp ? queueByFingerprint.get(fp) : undefined;
-    const entryId = queue && queue.length > 0 ? queue.shift() : undefined;
-    if (entryId) {
-      if (!emittedEntryIds.has(entryId)) {
-        emittedEntryIds.add(entryId);
-        const meta = plan.insertions.find((i) => i.entry.raw.id === entryId);
-        if (meta) {
-          const insertedIdx = out.length;
-          out.push({
-            role: "system",
-            content: formatEntryForInjection(meta.entry)
-          });
-          breakdown.push({ messageIndex: insertedIdx, name: meta.label });
-        }
+  const injectedLabels = new Map;
+  const flushAt = (index, beforePos) => {
+    const block = [];
+    for (const o of ordered) {
+      if (o.emitted || o.lastIdx >= beforePos)
         continue;
-      }
+      o.emitted = true;
+      const msg = { role: "assistant", content: formatEntryForInjection(o.entry) };
+      injectedLabels.set(msg, o.label);
+      block.push(msg);
+    }
+    if (block.length)
+      out.splice(index, 0, ...block);
+  };
+  let hp = 0;
+  let histEnd = -1;
+  for (const lm of llmMessages) {
+    if (!isAssembledHistory(lm)) {
+      out.push(lm);
       continue;
     }
-    out.push(lm);
+    const { idx, covered } = plan[hp++];
+    flushAt(out.length, idx);
+    if (!covered)
+      out.push(lm);
+    histEnd = out.length;
   }
-  const fallbackEntries = plan.insertions.filter((i) => !emittedEntryIds.has(i.entry.raw.id));
-  if (fallbackEntries.length) {
-    const fallbackBlock = fallbackEntries.map((meta) => ({
-      role: "system",
-      content: formatEntryForInjection(meta.entry)
-    }));
-    let insertAt = 0;
-    while (insertAt < out.length && out[insertAt]?.role === "system")
-      insertAt++;
-    out.splice(insertAt, 0, ...fallbackBlock);
-    for (let i = 0;i < fallbackBlock.length; i++) {
-      breakdown.push({ messageIndex: insertAt + i, name: fallbackEntries[i].label });
-    }
+  flushAt(histEnd < 0 ? out.length : histEnd, Number.POSITIVE_INFINITY);
+  if (injectedLabels.size === 0)
+    return null;
+  const breakdown = [];
+  for (let i = 0;i < out.length; i++) {
+    const label = injectedLabels.get(out[i]);
+    if (label !== undefined)
+      breakdown.push({ messageIndex: i, name: label });
   }
   return { messages: out, breakdown };
-}
-function fingerprint(role, trimmedContent) {
-  return `${role}::${trimmedContent}`;
 }
 function formatEntryForInjection(entry) {
   return entry.raw.content;

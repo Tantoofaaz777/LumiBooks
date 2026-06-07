@@ -176,14 +176,21 @@ export const STYLES = `
 }
 .lmb-entry.superseded { opacity: 0.45; }
 .lmb-entry.arc { border-left: 3px solid var(--lumiverse-primary, #6b8ff0); }
-.lmb-entry-head { display: flex; align-items: center; gap: 8px; }
+.lmb-entry-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .lmb-entry-title {
-  flex: 1;
+  flex: 1 1 120px;
+  min-width: 0;
   font-weight: 500;
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.lmb-entry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
 }
 .lmb-entry-tag {
   font-size: 10px;

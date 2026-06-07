@@ -177,14 +177,21 @@ var STYLES = `
 }
 .lmb-entry.superseded { opacity: 0.45; }
 .lmb-entry.arc { border-left: 3px solid var(--lumiverse-primary, #6b8ff0); }
-.lmb-entry-head { display: flex; align-items: center; gap: 8px; }
+.lmb-entry-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .lmb-entry-title {
-  flex: 1;
+  flex: 1 1 120px;
+  min-width: 0;
   font-weight: 500;
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.lmb-entry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
 }
 .lmb-entry-tag {
   font-size: 10px;
@@ -1217,7 +1224,9 @@ function renderEntryItem(view, kind, state, ctx, send) {
   title.textContent = view.comment || view.meta.title || `${kind} ${view.entryId.slice(0, 6)}`;
   head.append(tag, title);
   const chatId = state.activeChatId;
-  head.append(makeButton("Edit", () => {
+  const actions = document.createElement("div");
+  actions.className = "lmb-entry-actions";
+  actions.append(makeButton("Edit", () => {
     openEditModal(ctx, kind === "arc" ? "Edit arc" : "Edit chapter", {
       comment: view.comment,
       content: view.content
@@ -1251,6 +1260,7 @@ function renderEntryItem(view, kind, state, ctx, send) {
       return;
     send({ type: "delete_entry", chatId, entryId: view.entryId });
   }, { small: true, danger: true }));
+  head.appendChild(actions);
   li.appendChild(head);
   const meta = document.createElement("div");
   meta.className = "lmb-entry-meta";

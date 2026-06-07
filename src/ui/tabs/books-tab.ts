@@ -327,7 +327,9 @@ function renderEntryItem(
   head.append(tag, title);
 
   const chatId = state.activeChatId;
-  head.append(
+  const actions = document.createElement("div");
+  actions.className = "lmb-entry-actions";
+  actions.append(
     makeButton("Edit", () => {
       openEditModal(ctx, kind === "arc" ? "Edit arc" : "Edit chapter", {
         comment: view.comment,
@@ -361,6 +363,7 @@ function renderEntryItem(
       send({ type: "delete_entry", chatId, entryId: view.entryId });
     }, { small: true, danger: true }),
   );
+  head.appendChild(actions);
   li.appendChild(head);
 
   const meta = document.createElement("div");
