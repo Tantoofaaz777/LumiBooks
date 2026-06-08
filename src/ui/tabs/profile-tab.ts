@@ -397,7 +397,7 @@ function renderSamplers(
   const help = document.createElement("div");
   help.className = "lmb-help";
   help.textContent =
-    "LumiBooks ships with its own sampler defaults tuned for summarization (low temperature, generous output budget). Empty fields use those defaults — placeholders show what will be sent. Temperature, max output, and max input are always sent on the wire; top_p / top_k / penalties are only sent when you set them.";
+    "LumiBooks ships with its own sampler defaults tuned for summarization (low temperature, generous output budget). Empty fields use those defaults - placeholders show what will be sent. Temperature, max output, and max input are always sent on the wire; top_p / top_k / penalties are only sent when you set them.";
   sec.body.appendChild(help);
 
   const saveSampler = (key: keyof SamplerSet) => (v: number | null) => {

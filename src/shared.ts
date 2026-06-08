@@ -91,6 +91,8 @@ export interface LMBEntryMeta {
   presetKey?: string;
   sceneNumber?: number;
   rawOutput?: string;
+  isRoot?: boolean;
+  rootOrigin?: string;
 }
 
 export const DEFAULT_SAMPLERS: SamplerSet = {
@@ -303,6 +305,8 @@ export function normalizeEntryMeta(raw: unknown): LMBEntryMeta | null {
         ? Math.floor(v.sceneNumber)
         : undefined,
     rawOutput: typeof v.rawOutput === "string" ? v.rawOutput : undefined,
+    isRoot: v.isRoot === true ? true : undefined,
+    rootOrigin: typeof v.rootOrigin === "string" && v.rootOrigin.trim() ? v.rootOrigin : undefined,
   };
 }
 

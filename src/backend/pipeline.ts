@@ -7,6 +7,7 @@ import { approximateTokensFromChars, buildArcHeader, buildChapterHeader } from "
 import {
   buildCoverage,
   computeCoverageStats,
+  isExcluded,
   pickUncoveredTail,
   selectNextChapterWindow,
   syncHiddenForCoveredMessages,
@@ -345,7 +346,7 @@ export async function createChapterFromRange(
     const messages = await spindle.chat.getMessages(chatId);
     if (!messages.length) return null;
     const set = new Set(messageIds);
-    const window = messages.filter((m) => set.has(m.id));
+    const window = messages.filter((m) => set.has(m.id) && !isExcluded(m));
     if (window.length === 0) return null;
     return await runChapter(chatId, profile, settings, userId, messages, window, opts.replacesEntryId);
   } finally {
@@ -443,8 +444,6 @@ async function commitChapter(
 ): Promise<string> {
   return withCommitMutex(userId, chatId, 1, async () => {
   const freshEntries = await listLmbEntries(chatId, userId);
-  // The entry being regenerated still covers this window; exclude it so its own
-  // messages read as free, then delete it once the replacement is committed.
   const entriesForCoverage = replacesEntryId
     ? freshEntries.filter((e) => e.raw.id !== replacesEntryId)
     : freshEntries;
@@ -545,7 +544,7 @@ export async function createArcAuto(
     const entries = await listLmbEntries(chatId, userId);
     const coverage = await buildCoverage(chatId, userId, entries);
     const chapters = coverage.activeEntries
-      .filter((e) => e.meta.tier === 1)
+      .filter((e) => e.meta.tier === 1 && !e.meta.isRoot)
       .sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
     if (chapters.length === 0) return null;
     let selected: LMBEntry[] = [];
@@ -593,8 +592,6 @@ export async function createArcFromChapters(
   if (!setBusy(userId, chatId, "arc", "Memoria is binding an arc")) return null;
   try {
     const entries = await listLmbEntries(chatId, userId);
-    // When regenerating an arc, exclude it from coverage so the chapters it
-    // currently supersedes become selectable again.
     const entriesForSelection = opts.replacesEntryId
       ? entries.filter((e) => e.raw.id !== opts.replacesEntryId)
       : entries;
@@ -690,8 +687,6 @@ async function commitArc(
 ): Promise<string> {
   return withCommitMutex(userId, chatId, 2, async () => {
   const freshEntries = await listLmbEntries(chatId, userId);
-  // When regenerating an arc, exclude it so the chapters it supersedes count as
-  // active/selectable; it is deleted once the replacement is committed.
   const entriesForCoverage = replacesEntryId
     ? freshEntries.filter((e) => e.raw.id !== replacesEntryId)
     : freshEntries;
@@ -712,6 +707,20 @@ async function commitArc(
   const sceneNumber = await nextSceneNumber(chatId, 2, userId);
   const msgIds = selected.flatMap((c) => c.meta.msgIds);
   const sourceChapterEntryIds = selected.map((c) => c.raw.id);
+  const isRootArc = selected.length > 0 && selected.every((c) => c.meta.isRoot);
+  const rootOrigin = isRootArc ? selected.find((c) => c.meta.rootOrigin)?.meta.rootOrigin : undefined;
+  if (!isRootArc && selected.some((c) => c.meta.isRoot)) {
+    const own = selected.filter((c) => !c.meta.isRoot);
+    const fs = own.map((c) => c.meta.firstMsgIdx).filter((n): n is number => typeof n === "number");
+    const ls = own.map((c) => c.meta.lastMsgIdx).filter((n): n is number => typeof n === "number");
+    if (fs.length) firstIdx = Math.min(...fs);
+    else if (firstIdx < 0) firstIdx = 0;
+    if (ls.length) lastIdx = Math.max(...ls);
+    else if (lastIdx < firstIdx) lastIdx = firstIdx;
+  }
+  const arcTitle = isRootArc
+    ? (result.title?.trim() || "Inherited Arc")
+    : deriveTitle(result, firstIdx + 1, lastIdx + 1);
   const meta: LMBEntryMeta = {
     tier: 2,
     chatId,
@@ -724,14 +733,15 @@ async function commitArc(
     model: result.model,
     connectionId: result.connectionId,
     createdAt: Date.now(),
-    title: deriveTitle(result, firstIdx + 1, lastIdx + 1),
+    title: arcTitle,
     shortComment: result.shortComment,
     presetKey: result.presetKey,
     sceneNumber,
     rawOutput: result.rawOutput,
+    ...(isRootArc ? { isRoot: true, rootOrigin } : {}),
   };
   const baseComment = meta.title ?? `Arc - msgs ${(firstIdx + 1)}-${(lastIdx + 1)}`;
-  const comment = `Arc #${sceneNumber} - ${baseComment}`;
+  const comment = `${isRootArc ? "[Root] " : ""}Arc #${sceneNumber} - ${baseComment}`;
   const arcSettings = await loadSettings(userId);
   const arcOpener = buildArcHeader(sceneNumber, sourceChapterEntryIds.length, msgIds.length);
   const finalArcContent = `${arcOpener}\n\n${result.content}`;
@@ -790,16 +800,15 @@ export async function acceptPreview(
   try {
     if (preview.kind === "chapter") {
       const messages = await spindle.chat.getMessages(chatId);
-      // Exclude the entry being regenerated so its own window reads as free.
       const acceptEntries = preview.replacesEntryId
         ? (await listLmbEntries(chatId, userId)).filter((e) => e.raw.id !== preview.replacesEntryId)
         : undefined;
       const coverage = await buildCoverage(chatId, userId, acceptEntries);
       const intent = new Set(preview.sourceMessageIds);
-      const window = messages.filter((m) => intent.has(m.id) && !coverage.coveredBy.has(m.id));
+      const window = messages.filter((m) => intent.has(m.id) && !coverage.coveredBy.has(m.id) && !isExcluded(m));
       if (window.length === 0) {
         dropPendingPreview(userId, chatId, draftId);
-        cb?.onToast(userId, "warn", "Memoria can't save this chapter — its messages were deleted or already filed by another chapter");
+        cb?.onToast(userId, "warn", "Memoria can't save this chapter - its messages were deleted or already filed by another chapter");
         cb?.onStateChange(userId, chatId);
         return null;
       }
@@ -838,7 +847,6 @@ export async function acceptPreview(
       }
     }
     const entries = await listLmbEntries(chatId, userId);
-    // Exclude the arc being regenerated so the chapters it supersedes are selectable.
     const arcSelectionEntries = preview.replacesEntryId
       ? entries.filter((e) => e.raw.id !== preview.replacesEntryId)
       : entries;
@@ -940,7 +948,7 @@ export async function dryRunArc(
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
   const chapters = coverage.activeEntries
-    .filter((e) => e.meta.tier === 1)
+    .filter((e) => e.meta.tier === 1 && !e.meta.isRoot)
     .sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
   if (chapters.length === 0) throw new Error("No chapters to bind. File a few chapters first.");
   const totalTurns = chapters.reduce((acc, c) => acc + c.meta.msgIds.length, 0);
@@ -999,6 +1007,7 @@ async function nextSceneNumber(chatId: string, tier: 1 | 2, userId: string): Pro
   let max = 0;
   for (const e of entries) {
     if (e.meta.tier !== tier) continue;
+    if (e.meta.isRoot) continue;
     const n = e.meta.sceneNumber;
     if (typeof n === "number" && n > max) max = n;
   }

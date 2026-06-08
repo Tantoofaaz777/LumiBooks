@@ -10,10 +10,17 @@ export interface ChapterView {
   contentTokens: number;
   contentChars: number;
   sourceTokensInput: number;
+  isRoot: boolean;
 }
 
 export interface ArcView extends ChapterView {
   sourceChapterEntryIds: string[];
+}
+
+export interface RootSourceOption {
+  chatId: string;
+  chatName: string;
+  entryCount: number;
 }
 
 export interface ConnectionOption {
@@ -58,6 +65,7 @@ export interface MessageStub {
   covered: boolean;
   coveredByEntryId: string | null;
   indexInChat: number;
+  excluded: boolean;
 }
 
 export interface BuiltInPreset {
@@ -86,7 +94,6 @@ export interface PendingPreview {
   firstMsgIdx?: number;
   lastMsgIdx?: number;
   presetKey: string;
-  /** When set, accepting this preview replaces (deletes) the given entry — used by regenerate. */
   replacesEntryId?: string;
 }
 
@@ -114,6 +121,10 @@ export interface FrontendState {
   pendingPreviews: PendingPreview[];
   backlogChapters: number;
   backlogArcs: number;
+  rootOrigin: string | null;
+  rootOriginName: string | null;
+  rootEntryCount: number;
+  availableRoots: RootSourceOption[];
 }
 
 export type FrontendToBackend =
@@ -148,7 +159,11 @@ export type FrontendToBackend =
   | { type: "delete_custom_preset"; key: string; category: "chapter" | "arc"; chatId?: string | null }
   | { type: "accept_preview"; draftId: string; chatId: string }
   | { type: "discard_preview"; draftId: string; chatId: string }
-  | { type: "edit_preview"; draftId: string; chatId: string; patch: { title?: string; content?: string } };
+  | { type: "edit_preview"; draftId: string; chatId: string; patch: { title?: string; content?: string } }
+  | { type: "rebase_root"; chatId: string; sourceChatId: string }
+  | { type: "rebuild_root"; chatId: string; sourceChatId: string }
+  | { type: "detach_root"; chatId: string }
+  | { type: "set_message_excluded"; chatId: string; messageIds: string[]; excluded: boolean };
 
 export interface DryRunMessage {
   role: "system" | "user";

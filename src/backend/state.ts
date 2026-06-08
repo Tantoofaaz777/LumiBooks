@@ -1,12 +1,12 @@
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
-import type { ChapterView, ArcView, FrontendState, ConnectionOption, MessageStub, RegexScriptOption } from "../types";
+import type { ChapterView, ArcView, FrontendState, ConnectionOption, MessageStub, RegexScriptOption, RootSourceOption } from "../types";
 import type { ChatMessage } from "./coverage";
 import type { LMBProfile } from "../shared";
 import { approximateTokensFromChars } from "../shared";
 import { loadSettings } from "./storage";
 import { buildCoverage, computeCoverageStats, countCompressibleEligible } from "./coverage";
-import { findBookForChat, listLmbEntries, type LMBEntry } from "./world-book";
+import { findBookForChat, listLmbEntries, listRootCandidates, type LMBEntry } from "./world-book";
 import { listConnections, resolveConnection } from "./summarizer";
 import { listRegexScripts } from "./regex";
 import { getBusy, getLastFailure, getPendingPreviews } from "./pipeline";
@@ -28,9 +28,10 @@ export async function buildState(userId: string, requestedChatId?: string | null
     chat = await spindle.chats.getActive(userId).catch(() => null);
   }
 
-  const [connectionsRaw, regexScriptsRaw] = await Promise.all([
+  const [connectionsRaw, regexScriptsRaw, rootCandidatesRaw] = await Promise.all([
     listConnections(userId),
     listRegexScripts(userId),
+    listRootCandidates(userId).catch(() => []),
   ]);
   const connections: ConnectionOption[] = connectionsRaw.map((c) => ({
     id: c.id,
@@ -41,6 +42,11 @@ export async function buildState(userId: string, requestedChatId?: string | null
     hasApiKey: c.has_api_key,
   }));
   const regexScripts: RegexScriptOption[] = regexScriptsRaw.map((s) => ({ id: s.id, name: s.name }));
+  const allRootCandidates: RootSourceOption[] = rootCandidatesRaw.map((c) => ({
+    chatId: c.chatId,
+    chatName: c.chatName,
+    entryCount: c.entryCount,
+  }));
   const resolved = await resolveConnection(activeProfile, userId).catch(() => null);
 
   const baseState: FrontendState = {
@@ -74,6 +80,10 @@ export async function buildState(userId: string, requestedChatId?: string | null
     pendingPreviews: [],
     backlogChapters: 0,
     backlogArcs: 0,
+    rootOrigin: null,
+    rootOriginName: null,
+    rootEntryCount: 0,
+    availableRoots: allRootCandidates,
   };
 
   if (!chat) return baseState;
@@ -100,7 +110,7 @@ export async function buildState(userId: string, requestedChatId?: string | null
   const compressibleSize = countCompressibleEligible(messages, coverage, activeProfile);
   const windowDenom = Math.max(1, activeProfile.windowValue);
   const backlogChapters = Math.max(0, Math.floor(compressibleSize / windowDenom));
-  const activeChapterEntries = coverage.activeEntries.filter((e) => e.meta.tier === 1);
+  const activeChapterEntries = coverage.activeEntries.filter((e) => e.meta.tier === 1 && !e.meta.isRoot);
   const backlogArcs = countArcBacklog(activeChapterEntries, activeProfile);
 
   const supersededIds = new Set<string>();
@@ -123,6 +133,7 @@ export async function buildState(userId: string, requestedChatId?: string | null
       contentTokens: approximateTokensFromChars((e.raw.content || "").length),
       contentChars: (e.raw.content || "").length,
       sourceTokensInput: e.meta.tokenCountInput || 0,
+      isRoot: !!e.meta.isRoot,
     };
     if (e.meta.tier === 2) {
       arcs.push({ ...view, sourceChapterEntryIds: e.meta.sourceChapterEntryIds ?? [] });
@@ -136,6 +147,7 @@ export async function buildState(userId: string, requestedChatId?: string | null
   const messageStubs: MessageStub[] = messages.map((m) => {
     const covered = coverage.coveredBy.get(m.id) ?? null;
     const hidden = !!(m.extra && (m.extra as Record<string, unknown>).hidden);
+    const excluded = !!((m as { metadata?: Record<string, unknown> }).metadata?.["lmb_excluded"] === true);
     const preview = (m.content || "").slice(0, 220).replace(/\s+/g, " ").trim();
     const charCount = (m.content || "").length;
     return {
@@ -148,6 +160,7 @@ export async function buildState(userId: string, requestedChatId?: string | null
       covered: !!covered,
       coveredByEntryId: covered,
       indexInChat: m.index_in_chat,
+      excluded,
     };
   });
 
@@ -158,6 +171,12 @@ export async function buildState(userId: string, requestedChatId?: string | null
       characterName = character?.name ?? null;
     } catch (_) { void _; }
   }
+
+  const rootEntries = entries.filter((e) => e.meta.isRoot);
+  const rootOrigin = rootEntries.find((e) => e.meta.rootOrigin)?.meta.rootOrigin ?? null;
+  const rootOriginName = rootOrigin
+    ? (allRootCandidates.find((c) => c.chatId === rootOrigin)?.chatName ?? rootOrigin.slice(0, 8))
+    : null;
 
   return {
     ...baseState,
@@ -175,6 +194,10 @@ export async function buildState(userId: string, requestedChatId?: string | null
     pendingPreviews: getPendingPreviews(userId, chat.id),
     backlogChapters,
     backlogArcs,
+    rootOrigin,
+    rootOriginName,
+    rootEntryCount: rootEntries.length,
+    availableRoots: allRootCandidates.filter((c) => c.chatId !== chat.id),
   };
 }
 

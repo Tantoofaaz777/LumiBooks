@@ -234,7 +234,7 @@ function renderActions(host: HTMLElement, state: FrontendState, send: (m: Fronte
     row.append(
       makeButton(`File all chapters (${state.backlogChapters})`, () => send({ type: "create_all_chapters", chatId }), {
         disabled,
-        title: "Drain the chapter backlog — keeps filing chapters until the lag or window threshold blocks further compression",
+        title: "Drain the chapter backlog - keeps filing chapters until the lag or window threshold blocks further compression",
       }),
     );
   }
@@ -248,7 +248,7 @@ function renderActions(host: HTMLElement, state: FrontendState, send: (m: Fronte
     row.append(
       makeButton(`File all arcs (${state.backlogArcs})`, () => send({ type: "create_all_arcs", chatId }), {
         disabled,
-        title: "Drain the arc backlog — keeps binding arcs until the configured arc trigger no longer fires",
+        title: "Drain the arc backlog - keeps binding arcs until the configured arc trigger no longer fires",
       }),
     );
   }
@@ -277,23 +277,25 @@ function renderEntries(
     host.appendChild(sec.wrap);
     return;
   }
-  if (state.chapters.length + state.arcs.length === 0) {
+  const chapters = state.chapters.filter((c) => !c.isRoot);
+  const arcs = state.arcs.filter((a) => !a.isRoot);
+  if (chapters.length + arcs.length === 0) {
     sec.body.appendChild(textNode("Empty shelf for now. Memoria will start filing once the lag fills.", "lmb-empty"));
     host.appendChild(sec.wrap);
     return;
   }
-  if (state.arcs.length) {
-    sec.body.appendChild(buildSubtitle(`Arcs (${state.arcs.length})`));
+  if (arcs.length) {
+    sec.body.appendChild(buildSubtitle(`Arcs (${arcs.length})`));
     const list = document.createElement("ul");
     list.className = "lmb-entry-list";
-    for (const arc of state.arcs) list.appendChild(renderEntryItem(arc, "arc", state, ctx, send));
+    for (const arc of arcs) list.appendChild(renderEntryItem(arc, "arc", state, ctx, send));
     sec.body.appendChild(list);
   }
-  if (state.chapters.length) {
-    sec.body.appendChild(buildSubtitle(`Chapters (${state.chapters.length})`));
+  if (chapters.length) {
+    sec.body.appendChild(buildSubtitle(`Chapters (${chapters.length})`));
     const list = document.createElement("ul");
     list.className = "lmb-entry-list";
-    for (const ch of state.chapters) list.appendChild(renderEntryItem(ch, "chapter", state, ctx, send));
+    for (const ch of chapters) list.appendChild(renderEntryItem(ch, "chapter", state, ctx, send));
     sec.body.appendChild(list);
   }
   host.appendChild(sec.wrap);
@@ -312,9 +314,10 @@ function renderEntryItem(
   state: FrontendState,
   ctx: SpindleFrontendContext,
   send: (m: FrontendToBackend) => void,
+  readOnly = false,
 ): HTMLLIElement {
   const li = document.createElement("li");
-  li.className = `lmb-entry ${kind}${view.active ? "" : " superseded"}`;
+  li.className = `lmb-entry ${kind}${view.active ? "" : " superseded"}${readOnly ? " root" : ""}`;
 
   const head = document.createElement("div");
   head.className = "lmb-entry-head";
@@ -325,7 +328,9 @@ function renderEntryItem(
   title.className = "lmb-entry-title";
   title.textContent = view.comment || view.meta.title || `${kind} ${view.entryId.slice(0, 6)}`;
   head.append(tag, title);
+  li.appendChild(head);
 
+  if (!readOnly) {
   const chatId = state.activeChatId;
   const actions = document.createElement("div");
   actions.className = "lmb-entry-actions";
@@ -364,14 +369,16 @@ function renderEntryItem(
     }, { small: true, danger: true }),
   );
   head.appendChild(actions);
-  li.appendChild(head);
+  }
 
   const meta = document.createElement("div");
   meta.className = "lmb-entry-meta";
   const range =
-    view.meta.firstMsgIdx !== undefined && view.meta.lastMsgIdx !== undefined
-      ? `msgs ${view.meta.firstMsgIdx + 1}-${view.meta.lastMsgIdx + 1}`
-      : `${view.meta.msgIds.length} msgs`;
+    view.isRoot
+      ? "inherited"
+      : view.meta.firstMsgIdx !== undefined && view.meta.lastMsgIdx !== undefined
+        ? `msgs ${view.meta.firstMsgIdx + 1}-${view.meta.lastMsgIdx + 1}`
+        : `${view.meta.msgIds.length} msgs`;
   const before = view.sourceTokensInput || 0;
   const tokenStr = before > 0
     ? `${formatTokens(before)}→${formatTokens(view.contentTokens)} tokens`

@@ -58,8 +58,14 @@ export async function buildCoverage(chatId: string, userId: string, preloadedEnt
   return { coveredBy, activeEntries, arcs, chapters };
 }
 
+export function isExcluded(m: ChatMessageDTO): boolean {
+  const md = (m as { metadata?: Record<string, unknown> }).metadata;
+  return !!(md && md["lmb_excluded"] === true);
+}
+
 export function isEligibleForCount(m: ChatMessageDTO, _profile: LMBProfile): boolean {
   void _profile;
+  if (isExcluded(m)) return false;
   const role = (m as { role?: string }).role;
   if (role === "system" || (m as { is_system?: boolean }).is_system) return false;
   return true;
@@ -191,6 +197,10 @@ export function selectNextChapterWindow(
     const out: ChatMessageDTO[] = [];
     let counted = 0;
     for (const m of compressible) {
+      if (isExcluded(m)) {
+        if (out.length > 0) break;
+        continue;
+      }
       out.push(m);
       if (isEligibleForCount(m, profile)) {
         counted++;
@@ -206,6 +216,10 @@ function takeUntilTokens(messages: ChatMessageDTO[], maxTokens: number, profile:
   const out: ChatMessageDTO[] = [];
   let acc = 0;
   for (const m of messages) {
+    if (isExcluded(m)) {
+      if (out.length > 0) break;
+      continue;
+    }
     out.push(m);
     if (isEligibleForCount(m, profile)) {
       acc += approximateTokensFromChars((m.content || "").length);
@@ -225,6 +239,7 @@ export async function syncHiddenForCoveredMessages(
   void userId;
   const toFlip: string[] = [];
   for (const m of messages) {
+    if (isExcluded(m)) continue;
     const isCovered = coverage.coveredBy.has(m.id);
     if (!isCovered) continue;
     const currentlyHidden = !!(m.extra && (m.extra as Record<string, unknown>).hidden);
@@ -248,6 +263,7 @@ export async function syncHiddenForCoveredMessages(
 export function pickOrphanedHiddenIds(messages: ChatMessageDTO[], coverage: CoverageMap): string[] {
   const out: string[] = [];
   for (const m of messages) {
+    if (isExcluded(m)) continue;
     const currentlyHidden = !!(m.extra && (m.extra as Record<string, unknown>).hidden);
     if (!currentlyHidden) continue;
     if (coverage.coveredBy.has(m.id)) continue;
@@ -276,11 +292,6 @@ export async function unhideCoveredMessages(
   }
 }
 
-/**
- * Reconcile message visibility with current coverage: unhide any messages that
- * are hidden but no longer covered by a live entry, and (when desired) hide
- * covered messages that aren't hidden yet. Returns how many were flipped each way.
- */
 export async function resyncVisibility(
   chatId: string,
   userId: string,
@@ -296,6 +307,7 @@ export async function resyncVisibility(
     unhiddenAfter = orphanedHidden.length;
   }
   for (const m of messages) {
+    if (isExcluded(m)) continue;
     if (!coverage.coveredBy.has(m.id)) continue;
     const currentlyHidden = !!(m.extra && (m.extra as Record<string, unknown>).hidden);
     if (currentlyHidden !== desiredHiddenForCovered) hiddenBefore++;

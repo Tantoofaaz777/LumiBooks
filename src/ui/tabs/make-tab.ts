@@ -1,3 +1,4 @@
+import type { SpindleFrontendContext } from "lumiverse-spindle-types";
 import type { FrontendState, FrontendToBackend, MessageStub } from "../../types";
 import {
   HIDDEN_ICON,
@@ -9,6 +10,7 @@ import {
   textInput,
   textNode,
 } from "../components";
+import { confirmDelete } from "../modals";
 
 interface MakeTabContext {
   state: FrontendState;
@@ -27,6 +29,7 @@ const localState = {
   lastChatId: null as string | null,
   anchorMessageId: null as string | null,
   suppressNextClick: false,
+  rebaseSourceId: "",
 };
 
 const LONG_PRESS_MS = 500;
@@ -35,12 +38,14 @@ const LONG_PRESS_MOVE_PX = 10;
 export function renderMakeTab(
   host: HTMLElement,
   state: FrontendState,
+  ctx: SpindleFrontendContext,
   send: (msg: FrontendToBackend) => void,
 ): void {
   if (localState.lastChatId !== state.activeChatId) {
     localState.selectedMessages.clear();
     localState.selectedChapters.clear();
     localState.anchorMessageId = null;
+    localState.rebaseSourceId = "";
     localState.lastChatId = state.activeChatId;
   }
   const draw = () => {
@@ -60,6 +65,7 @@ export function renderMakeTab(
       }
       renderChapterPicker(host, c, send);
       renderArcPicker(host, c, send);
+      renderContinuity(host, c, ctx, send);
     });
   };
   draw();
@@ -74,7 +80,7 @@ function renderChapterPicker(
   const help = document.createElement("div");
   help.className = "lmb-help";
   help.textContent =
-    "Covered messages are already filed and are greyed. Shift+click (or long-press on touch) to select ranges.";
+    "Covered messages are already filed and are greyed. Shift+click (or long-press on touch) to select ranges. Use Exclude to pin a message so it's never hidden, replaced, or summarized - it splits compression around it.";
   sec.body.appendChild(help);
 
   const filterRow = document.createElement("div");
@@ -98,8 +104,8 @@ function renderChapterPicker(
       const next = v.toLowerCase();
       localState.messageQuery = next;
       c.messageQuery = next;
-      listEl.replaceChildren(...buildRows(c, send, counts, compressBtn));
-      compressBtn.disabled = c.selectedMessages.size === 0;
+      listEl.replaceChildren(...buildRows(c, syncControls));
+      syncControls();
     },
   });
   filterRow.append(filterSel, query);
@@ -107,13 +113,19 @@ function renderChapterPicker(
 
   const counts = document.createElement("div");
   counts.className = "lmb-help";
-  const updateCounts = () => {
-    const tokens = sumSelectedTokens(c);
-    counts.textContent = `${c.selectedMessages.size} selected (~${formatTokens(tokens)} tokens before)`;
-  };
 
   const chatId = c.state.activeChatId!;
-  const compressBtn = makeButton("Compress selected", () => {
+  const messageById = new Map(c.state.messages.map((m) => [m.id, m] as const));
+  const allSelectedExcluded = (): boolean => {
+    if (c.selectedMessages.size === 0) return false;
+    for (const id of c.selectedMessages) {
+      const m = messageById.get(id);
+      if (!m || !m.excluded) return false;
+    }
+    return true;
+  };
+
+  const compressBtn = makeButton("Compress", () => {
     const ids = Array.from(c.selectedMessages);
     if (ids.length === 0) return;
     send({ type: "create_chapter_range", chatId, messageIds: ids });
@@ -123,24 +135,40 @@ function renderChapterPicker(
     c.rerender();
   }, { primary: true, disabled: c.selectedMessages.size === 0 });
 
+  const excludeBtn = makeButton("Exclude", () => {
+    const ids = Array.from(c.selectedMessages);
+    if (ids.length === 0) return;
+    send({ type: "set_message_excluded", chatId, messageIds: ids, excluded: !allSelectedExcluded() });
+  }, { title: "Toggle exclusion for the selected messages. Excluded messages are never hidden, replaced, or summarized, and they split compression. Click again to allow compression." });
+
+  const syncControls = (): void => {
+    const tokens = sumSelectedTokens(c);
+    counts.textContent = `${c.selectedMessages.size} selected (~${formatTokens(tokens)} tokens before)`;
+    const empty = c.selectedMessages.size === 0;
+    compressBtn.disabled = empty;
+    excludeBtn.disabled = empty;
+    excludeBtn.classList.toggle("active", allSelectedExcluded());
+  };
+
   const listEl = document.createElement("div");
   listEl.className = "lmb-message-list";
-  listEl.replaceChildren(...buildRows(c, send, counts, compressBtn));
+  listEl.replaceChildren(...buildRows(c, syncControls));
   sec.body.appendChild(listEl);
-  updateCounts();
+  syncControls();
   sec.body.appendChild(counts);
 
   const actions = document.createElement("div");
   actions.className = "lmb-actions";
   actions.append(
     compressBtn,
-    makeButton("Select uncompressed tail", () => {
-      const visible = filterMessages(c).filter((m) => !m.covered);
+    makeButton("Pick uncompressed", () => {
+      const visible = filterMessages(c).filter((m) => !m.covered && !m.excluded);
       const next = new Set(visible.map((m) => m.id));
       localState.selectedMessages = next;
       c.selectedMessages = next;
       c.rerender();
     }),
+    excludeBtn,
     makeButton("Clear", () => {
       localState.selectedMessages.clear();
       c.selectedMessages.clear();
@@ -155,30 +183,27 @@ function renderChapterPicker(
 
 function buildRows(
   c: MakeTabContext,
-  _send: (msg: FrontendToBackend) => void,
-  countsEl: HTMLElement,
-  compressBtn: HTMLButtonElement,
+  onToggle: () => void,
 ): HTMLElement[] {
   const visible = filterMessages(c);
   if (visible.length === 0) {
     return [textNode("No messages match", "lmb-empty")];
   }
-  return visible.map((m) => buildMessageRow(m, c, countsEl, compressBtn));
+  return visible.map((m) => buildMessageRow(m, c, onToggle));
 }
 
 function buildMessageRow(
   m: MessageStub,
   c: MakeTabContext,
-  countsEl: HTMLElement,
-  compressBtn: HTMLButtonElement,
+  onToggle: () => void,
 ): HTMLElement {
   const row = document.createElement("label");
-  row.className = `lmb-message-row${m.covered ? " covered" : ""}${c.selectedMessages.has(m.id) ? " selected" : ""}`;
+  row.className = `lmb-message-row${m.covered ? " covered" : ""}${m.excluded ? " excluded" : ""}${c.selectedMessages.has(m.id) ? " selected" : ""}`;
   row.title = "Shift+click (or long-press on touch) to select a range";
   const cb = document.createElement("input");
   cb.type = "checkbox";
   cb.checked = c.selectedMessages.has(m.id);
-  cb.disabled = m.covered;
+  cb.disabled = m.covered && !m.excluded;
   const triggerRangeFromAnchor = (): boolean => {
     const anchorId = localState.anchorMessageId;
     if (!anchorId || anchorId === m.id) return false;
@@ -236,9 +261,7 @@ function buildMessageRow(
     else c.selectedMessages.delete(m.id);
     localState.anchorMessageId = m.id;
     row.classList.toggle("selected", cb.checked);
-    const tokens = sumSelectedTokens(c);
-    countsEl.textContent = `${c.selectedMessages.size} selected (~${formatTokens(tokens)} tokens before)`;
-    compressBtn.disabled = c.selectedMessages.size === 0;
+    onToggle();
   });
   const idxSpan = document.createElement("span");
   idxSpan.className = "lmb-msg-role";
@@ -252,6 +275,13 @@ function buildMessageRow(
   preview.textContent = m.preview || "(empty)";
   const icons = document.createElement("span");
   icons.className = "lmb-msg-icons";
+  if (m.excluded) {
+    const ex = document.createElement("span");
+    ex.title = "Excluded - never hidden, replaced, or summarized";
+    ex.className = "lmb-msg-excluded-badge";
+    ex.textContent = "⊘";
+    icons.appendChild(ex);
+  }
   if (m.hidden) {
     const icon = document.createElement("span");
     icon.title = "Hidden in chat";
@@ -275,7 +305,7 @@ function applyRangeSelection(
   const [from, to] = anchorIdx < targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx];
   for (let i = from; i <= to; i++) {
     const m = visible[i];
-    if (!m || m.covered) continue;
+    if (!m || m.covered || m.excluded) continue;
     if (newState) c.selectedMessages.add(m.id);
     else c.selectedMessages.delete(m.id);
   }
@@ -383,5 +413,98 @@ function renderArcPicker(
     }),
   );
   sec.body.appendChild(actions);
+  host.appendChild(sec.wrap);
+}
+
+function renderContinuity(
+  host: HTMLElement,
+  c: MakeTabContext,
+  ctx: SpindleFrontendContext,
+  send: (msg: FrontendToBackend) => void,
+): void {
+  const state = c.state;
+  const chatId = state.activeChatId!;
+  const hasOwn = state.chapters.some((ch) => !ch.isRoot) || state.arcs.some((a) => !a.isRoot);
+  const hasRoot = state.rootEntryCount > 0;
+  const candidates = state.availableRoots;
+  if (!hasRoot && candidates.length === 0) return;
+
+  const sec = section("Continuity (root)");
+
+  if (hasRoot) {
+    const status = document.createElement("div");
+    status.className = "lmb-help";
+    const originName = state.rootOriginName || state.rootOrigin?.slice(0, 8) || "another chat";
+    status.textContent = `Inherited from ${originName}: ${state.rootEntryCount} memor${state.rootEntryCount === 1 ? "y" : "ies"}, injected before the greeting.`;
+    sec.body.appendChild(status);
+
+    const rootEntries = [...state.arcs.filter((a) => a.isRoot), ...state.chapters.filter((ch) => ch.isRoot)];
+    if (rootEntries.length) {
+      const list = document.createElement("div");
+      list.className = "lmb-multiselect";
+      for (const e of rootEntries) {
+        const rowEl = document.createElement("div");
+        rowEl.className = "lmb-multiselect-row";
+        rowEl.style.opacity = "0.75";
+        const tag = e.meta.tier === 2 ? "ARC" : "CH";
+        rowEl.textContent = `[${tag}] ${e.comment || e.meta.title || e.entryId.slice(0, 6)} (${formatTokens(e.contentTokens)}t)`;
+        list.appendChild(rowEl);
+      }
+      sec.body.appendChild(list);
+    }
+
+    const detachRow = document.createElement("div");
+    detachRow.className = "lmb-actions";
+    detachRow.appendChild(
+      makeButton("Detach root", async () => {
+        const ok = await confirmDelete(ctx, "Detach inherited memories?", "Memoria will remove the inherited memories from this chat. Your own chapters and arcs stay.");
+        if (ok) send({ type: "detach_root", chatId });
+      }, { small: true, danger: true, title: "Remove the inherited root memories from this chat" }),
+    );
+    sec.body.appendChild(detachRow);
+  }
+
+  if (candidates.length > 0) {
+    const help = document.createElement("div");
+    help.className = "lmb-help";
+    help.textContent = hasOwn
+      ? "This chat already has its own memories. Rebuilding deletes them and re-summarizes on top of the chosen root."
+      : "Seed this chat with another chat's memories. They inject as a frozen prologue before the greeting.";
+    sec.body.appendChild(help);
+
+    const row = document.createElement("div");
+    row.className = "lmb-actions";
+    const picker = select({
+      value: localState.rebaseSourceId,
+      ariaLabel: "Source chat to inherit memories from",
+      options: [
+        { value: "", label: "Pick a source chat..." },
+        ...candidates.map((cand) => ({ value: cand.chatId, label: `${cand.chatName} (${cand.entryCount})` })),
+      ],
+      onChange: (v) => { localState.rebaseSourceId = v; },
+    });
+    row.appendChild(picker);
+
+    if (hasOwn) {
+      row.appendChild(
+        makeButton("Rebuild from...", async () => {
+          const sourceChatId = picker.value;
+          if (!sourceChatId) return;
+          const ok = await confirmDelete(ctx, "Rebuild from root?", "Memoria will DELETE this chat's existing chapters and arcs, seed the chosen root, then re-summarize this chat from scratch. This cannot be undone.");
+          if (ok) send({ type: "rebuild_root", chatId, sourceChatId });
+        }, { danger: true, title: "Destructive: wipe this chat's memories and reseed from the chosen root" }),
+      );
+    } else {
+      row.appendChild(
+        makeButton("Rebase", () => {
+          const sourceChatId = picker.value;
+          if (!sourceChatId) return;
+          send({ type: "rebase_root", chatId, sourceChatId });
+        }, { primary: true, title: "Seed this chat with the chosen chat's memories" }),
+      );
+    }
+    sec.body.appendChild(row);
+  }
+
   host.appendChild(sec.wrap);
 }

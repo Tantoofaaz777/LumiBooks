@@ -157,6 +157,15 @@ var STYLES = `
   border-color: var(--lumiverse-danger-050, rgba(224, 112, 112, 0.4));
 }
 .lmb-btn.small { padding: 3px 8px; font-size: 11px; }
+.lmb-btn.active {
+  background: var(--lumiverse-primary, #6b8ff0);
+  border-color: var(--lumiverse-primary, #6b8ff0);
+  color: var(--lumiverse-on-primary, #ffffff);
+}
+.lmb-btn.active:hover:not(:disabled) {
+  background: var(--lumiverse-primary, #6b8ff0);
+  filter: brightness(1.08);
+}
 
 .lmb-entry-list {
   display: flex;
@@ -177,6 +186,7 @@ var STYLES = `
 }
 .lmb-entry.superseded { opacity: 0.45; }
 .lmb-entry.arc { border-left: 3px solid var(--lumiverse-primary, #6b8ff0); }
+.lmb-entry.root { border-left: 3px solid var(--lumiverse-muted, #8a7fb0); opacity: 0.8; }
 .lmb-entry-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .lmb-entry-title {
   flex: 1 1 120px;
@@ -370,6 +380,8 @@ var STYLES = `
 .lmb-message-row:hover { background: var(--lumiverse-fill-hover, rgba(255,255,255,0.05)); }
 .lmb-message-row.selected { background: var(--lumiverse-primary-020, rgba(107, 143, 240, 0.18)); }
 .lmb-message-row.covered { opacity: 0.45; }
+.lmb-message-row.excluded .lmb-msg-preview { text-decoration: line-through; opacity: 0.6; }
+.lmb-msg-excluded-badge { opacity: 0.75; font-weight: 600; }
 .lmb-message-row input { accent-color: var(--lumiverse-primary, #6b8ff0); margin-top: 3px; }
 .lmb-msg-role {
   font-size: 10px;
@@ -1150,7 +1162,7 @@ function renderActions(host, state, send) {
   if (state.backlogChapters > 1) {
     row.append(makeButton(`File all chapters (${state.backlogChapters})`, () => send({ type: "create_all_chapters", chatId }), {
       disabled,
-      title: "Drain the chapter backlog — keeps filing chapters until the lag or window threshold blocks further compression"
+      title: "Drain the chapter backlog - keeps filing chapters until the lag or window threshold blocks further compression"
     }));
   }
   row.append(makeButton("Bind arc", () => send({ type: "create_arc", chatId }), {
@@ -1160,7 +1172,7 @@ function renderActions(host, state, send) {
   if (state.backlogArcs > 1) {
     row.append(makeButton(`File all arcs (${state.backlogArcs})`, () => send({ type: "create_all_arcs", chatId }), {
       disabled,
-      title: "Drain the arc backlog — keeps binding arcs until the configured arc trigger no longer fires"
+      title: "Drain the arc backlog - keeps binding arcs until the configured arc trigger no longer fires"
     }));
   }
   if (!state.bookId) {
@@ -1182,24 +1194,26 @@ function renderEntries(host, state, ctx, send) {
     host.appendChild(sec.wrap);
     return;
   }
-  if (state.chapters.length + state.arcs.length === 0) {
+  const chapters = state.chapters.filter((c) => !c.isRoot);
+  const arcs = state.arcs.filter((a) => !a.isRoot);
+  if (chapters.length + arcs.length === 0) {
     sec.body.appendChild(textNode("Empty shelf for now. Memoria will start filing once the lag fills.", "lmb-empty"));
     host.appendChild(sec.wrap);
     return;
   }
-  if (state.arcs.length) {
-    sec.body.appendChild(buildSubtitle(`Arcs (${state.arcs.length})`));
+  if (arcs.length) {
+    sec.body.appendChild(buildSubtitle(`Arcs (${arcs.length})`));
     const list = document.createElement("ul");
     list.className = "lmb-entry-list";
-    for (const arc of state.arcs)
+    for (const arc of arcs)
       list.appendChild(renderEntryItem(arc, "arc", state, ctx, send));
     sec.body.appendChild(list);
   }
-  if (state.chapters.length) {
-    sec.body.appendChild(buildSubtitle(`Chapters (${state.chapters.length})`));
+  if (chapters.length) {
+    sec.body.appendChild(buildSubtitle(`Chapters (${chapters.length})`));
     const list = document.createElement("ul");
     list.className = "lmb-entry-list";
-    for (const ch of state.chapters)
+    for (const ch of chapters)
       list.appendChild(renderEntryItem(ch, "chapter", state, ctx, send));
     sec.body.appendChild(list);
   }
@@ -1211,9 +1225,9 @@ function buildSubtitle(text) {
   d.textContent = text;
   return d;
 }
-function renderEntryItem(view, kind, state, ctx, send) {
+function renderEntryItem(view, kind, state, ctx, send, readOnly = false) {
   const li = document.createElement("li");
-  li.className = `lmb-entry ${kind}${view.active ? "" : " superseded"}`;
+  li.className = `lmb-entry ${kind}${view.active ? "" : " superseded"}${readOnly ? " root" : ""}`;
   const head = document.createElement("div");
   head.className = "lmb-entry-head";
   const tag = document.createElement("span");
@@ -1223,48 +1237,50 @@ function renderEntryItem(view, kind, state, ctx, send) {
   title.className = "lmb-entry-title";
   title.textContent = view.comment || view.meta.title || `${kind} ${view.entryId.slice(0, 6)}`;
   head.append(tag, title);
-  const chatId = state.activeChatId;
-  const actions = document.createElement("div");
-  actions.className = "lmb-entry-actions";
-  actions.append(makeButton("Edit", () => {
-    openEditModal(ctx, kind === "arc" ? "Edit arc" : "Edit chapter", {
-      comment: view.comment,
-      content: view.content
-    }, (next) => {
-      if (!chatId)
-        return;
-      const patch = {};
-      if (typeof next.comment === "string" && next.comment !== view.comment) {
-        patch.comment = next.comment;
-      }
-      if (typeof next.content === "string" && next.content !== view.content) {
-        patch.content = next.content;
-      }
-      if (Object.keys(patch).length === 0)
-        return;
-      send({ type: "update_entry", chatId, entryId: view.entryId, patch });
-    });
-  }, { small: true, title: "Edit this entry's label and content" }), makeButton("Regenerate", async () => {
-    const ok = await confirmDelete(ctx, "Regenerate?", "Memoria will delete this entry and resummarize the same range. The old summary text will be lost.");
-    if (!ok || !chatId)
-      return;
-    send({ type: "regenerate_entry", chatId, entryId: view.entryId });
-  }, { small: true, title: "Delete and resummarize the same range" }), makeButton("Release", async () => {
-    const ok = await confirmDelete(ctx, "Release to lorebook?", "Memoria will hand this entry to your regular lorebook (prefixed with [orphaned]) and stop managing it. Those messages will become uncovered.");
-    if (!ok || !chatId)
-      return;
-    send({ type: "release_entry", chatId, entryId: view.entryId });
-  }, { small: true, title: "Strip the LumiBooks marker so the entry becomes a regular lorebook entry" }), makeButton("Delete", async () => {
-    const ok = await confirmDelete(ctx, "Delete?", "Memoria will let those messages back into the prompt.");
-    if (!ok || !chatId)
-      return;
-    send({ type: "delete_entry", chatId, entryId: view.entryId });
-  }, { small: true, danger: true }));
-  head.appendChild(actions);
   li.appendChild(head);
+  if (!readOnly) {
+    const chatId = state.activeChatId;
+    const actions = document.createElement("div");
+    actions.className = "lmb-entry-actions";
+    actions.append(makeButton("Edit", () => {
+      openEditModal(ctx, kind === "arc" ? "Edit arc" : "Edit chapter", {
+        comment: view.comment,
+        content: view.content
+      }, (next) => {
+        if (!chatId)
+          return;
+        const patch = {};
+        if (typeof next.comment === "string" && next.comment !== view.comment) {
+          patch.comment = next.comment;
+        }
+        if (typeof next.content === "string" && next.content !== view.content) {
+          patch.content = next.content;
+        }
+        if (Object.keys(patch).length === 0)
+          return;
+        send({ type: "update_entry", chatId, entryId: view.entryId, patch });
+      });
+    }, { small: true, title: "Edit this entry's label and content" }), makeButton("Regenerate", async () => {
+      const ok = await confirmDelete(ctx, "Regenerate?", "Memoria will delete this entry and resummarize the same range. The old summary text will be lost.");
+      if (!ok || !chatId)
+        return;
+      send({ type: "regenerate_entry", chatId, entryId: view.entryId });
+    }, { small: true, title: "Delete and resummarize the same range" }), makeButton("Release", async () => {
+      const ok = await confirmDelete(ctx, "Release to lorebook?", "Memoria will hand this entry to your regular lorebook (prefixed with [orphaned]) and stop managing it. Those messages will become uncovered.");
+      if (!ok || !chatId)
+        return;
+      send({ type: "release_entry", chatId, entryId: view.entryId });
+    }, { small: true, title: "Strip the LumiBooks marker so the entry becomes a regular lorebook entry" }), makeButton("Delete", async () => {
+      const ok = await confirmDelete(ctx, "Delete?", "Memoria will let those messages back into the prompt.");
+      if (!ok || !chatId)
+        return;
+      send({ type: "delete_entry", chatId, entryId: view.entryId });
+    }, { small: true, danger: true }));
+    head.appendChild(actions);
+  }
   const meta = document.createElement("div");
   meta.className = "lmb-entry-meta";
-  const range = view.meta.firstMsgIdx !== undefined && view.meta.lastMsgIdx !== undefined ? `msgs ${view.meta.firstMsgIdx + 1}-${view.meta.lastMsgIdx + 1}` : `${view.meta.msgIds.length} msgs`;
+  const range = view.isRoot ? "inherited" : view.meta.firstMsgIdx !== undefined && view.meta.lastMsgIdx !== undefined ? `msgs ${view.meta.firstMsgIdx + 1}-${view.meta.lastMsgIdx + 1}` : `${view.meta.msgIds.length} msgs`;
   const before = view.sourceTokensInput || 0;
   const tokenStr = before > 0 ? `${formatTokens(before)}→${formatTokens(view.contentTokens)} tokens` : `${formatTokens(view.contentTokens)} tokens`;
   meta.append(span(range), span(tokenStr), span(view.meta.model || ""));
@@ -1301,15 +1317,17 @@ var localState = {
   messageQuery: "",
   lastChatId: null,
   anchorMessageId: null,
-  suppressNextClick: false
+  suppressNextClick: false,
+  rebaseSourceId: ""
 };
 var LONG_PRESS_MS = 500;
 var LONG_PRESS_MOVE_PX = 10;
-function renderMakeTab(host, state, send) {
+function renderMakeTab(host, state, ctx, send) {
   if (localState.lastChatId !== state.activeChatId) {
     localState.selectedMessages.clear();
     localState.selectedChapters.clear();
     localState.anchorMessageId = null;
+    localState.rebaseSourceId = "";
     localState.lastChatId = state.activeChatId;
   }
   const draw = () => {
@@ -1329,6 +1347,7 @@ function renderMakeTab(host, state, send) {
       }
       renderChapterPicker(host, c, send);
       renderArcPicker(host, c, send);
+      renderContinuity(host, c, ctx, send);
     });
   };
   draw();
@@ -1337,7 +1356,7 @@ function renderChapterPicker(host, c, send) {
   const sec = section("Pick messages for a chapter");
   const help = document.createElement("div");
   help.className = "lmb-help";
-  help.textContent = "Covered messages are already filed and are greyed. Shift+click (or long-press on touch) to select ranges.";
+  help.textContent = "Covered messages are already filed and are greyed. Shift+click (or long-press on touch) to select ranges. Use Exclude to pin a message so it's never hidden, replaced, or summarized - it splits compression around it.";
   sec.body.appendChild(help);
   const filterRow = document.createElement("div");
   filterRow.className = "lmb-message-filter-row";
@@ -1360,20 +1379,27 @@ function renderChapterPicker(host, c, send) {
       const next = v.toLowerCase();
       localState.messageQuery = next;
       c.messageQuery = next;
-      listEl.replaceChildren(...buildRows(c, send, counts, compressBtn));
-      compressBtn.disabled = c.selectedMessages.size === 0;
+      listEl.replaceChildren(...buildRows(c, syncControls));
+      syncControls();
     }
   });
   filterRow.append(filterSel, query);
   sec.body.appendChild(filterRow);
   const counts = document.createElement("div");
   counts.className = "lmb-help";
-  const updateCounts = () => {
-    const tokens = sumSelectedTokens(c);
-    counts.textContent = `${c.selectedMessages.size} selected (~${formatTokens(tokens)} tokens before)`;
-  };
   const chatId = c.state.activeChatId;
-  const compressBtn = makeButton("Compress selected", () => {
+  const messageById = new Map(c.state.messages.map((m) => [m.id, m]));
+  const allSelectedExcluded = () => {
+    if (c.selectedMessages.size === 0)
+      return false;
+    for (const id of c.selectedMessages) {
+      const m = messageById.get(id);
+      if (!m || !m.excluded)
+        return false;
+    }
+    return true;
+  };
+  const compressBtn = makeButton("Compress", () => {
     const ids = Array.from(c.selectedMessages);
     if (ids.length === 0)
       return;
@@ -1383,21 +1409,35 @@ function renderChapterPicker(host, c, send) {
     localState.anchorMessageId = null;
     c.rerender();
   }, { primary: true, disabled: c.selectedMessages.size === 0 });
+  const excludeBtn = makeButton("Exclude", () => {
+    const ids = Array.from(c.selectedMessages);
+    if (ids.length === 0)
+      return;
+    send({ type: "set_message_excluded", chatId, messageIds: ids, excluded: !allSelectedExcluded() });
+  }, { title: "Toggle exclusion for the selected messages. Excluded messages are never hidden, replaced, or summarized, and they split compression. Click again to allow compression." });
+  const syncControls = () => {
+    const tokens = sumSelectedTokens(c);
+    counts.textContent = `${c.selectedMessages.size} selected (~${formatTokens(tokens)} tokens before)`;
+    const empty = c.selectedMessages.size === 0;
+    compressBtn.disabled = empty;
+    excludeBtn.disabled = empty;
+    excludeBtn.classList.toggle("active", allSelectedExcluded());
+  };
   const listEl = document.createElement("div");
   listEl.className = "lmb-message-list";
-  listEl.replaceChildren(...buildRows(c, send, counts, compressBtn));
+  listEl.replaceChildren(...buildRows(c, syncControls));
   sec.body.appendChild(listEl);
-  updateCounts();
+  syncControls();
   sec.body.appendChild(counts);
   const actions = document.createElement("div");
   actions.className = "lmb-actions";
-  actions.append(compressBtn, makeButton("Select uncompressed tail", () => {
-    const visible = filterMessages(c).filter((m) => !m.covered);
+  actions.append(compressBtn, makeButton("Pick uncompressed", () => {
+    const visible = filterMessages(c).filter((m) => !m.covered && !m.excluded);
     const next = new Set(visible.map((m) => m.id));
     localState.selectedMessages = next;
     c.selectedMessages = next;
     c.rerender();
-  }), makeButton("Clear", () => {
+  }), excludeBtn, makeButton("Clear", () => {
     localState.selectedMessages.clear();
     c.selectedMessages.clear();
     localState.anchorMessageId = null;
@@ -1406,21 +1446,21 @@ function renderChapterPicker(host, c, send) {
   sec.body.appendChild(actions);
   host.appendChild(sec.wrap);
 }
-function buildRows(c, _send, countsEl, compressBtn) {
+function buildRows(c, onToggle) {
   const visible = filterMessages(c);
   if (visible.length === 0) {
     return [textNode("No messages match", "lmb-empty")];
   }
-  return visible.map((m) => buildMessageRow(m, c, countsEl, compressBtn));
+  return visible.map((m) => buildMessageRow(m, c, onToggle));
 }
-function buildMessageRow(m, c, countsEl, compressBtn) {
+function buildMessageRow(m, c, onToggle) {
   const row = document.createElement("label");
-  row.className = `lmb-message-row${m.covered ? " covered" : ""}${c.selectedMessages.has(m.id) ? " selected" : ""}`;
+  row.className = `lmb-message-row${m.covered ? " covered" : ""}${m.excluded ? " excluded" : ""}${c.selectedMessages.has(m.id) ? " selected" : ""}`;
   row.title = "Shift+click (or long-press on touch) to select a range";
   const cb = document.createElement("input");
   cb.type = "checkbox";
   cb.checked = c.selectedMessages.has(m.id);
-  cb.disabled = m.covered;
+  cb.disabled = m.covered && !m.excluded;
   const triggerRangeFromAnchor = () => {
     const anchorId = localState.anchorMessageId;
     if (!anchorId || anchorId === m.id)
@@ -1492,9 +1532,7 @@ function buildMessageRow(m, c, countsEl, compressBtn) {
       c.selectedMessages.delete(m.id);
     localState.anchorMessageId = m.id;
     row.classList.toggle("selected", cb.checked);
-    const tokens = sumSelectedTokens(c);
-    countsEl.textContent = `${c.selectedMessages.size} selected (~${formatTokens(tokens)} tokens before)`;
-    compressBtn.disabled = c.selectedMessages.size === 0;
+    onToggle();
   });
   const idxSpan = document.createElement("span");
   idxSpan.className = "lmb-msg-role";
@@ -1508,6 +1546,13 @@ function buildMessageRow(m, c, countsEl, compressBtn) {
   preview.textContent = m.preview || "(empty)";
   const icons = document.createElement("span");
   icons.className = "lmb-msg-icons";
+  if (m.excluded) {
+    const ex = document.createElement("span");
+    ex.title = "Excluded - never hidden, replaced, or summarized";
+    ex.className = "lmb-msg-excluded-badge";
+    ex.textContent = "⊘";
+    icons.appendChild(ex);
+  }
   if (m.hidden) {
     const icon = document.createElement("span");
     icon.title = "Hidden in chat";
@@ -1526,7 +1571,7 @@ function applyRangeSelection(c, anchorId, targetId, newState) {
   const [from, to] = anchorIdx < targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx];
   for (let i = from;i <= to; i++) {
     const m = visible[i];
-    if (!m || m.covered)
+    if (!m || m.covered || m.excluded)
       continue;
     if (newState)
       c.selectedMessages.add(m.id);
@@ -1626,6 +1671,84 @@ function renderArcPicker(host, c, send) {
     c.rerender();
   }));
   sec.body.appendChild(actions);
+  host.appendChild(sec.wrap);
+}
+function renderContinuity(host, c, ctx, send) {
+  const state = c.state;
+  const chatId = state.activeChatId;
+  const hasOwn = state.chapters.some((ch) => !ch.isRoot) || state.arcs.some((a) => !a.isRoot);
+  const hasRoot = state.rootEntryCount > 0;
+  const candidates = state.availableRoots;
+  if (!hasRoot && candidates.length === 0)
+    return;
+  const sec = section("Continuity (root)");
+  if (hasRoot) {
+    const status = document.createElement("div");
+    status.className = "lmb-help";
+    const originName = state.rootOriginName || state.rootOrigin?.slice(0, 8) || "another chat";
+    status.textContent = `Inherited from ${originName}: ${state.rootEntryCount} memor${state.rootEntryCount === 1 ? "y" : "ies"}, injected before the greeting.`;
+    sec.body.appendChild(status);
+    const rootEntries = [...state.arcs.filter((a) => a.isRoot), ...state.chapters.filter((ch) => ch.isRoot)];
+    if (rootEntries.length) {
+      const list = document.createElement("div");
+      list.className = "lmb-multiselect";
+      for (const e of rootEntries) {
+        const rowEl = document.createElement("div");
+        rowEl.className = "lmb-multiselect-row";
+        rowEl.style.opacity = "0.75";
+        const tag = e.meta.tier === 2 ? "ARC" : "CH";
+        rowEl.textContent = `[${tag}] ${e.comment || e.meta.title || e.entryId.slice(0, 6)} (${formatTokens(e.contentTokens)}t)`;
+        list.appendChild(rowEl);
+      }
+      sec.body.appendChild(list);
+    }
+    const detachRow = document.createElement("div");
+    detachRow.className = "lmb-actions";
+    detachRow.appendChild(makeButton("Detach root", async () => {
+      const ok = await confirmDelete(ctx, "Detach inherited memories?", "Memoria will remove the inherited memories from this chat. Your own chapters and arcs stay.");
+      if (ok)
+        send({ type: "detach_root", chatId });
+    }, { small: true, danger: true, title: "Remove the inherited root memories from this chat" }));
+    sec.body.appendChild(detachRow);
+  }
+  if (candidates.length > 0) {
+    const help = document.createElement("div");
+    help.className = "lmb-help";
+    help.textContent = hasOwn ? "This chat already has its own memories. Rebuilding deletes them and re-summarizes on top of the chosen root." : "Seed this chat with another chat's memories. They inject as a frozen prologue before the greeting.";
+    sec.body.appendChild(help);
+    const row = document.createElement("div");
+    row.className = "lmb-actions";
+    const picker = select({
+      value: localState.rebaseSourceId,
+      ariaLabel: "Source chat to inherit memories from",
+      options: [
+        { value: "", label: "Pick a source chat..." },
+        ...candidates.map((cand) => ({ value: cand.chatId, label: `${cand.chatName} (${cand.entryCount})` }))
+      ],
+      onChange: (v) => {
+        localState.rebaseSourceId = v;
+      }
+    });
+    row.appendChild(picker);
+    if (hasOwn) {
+      row.appendChild(makeButton("Rebuild from...", async () => {
+        const sourceChatId = picker.value;
+        if (!sourceChatId)
+          return;
+        const ok = await confirmDelete(ctx, "Rebuild from root?", "Memoria will DELETE this chat's existing chapters and arcs, seed the chosen root, then re-summarize this chat from scratch. This cannot be undone.");
+        if (ok)
+          send({ type: "rebuild_root", chatId, sourceChatId });
+      }, { danger: true, title: "Destructive: wipe this chat's memories and reseed from the chosen root" }));
+    } else {
+      row.appendChild(makeButton("Rebase", () => {
+        const sourceChatId = picker.value;
+        if (!sourceChatId)
+          return;
+        send({ type: "rebase_root", chatId, sourceChatId });
+      }, { primary: true, title: "Seed this chat with the chosen chat's memories" }));
+    }
+    sec.body.appendChild(row);
+  }
   host.appendChild(sec.wrap);
 }
 
@@ -1989,7 +2112,7 @@ function renderSamplers(host, state, profile, send) {
   const sec = section("Samplers");
   const help = document.createElement("div");
   help.className = "lmb-help";
-  help.textContent = "LumiBooks ships with its own sampler defaults tuned for summarization (low temperature, generous output budget). Empty fields use those defaults — placeholders show what will be sent. Temperature, max output, and max input are always sent on the wire; top_p / top_k / penalties are only sent when you set them.";
+  help.textContent = "LumiBooks ships with its own sampler defaults tuned for summarization (low temperature, generous output budget). Empty fields use those defaults - placeholders show what will be sent. Temperature, max output, and max input are always sent on the wire; top_p / top_k / penalties are only sent when you set them.";
   sec.body.appendChild(help);
   const saveSampler = (key) => (v) => {
     const patch = { [key]: v };
@@ -2621,7 +2744,7 @@ function setup(ctx) {
       if (activeTab === "books")
         renderBooksTab(content, lastState, ctx, send);
       else if (activeTab === "make")
-        renderMakeTab(content, lastState, send);
+        renderMakeTab(content, lastState, ctx, send);
       else if (activeTab === "profile")
         renderProfileTab(content, lastState, ctx, send);
       else if (activeTab === "prompts")

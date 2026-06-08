@@ -92,7 +92,7 @@ export function setup(ctx: SpindleFrontendContext): () => void {
     }
     const renderInner = () => {
       if (activeTab === "books") renderBooksTab(content, lastState!, ctx, send);
-      else if (activeTab === "make") renderMakeTab(content, lastState!, send);
+      else if (activeTab === "make") renderMakeTab(content, lastState!, ctx, send);
       else if (activeTab === "profile") renderProfileTab(content, lastState!, ctx, send);
       else if (activeTab === "prompts") renderPromptsTab(content, lastState!, ctx, send);
       else renderAboutTab(content, lastState!, send);

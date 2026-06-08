@@ -91,7 +91,7 @@ export async function buildInjection(
     if (hasVisibleMessage) {
       error(
         `injection: no "__isChatHistory" messages on ${llmMessages.length} assembled message(s) despite ` +
-          `visible chat messages. Lumiverse's chat-history contract likely changed — skipping injection.`,
+          `visible chat messages. Lumiverse's chat-history contract likely changed - skipping injection.`,
       );
     }
     return null;
@@ -103,18 +103,20 @@ export async function buildInjection(
     if (id === undefined) {
       error(
         `injection: a "__isChatHistory" message is missing sourceMessageId. Host identity contract ` +
-          `looks inconsistent — skipping injection.`,
+          `looks inconsistent - skipping injection.`,
       );
       return null;
     }
     const idx = msgIdToIdx.get(id);
     if (idx === undefined) {
       error(
-        `injection: sourceMessageId "${id}" is not in the chat — skipping injection.`,
+        `injection: sourceMessageId "${id}" is not in the chat - skipping injection.`,
       );
       return null;
     }
-    plan.push({ idx, covered: coverage.coveredBy.has(id) });
+    const md = (chatMessages[idx] as { metadata?: Record<string, unknown> } | undefined)?.metadata;
+    const excluded = !!(md && md["lmb_excluded"] === true);
+    plan.push({ idx, covered: excluded ? false : coverage.coveredBy.has(id) });
   }
 
   const out: LlmMessageDTO[] = [];
@@ -132,8 +134,8 @@ export async function buildInjection(
     if (block.length) out.splice(index, 0, ...block);
   };
 
-  let hp = 0; // pointer into `plan`, advanced per chat-history message
-  let histEnd = -1; // out index just past the last chat-history message
+  let hp = 0;
+  let histEnd = -1;
   for (const lm of llmMessages) {
     if (!isAssembledHistory(lm)) {
       out.push(lm);

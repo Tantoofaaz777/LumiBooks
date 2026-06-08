@@ -2,10 +2,17 @@ declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 import type { WorldBookDTO, WorldBookEntryDTO } from "lumiverse-spindle-types";
 import type { LMBEntryMeta } from "../shared";
-import { EXTENSION_KEY, bookNameFor, normalizeEntryMeta } from "../shared";
+import { EXTENSION_KEY, WORLD_BOOK_NAME_PREFIX, bookNameFor, normalizeEntryMeta } from "../shared";
+import { describeError, error, warn } from "./runtime";
 
 const PAGE_LIMIT = 200;
 const BOOK_INDEX_CACHE_TTL_MS = 4000;
+
+type BookAnomalyTone = "warn" | "error";
+let bookAnomalyCb: ((userId: string, tone: BookAnomalyTone, text: string) => void) | null = null;
+export function registerBookAnomalyCallback(cb: (userId: string, tone: BookAnomalyTone, text: string) => void): void {
+  bookAnomalyCb = cb;
+}
 
 interface ChatBookCacheEntry {
   bookId: string;
@@ -112,6 +119,52 @@ async function doEnsureBookForChat(chatId: string, userId: string): Promise<Worl
 
   const chat = await spindle.chats.get(chatId, userId);
   if (!chat) throw new Error(`Chat ${chatId} not found for user`);
+  const claim = chat.metadata && typeof chat.metadata === "object"
+    ? (chat.metadata as Record<string, unknown>)["lumibooks_book_id"]
+    : undefined;
+
+  const recovery = await recoverBookForChat(chatId, userId).catch((err) => {
+    warn(`book recovery scan failed for ${chatId.slice(0, 8)}: ${describeError(err)}`);
+    return null;
+  });
+  if (recovery) {
+    const existing = await spindle.world_books.get(recovery.bookId, userId).catch(() => null);
+    if (existing) {
+      const meta = (existing.metadata && typeof existing.metadata === "object" ? existing.metadata : {}) as Record<string, unknown>;
+      if (meta["lumibooks_chat_id"] !== chatId) {
+        await spindle.world_books.update(existing.id, { metadata: { ...meta, lumibooks_chat_id: chatId } }, userId).catch((err) => {
+          warn(`book recovery: failed to re-tag ${existing.id}: ${describeError(err)}`);
+        });
+      }
+      await bindBookToChat(chatId, existing.id, userId).catch(() => {});
+      setBookCache(cacheKey(userId, chatId), { bookId: existing.id, expiresAt: Date.now() + BOOK_INDEX_CACHE_TTL_MS });
+      error(
+        `book recovery: re-linked book ${existing.id} for chat ${chatId.slice(0, 8)} ` +
+          `(${recovery.count} LumiBooks entries; normal lookup MISSED it; chat claim=${typeof claim === "string" ? claim : "none"}; ` +
+          `${recovery.candidates} candidate book(s); userId=${userId.slice(0, 6)})`,
+      );
+      bookAnomalyCb?.(
+        userId,
+        "warn",
+        recovery.candidates > 1
+          ? `Memoria re-linked this chat's notebook, but found ${recovery.candidates} notebooks for it — you may have duplicates to consolidate. If this recurs, please report it.`
+          : `Memoria re-linked this chat's existing notebook (its link had been lost). If this recurs, please report it.`,
+      );
+      return existing;
+    }
+  }
+
+  if (typeof claim === "string" && claim.trim()) {
+    error(
+      `book mismatch: chat ${chatId.slice(0, 8)} claims book ${claim} but it could not be resolved OR recovered; ` +
+        `creating a NEW book. userId=${userId.slice(0, 6)}`,
+    );
+    bookAnomalyCb?.(
+      userId,
+      "error",
+      "Memoria expected an existing notebook for this chat but couldn't find it, so it started a new one. Older chapters may be in a separate notebook - please report this.",
+    );
+  }
 
   const book = await spindle.world_books.create(
     {
@@ -129,6 +182,42 @@ async function doEnsureBookForChat(chatId: string, userId: string): Promise<Worl
 
   setBookCache(cacheKey(userId, chatId), { bookId: book.id, expiresAt: Date.now() + BOOK_INDEX_CACHE_TTL_MS });
   return book;
+}
+
+/**
+ * Last-resort book finder for when the normal metadata lookup fails: scan
+ * LumiBooks-looking books for an entry whose meta.chatId === chatId. Entries
+ * survive even if a book's own lumibooks_chat_id metadata gets stripped or the
+ * book is unbound, so this recovers a "lost" book instead of creating a duplicate.
+ */
+async function recoverBookForChat(
+  chatId: string,
+  userId: string,
+): Promise<{ bookId: string; count: number; candidates: number } | null> {
+  const books = await listAllBooks(userId);
+  const matches: { id: string; count: number }[] = [];
+  for (const book of books) {
+    const meta = book.metadata as Record<string, unknown> | undefined;
+    const bookChatId = meta && typeof meta["lumibooks_chat_id"] === "string" ? (meta["lumibooks_chat_id"] as string) : null;
+    // A book correctly tagged for another chat can't be this chat's lost book.
+    // (One tagged for this chat would already have been found; re-checking is harmless.)
+    if (bookChatId && bookChatId !== chatId) continue;
+    const looksLikeLmb =
+      (book.name || "").startsWith(WORLD_BOOK_NAME_PREFIX)
+      || !!(meta && (meta["lumibooks_chat_id"] || meta["lumibooks_created_at"] || meta["lumibooks_forked_from"]));
+    if (!looksLikeLmb) continue;
+    const entries = await listAllEntries(book.id, userId).catch(() => [] as WorldBookEntryDTO[]);
+    let count = 0;
+    for (const entry of entries) {
+      const ext = (entry.extensions || {}) as Record<string, unknown>;
+      const m = normalizeEntryMeta(ext[EXTENSION_KEY]);
+      if (m && m.chatId === chatId) count++;
+    }
+    if (count > 0) matches.push({ id: book.id, count });
+  }
+  if (matches.length === 0) return null;
+  matches.sort((a, b) => b.count - a.count);
+  return { bookId: matches[0]!.id, count: matches[0]!.count, candidates: matches.length };
 }
 
 async function bindBookToChat(chatId: string, bookId: string, userId: string): Promise<void> {
@@ -295,4 +384,41 @@ export function invalidateAllBookCacheEntriesForBook(userId: string, bookId: str
     if (value.bookId === bookId) toDelete.push(key);
   }
   for (const k of toDelete) chatBookCache.delete(k);
+}
+
+export interface RootCandidate {
+  chatId: string;
+  chatName: string;
+  bookId: string;
+  entryCount: number;
+}
+
+const ROOT_CANDIDATES_TTL_MS = 8000;
+const rootCandidatesCache = new Map<string, { at: number; data: RootCandidate[] }>();
+
+export function invalidateRootCandidates(userId: string): void {
+  rootCandidatesCache.delete(userId);
+}
+
+export async function listRootCandidates(userId: string): Promise<RootCandidate[]> {
+  const cached = rootCandidatesCache.get(userId);
+  if (cached && Date.now() - cached.at < ROOT_CANDIDATES_TTL_MS) return cached.data;
+  const books = await listAllBooks(userId).catch(() => [] as WorldBookDTO[]);
+  const out: RootCandidate[] = [];
+  for (const book of books) {
+    const meta = book.metadata as Record<string, unknown> | undefined;
+    const chatId = meta && typeof meta["lumibooks_chat_id"] === "string" ? (meta["lumibooks_chat_id"] as string) : null;
+    if (!chatId) continue;
+    const entries = await listAllEntries(book.id, userId).catch(() => [] as WorldBookEntryDTO[]);
+    let entryCount = 0;
+    for (const e of entries) {
+      const ext = (e.extensions || {}) as Record<string, unknown>;
+      if (ext[EXTENSION_KEY] && !e.disabled) entryCount++;
+    }
+    if (entryCount === 0) continue;
+    const chat = await spindle.chats.get(chatId, userId).catch(() => null);
+    out.push({ chatId, chatName: chat?.name?.trim() || chatId.slice(0, 8), bookId: book.id, entryCount });
+  }
+  rootCandidatesCache.set(userId, { at: Date.now(), data: out });
+  return out;
 }

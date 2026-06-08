@@ -31,6 +31,7 @@ import {
   findChatIdForBook,
   findCachedChatIdForBook,
   invalidateAllBookCacheEntriesForBook,
+  registerBookAnomalyCallback,
 } from "./world-book";
 import { buildInjection } from "./injection";
 import {
@@ -53,6 +54,7 @@ import {
   registerPipelineCallbacks,
 } from "./pipeline";
 import { buildCoverage, resyncVisibility, syncHiddenForCoveredMessages, unhideCoveredMessages } from "./coverage";
+import { rebaseRoot, rebuildRoot, detachRoot } from "./rebase";
 import { invalidateConnectionsCache } from "./summarizer";
 import { invalidateRegexCache } from "./regex";
 import { registerHookEndpoints } from "./hooks";
@@ -257,7 +259,7 @@ async function collectActiveChapterIds(chatId: string, userId: string): Promise<
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
   return coverage.activeEntries
-    .filter((e) => e.meta.tier === 1)
+    .filter((e) => e.meta.tier === 1 && !e.meta.isRoot)
     .map((e) => e.raw.id);
 }
 
@@ -425,7 +427,23 @@ spindle.onFrontendMessage(async (raw, userId) => {
           send({ type: "toast", tone: "warn", text: "Memoria is already filing a chapter" }, userId);
           break;
         }
-        await createChapterFromRange(msg.chatId, msg.messageIds, profile, cur, userId);
+        const rangeMessages = await spindle.chat.getMessages(msg.chatId);
+        const selectedIds = new Set(msg.messageIds);
+        const positions = rangeMessages
+          .map((m, i) => ({ m, i }))
+          .filter(({ m }) => selectedIds.has(m.id)
+            && !((m as { metadata?: Record<string, unknown> }).metadata?.["lmb_excluded"] === true))
+          .map(({ i }) => i);
+        const runs: string[][] = [];
+        let prev = -2;
+        for (const pos of positions) {
+          if (pos === prev + 1) runs[runs.length - 1]!.push(rangeMessages[pos]!.id);
+          else runs.push([rangeMessages[pos]!.id]);
+          prev = pos;
+        }
+        for (const run of runs) {
+          await createChapterFromRange(msg.chatId, run, profile, cur, userId);
+        }
         await maybeRunArcCheck(msg.chatId, profile, cur, userId);
         await pushState(userId, msg.chatId);
         break;
@@ -572,6 +590,10 @@ spindle.onFrontendMessage(async (raw, userId) => {
           send({ type: "toast", tone: "warn", text: `Memoria is already busy with a ${busyKind}` }, userId);
           break;
         }
+        if (entry.meta.isRoot && entry.meta.tier === 1) {
+          send({ type: "toast", tone: "warn", text: "Memoria can't regenerate an inherited chapter - its original messages live in another chat" }, userId);
+          break;
+        }
         const isArc = entry.meta.tier === 2;
         const msgIds = entry.meta.msgIds.slice();
         const chapterIds = Array.isArray(entry.meta.sourceChapterEntryIds)
@@ -601,11 +623,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
             break;
           }
         }
-        // Generate a replacement. The commit step atomically deletes the original
-        // once the new entry is filed (immediate mode), or — when "Preview before
-        // saving" is on — stages a preview tagged with replacesEntryId and leaves
-        // the original active until the user accepts. On failure, the original is
-        // untouched. So there is nothing to clean up here.
         if (isArc) {
           await createArcFromChapters(msg.chatId, chapterIds, profile, cur, userId, { replacesEntryId: msg.entryId });
         } else {
@@ -779,6 +796,117 @@ spindle.onFrontendMessage(async (raw, userId) => {
         break;
       }
 
+      case "rebase_root": {
+        if (getBusy(userId).some((b) => b.chatId === msg.chatId)) {
+          send({ type: "toast", tone: "warn", text: "Memoria is busy - let her finish before rebasing" }, userId);
+          break;
+        }
+        const result = await rebaseRoot(msg.chatId, msg.sourceChatId, userId);
+        if (!result.ok) {
+          const text = result.reason === "has_own"
+            ? "This chat already has its own memories - use Rebuild to reseed (it will rewrite them)."
+            : result.reason === "empty_source"
+              ? "That chat has no memories to inherit."
+              : result.reason === "busy"
+                ? "Memoria is already rebasing this chat - hold on."
+                : "Memoria can't rebase a chat onto itself.";
+          send({ type: "toast", tone: "warn", text }, userId);
+        } else {
+          send({ type: "toast", tone: "success", text: `Memoria seeded ${result.count} inherited memor${result.count === 1 ? "y" : "ies"} before the greeting` }, userId);
+        }
+        await pushState(userId, msg.chatId);
+        break;
+      }
+
+      case "rebuild_root": {
+        if (getBusy(userId).some((b) => b.chatId === msg.chatId)) {
+          send({ type: "toast", tone: "warn", text: "Memoria is busy - let her finish before rebuilding" }, userId);
+          break;
+        }
+        const result = await rebuildRoot(msg.chatId, msg.sourceChatId, userId);
+        if (!result.ok) {
+          const text = result.reason === "empty_source"
+            ? "That chat has no memories to inherit."
+            : result.reason === "busy"
+              ? "Memoria is already rebuilding this chat - hold on."
+              : "Memoria can't rebuild a chat onto itself.";
+          send({ type: "toast", tone: "warn", text }, userId);
+          await pushState(userId, msg.chatId);
+          break;
+        }
+        send({ type: "toast", tone: "success", text: `Memoria rebuilt onto ${result.count} inherited memor${result.count === 1 ? "y" : "ies"}; re-summarizing this chat…` }, userId);
+        await pushState(userId, msg.chatId);
+        const cur = await loadSettings(userId);
+        const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
+        if (profile) {
+          await drainChapterBacklog(msg.chatId, profile, cur, userId).catch((err) => warn(`rebuild re-summarize failed: ${describeError(err)}`));
+          await maybeRunArcCheck(msg.chatId, profile, cur, userId).catch(() => {});
+          await resyncVisibility(msg.chatId, userId, profile.hideCoveredMessages).catch((err) => warn(`rebuild visibility resync failed: ${describeError(err)}`));
+          await pushState(userId, msg.chatId);
+        }
+        break;
+      }
+
+      case "set_message_excluded": {
+        const ids = Array.isArray(msg.messageIds) ? msg.messageIds.filter((x): x is string => typeof x === "string") : [];
+        if (ids.length === 0) break;
+        const messages = await spindle.chat.getMessages(msg.chatId);
+        const byId = new Map(messages.map((m) => [m.id, m] as const));
+        const coveredNow = msg.excluded ? (await buildCoverage(msg.chatId, userId)).coveredBy : null;
+        const hideToUnhide: string[] = [];
+        for (const id of ids) {
+          const m = byId.get(id);
+          if (!m) continue;
+          const cur = (m as { metadata?: Record<string, unknown> }).metadata;
+          const next: Record<string, unknown> = cur && typeof cur === "object" ? { ...cur } : {};
+          if (msg.excluded) {
+            next["lmb_excluded"] = true;
+            const hidden = !!(m.extra && (m.extra as Record<string, unknown>).hidden);
+            if (hidden && coveredNow?.has(id)) hideToUnhide.push(id);
+          } else {
+            delete next["lmb_excluded"];
+          }
+          await spindle.chat.updateMessage(msg.chatId, id, { metadata: next, skipChunkRebuild: true }).catch((err) => {
+            warn(`set_message_excluded: updateMessage failed for ${id}: ${describeError(err)}`);
+          });
+        }
+        if (hideToUnhide.length > 0) {
+          await unhideCoveredMessages(msg.chatId, hideToUnhide, userId).catch(() => {});
+        }
+        if (!msg.excluded) {
+          const cur = await loadSettings(userId);
+          const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
+          if (profile?.hideCoveredMessages) {
+            const fresh = await spindle.chat.getMessages(msg.chatId);
+            const coverage = await buildCoverage(msg.chatId, userId);
+            const idSet = new Set(ids);
+            const reincluded = fresh.filter((m) => idSet.has(m.id) && coverage.coveredBy.has(m.id));
+            if (reincluded.length > 0) {
+              await syncHiddenForCoveredMessages(msg.chatId, reincluded, coverage, userId, true).catch(() => {});
+            }
+          }
+        }
+        send({
+          type: "toast",
+          tone: "info",
+          text: msg.excluded
+            ? `Memoria will leave ${ids.length} message${ids.length === 1 ? "" : "s"} untouched`
+            : `Memoria will compress ${ids.length} message${ids.length === 1 ? "" : "s"} again`,
+        }, userId);
+        await pushState(userId, msg.chatId);
+        break;
+      }
+
+      case "detach_root": {
+        const removed = await detachRoot(msg.chatId, userId);
+        const text = removed === 0
+          ? "This chat has no inherited memories to detach"
+          : `Memoria detached ${removed} inherited memor${removed === 1 ? "y" : "ies"}`;
+        send({ type: "toast", tone: "info", text }, userId);
+        await pushState(userId, msg.chatId);
+        break;
+      }
+
       default:
         debug(userId, `unknown frontend msg type`, (msg as { type?: string }).type);
     }
@@ -787,6 +915,11 @@ spindle.onFrontendMessage(async (raw, userId) => {
     error(`frontend handler failed: ${description}`);
     send({ type: "error", text: description }, userId);
   }
+});
+
+registerBookAnomalyCallback((userId, tone, text) => {
+  hostToast(userId, tone, text);
+  send({ type: "toast", tone, text }, userId);
 });
 
 registerHookEndpoints();
