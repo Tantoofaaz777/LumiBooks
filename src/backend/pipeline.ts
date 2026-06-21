@@ -462,7 +462,13 @@ async function commitChapter(
     }
   }
   const book = await ensureBookForChat(chatId, userId);
-  const sceneNumber = await nextSceneNumber(chatId, 1, userId);
+  // On regenerate, keep the replaced chapter's scene number so a mid-list
+  // regen doesn't jump to the end (nextSceneNumber returns max+1, and the
+  // entry being replaced still exists at this point).
+  const replacedEntry = replacesEntryId ? freshEntries.find((e) => e.raw.id === replacesEntryId) : undefined;
+  const sceneNumber = typeof replacedEntry?.meta.sceneNumber === "number"
+    ? replacedEntry.meta.sceneNumber
+    : await nextSceneNumber(chatId, 1, userId);
   const title = fromPreview
     ? (result.title?.trim() || `Chapter - msgs ${firstIdx + 1}-${lastIdx + 1}`)
     : deriveTitle(result, firstIdx + 1, lastIdx + 1);
@@ -704,7 +710,11 @@ async function commitArc(
     lastIdx = lastIdxs.length ? Math.max(...lastIdxs) : firstIdx;
   }
   const book = await ensureBookForChat(chatId, userId);
-  const sceneNumber = await nextSceneNumber(chatId, 2, userId);
+  // On regenerate, keep the replaced arc's scene number (see commitChapter).
+  const replacedArc = replacesEntryId ? freshEntries.find((e) => e.raw.id === replacesEntryId) : undefined;
+  const sceneNumber = typeof replacedArc?.meta.sceneNumber === "number"
+    ? replacedArc.meta.sceneNumber
+    : await nextSceneNumber(chatId, 2, userId);
   const msgIds = selected.flatMap((c) => c.meta.msgIds);
   const sourceChapterEntryIds = selected.map((c) => c.raw.id);
   const isRootArc = selected.length > 0 && selected.every((c) => c.meta.isRoot);

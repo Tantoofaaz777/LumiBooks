@@ -561,6 +561,29 @@ async function bindBookToChat(chatId, bookId, userId) {
     }
   }, userId);
 }
+async function getChatAttachedBookIds(chatId, userId) {
+  const chat = await spindle.chats.get(chatId, userId).catch(() => null);
+  const md = chat && chat.metadata && typeof chat.metadata === "object" ? chat.metadata : null;
+  if (!md || !Array.isArray(md["chat_world_book_ids"]))
+    return [];
+  return md["chat_world_book_ids"].filter((x) => typeof x === "string");
+}
+async function reassertChatBinding(chatId, userId) {
+  const bookId = await findBookForChat(chatId, userId).catch(() => null);
+  if (!bookId)
+    return false;
+  const chat = await spindle.chats.get(chatId, userId).catch(() => null);
+  if (!chat)
+    return false;
+  const md = chat.metadata && typeof chat.metadata === "object" ? chat.metadata : {};
+  const attached = Array.isArray(md["chat_world_book_ids"]) ? md["chat_world_book_ids"].filter((x) => typeof x === "string") : [];
+  if (attached.includes(bookId) && md["lumibooks_book_id"] === bookId)
+    return false;
+  await bindBookToChat(chatId, bookId, userId).catch((err) => {
+    warn(`reassertChatBinding: failed to rebind ${bookId} to ${chatId.slice(0, 8)}: ${describeError(err)}`);
+  });
+  return true;
+}
 async function listLmbEntries(chatId, userId) {
   const bookId = await findBookForChat(chatId, userId);
   if (!bookId)
@@ -1009,17 +1032,18 @@ function orderEntries(coverage, msgIdToIdx) {
   return ordered;
 }
 async function buildInjection(chatId, llmMessages, userId) {
-  const [activated, allEntries] = await Promise.all([
+  const [activated, allEntries, attachedBookIds] = await Promise.all([
     spindle.world_books.getActivated(chatId, userId).catch(() => null),
-    listLmbEntries(chatId, userId)
+    listLmbEntries(chatId, userId),
+    getChatAttachedBookIds(chatId, userId).catch(() => null)
   ]);
-  let entriesForCoverage;
-  if (activated) {
-    const activatedIds = new Set(activated.map((a) => a.id));
-    entriesForCoverage = allEntries.filter((e) => activatedIds.has(e.raw.id));
-  } else {
-    entriesForCoverage = allEntries.filter((e) => !e.raw.disabled);
-  }
+  if (allEntries.length === 0)
+    return null;
+  const ourBookId = allEntries[0].raw.world_book_id;
+  const activatedIds = activated ? new Set(activated.map((a) => a.id)) : null;
+  const anyOursActivated = !!activatedIds && allEntries.some((e) => activatedIds.has(e.raw.id));
+  const hostScanningOurBook = anyOursActivated || !!attachedBookIds && attachedBookIds.includes(ourBookId);
+  const entriesForCoverage = activatedIds && hostScanningOurBook ? allEntries.filter((e) => activatedIds.has(e.raw.id)) : allEntries.filter((e) => !e.raw.disabled);
   const coverage = await buildCoverage(chatId, userId, entriesForCoverage);
   if (coverage.activeEntries.length === 0)
     return null;
@@ -2800,7 +2824,8 @@ async function commitChapter(chatId, profile, userId, window, result, firstIdx, 
       }
     }
     const book = await ensureBookForChat(chatId, userId);
-    const sceneNumber = await nextSceneNumber(chatId, 1, userId);
+    const replacedEntry = replacesEntryId ? freshEntries.find((e) => e.raw.id === replacesEntryId) : undefined;
+    const sceneNumber = typeof replacedEntry?.meta.sceneNumber === "number" ? replacedEntry.meta.sceneNumber : await nextSceneNumber(chatId, 1, userId);
     const title = fromPreview ? result.title?.trim() || `Chapter - msgs ${firstIdx + 1}-${lastIdx + 1}` : deriveTitle(result, firstIdx + 1, lastIdx + 1);
     const msgIds = window.map((m) => m.id);
     const meta = {
@@ -2997,7 +3022,8 @@ async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, re
       lastIdx = lastIdxs.length ? Math.max(...lastIdxs) : firstIdx;
     }
     const book = await ensureBookForChat(chatId, userId);
-    const sceneNumber = await nextSceneNumber(chatId, 2, userId);
+    const replacedArc = replacesEntryId ? freshEntries.find((e) => e.raw.id === replacesEntryId) : undefined;
+    const sceneNumber = typeof replacedArc?.meta.sceneNumber === "number" ? replacedArc.meta.sceneNumber : await nextSceneNumber(chatId, 2, userId);
     const msgIds = selected.flatMap((c) => c.meta.msgIds);
     const sourceChapterEntryIds = selected.map((c) => c.raw.id);
     const isRootArc = selected.length > 0 && selected.every((c) => c.meta.isRoot);
@@ -3484,6 +3510,7 @@ async function buildState(userId, requestedChatId) {
     return baseState;
   if (settings.enabled) {
     await ensureForkAdoption(chat.id, userId).catch(() => {});
+    await reassertChatBinding(chat.id, userId).catch(() => {});
   }
   const bookId = await findBookForChat(chat.id, userId);
   const bookName = bookId !== null ? (await spindle.world_books.get(bookId, userId).catch(() => null))?.name ?? null : null;
@@ -3735,6 +3762,7 @@ spindle.on("GENERATION_ENDED", async (payload, hostUserId) => {
   const profile = settings.profiles.find((x) => x.id === settings.activeProfileId);
   if (!profile)
     return;
+  await reassertChatBinding(p.chatId, userId).catch(() => {});
   await maybeRunPipeline(p.chatId, profile, settings, userId).catch((err) => {
     warn(`pipeline failed: ${describeError(err)}`);
   });

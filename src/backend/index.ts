@@ -31,6 +31,7 @@ import {
   findChatIdForBook,
   findCachedChatIdForBook,
   invalidateAllBookCacheEntriesForBook,
+  reassertChatBinding,
   registerBookAnomalyCallback,
 } from "./world-book";
 import { buildInjection } from "./injection";
@@ -179,6 +180,7 @@ spindle.on("GENERATION_ENDED", async (payload: unknown, hostUserId?: string) => 
   if (!settings?.enabled) return;
   const profile = settings.profiles.find((x) => x.id === settings.activeProfileId);
   if (!profile) return;
+  await reassertChatBinding(p.chatId, userId).catch(() => {});
   await maybeRunPipeline(p.chatId, profile, settings, userId).catch((err) => {
     warn(`pipeline failed: ${describeError(err)}`);
   });

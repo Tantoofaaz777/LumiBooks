@@ -244,6 +244,39 @@ async function bindBookToChat(chatId: string, bookId: string, userId: string): P
   );
 }
 
+/** The world-book ids the chat has attached at chat scope (chat.metadata.chat_world_book_ids). */
+export async function getChatAttachedBookIds(chatId: string, userId: string): Promise<string[]> {
+  const chat = await spindle.chats.get(chatId, userId).catch(() => null);
+  const md = chat && chat.metadata && typeof chat.metadata === "object" ? (chat.metadata as Record<string, unknown>) : null;
+  if (!md || !Array.isArray(md["chat_world_book_ids"])) return [];
+  return (md["chat_world_book_ids"] as unknown[]).filter((x): x is string => typeof x === "string");
+}
+
+/**
+ * Re-assert this chat's book binding if it has been dropped from the chat's
+ * metadata. Lumiverse's world-info activation only scans books listed in
+ * chat_world_book_ids (plus character/persona/global), but LumiBooks resolves
+ * its book by its own lumibooks_chat_id tag - so a wholesale chat metadata
+ * write by another actor can silently unbind the book (the host stops scanning
+ * it, getActivated returns nothing, and injection drops everything) while the
+ * book itself stays intact. Returns true if it re-bound.
+ */
+export async function reassertChatBinding(chatId: string, userId: string): Promise<boolean> {
+  const bookId = await findBookForChat(chatId, userId).catch(() => null);
+  if (!bookId) return false;
+  const chat = await spindle.chats.get(chatId, userId).catch(() => null);
+  if (!chat) return false;
+  const md = chat.metadata && typeof chat.metadata === "object" ? (chat.metadata as Record<string, unknown>) : {};
+  const attached = Array.isArray(md["chat_world_book_ids"])
+    ? (md["chat_world_book_ids"] as unknown[]).filter((x): x is string => typeof x === "string")
+    : [];
+  if (attached.includes(bookId) && md["lumibooks_book_id"] === bookId) return false;
+  await bindBookToChat(chatId, bookId, userId).catch((err) => {
+    warn(`reassertChatBinding: failed to rebind ${bookId} to ${chatId.slice(0, 8)}: ${describeError(err)}`);
+  });
+  return true;
+}
+
 export async function listLmbEntries(chatId: string, userId: string): Promise<LMBEntry[]> {
   const bookId = await findBookForChat(chatId, userId);
   if (!bookId) return [];

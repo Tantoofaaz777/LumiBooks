@@ -6,7 +6,7 @@ import type { LMBProfile } from "../shared";
 import { approximateTokensFromChars } from "../shared";
 import { loadSettings } from "./storage";
 import { buildCoverage, computeCoverageStats, countCompressibleEligible } from "./coverage";
-import { findBookForChat, listLmbEntries, listRootCandidates, type LMBEntry } from "./world-book";
+import { findBookForChat, listLmbEntries, listRootCandidates, reassertChatBinding, type LMBEntry } from "./world-book";
 import { listConnections, resolveConnection } from "./summarizer";
 import { listRegexScripts } from "./regex";
 import { getBusy, getLastFailure, getPendingPreviews } from "./pipeline";
@@ -90,6 +90,7 @@ export async function buildState(userId: string, requestedChatId?: string | null
 
   if (settings.enabled) {
     await ensureForkAdoption(chat.id, userId).catch(() => {});
+    await reassertChatBinding(chat.id, userId).catch(() => {});
   }
 
   const bookId = await findBookForChat(chat.id, userId);

@@ -2,7 +2,7 @@ declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 import type { InterceptorResultDTO, LlmMessageDTO } from "lumiverse-spindle-types";
 import { buildCoverage, type CoverageMap } from "./coverage";
-import { listLmbEntries, type LMBEntry } from "./world-book";
+import { getChatAttachedBookIds, listLmbEntries, type LMBEntry } from "./world-book";
 import { error } from "./runtime";
 
 function isAssembledHistory(lm: LlmMessageDTO): boolean {
@@ -60,17 +60,27 @@ export async function buildInjection(
   llmMessages: LlmMessageDTO[],
   userId: string,
 ): Promise<InterceptorResultDTO | null> {
-  const [activated, allEntries] = await Promise.all([
+  const [activated, allEntries, attachedBookIds] = await Promise.all([
     spindle.world_books.getActivated(chatId, userId).catch(() => null),
     listLmbEntries(chatId, userId),
+    getChatAttachedBookIds(chatId, userId).catch(() => null),
   ]);
-  let entriesForCoverage: LMBEntry[];
-  if (activated) {
-    const activatedIds = new Set(activated.map((a) => a.id));
-    entriesForCoverage = allEntries.filter((e) => activatedIds.has(e.raw.id));
-  } else {
-    entriesForCoverage = allEntries.filter((e) => !e.raw.disabled);
-  }
+  if (allEntries.length === 0) return null;
+  const ourBookId = allEntries[0]!.raw.world_book_id;
+  // getActivated reflects only the books the host is actually scanning for this
+  // chat. If our book has been unbound from chat_world_book_ids (e.g. a wholesale
+  // chat-metadata write by another actor dropped it), getActivated reports none
+  // of our entries - and gating on it would then silently drop every memory.
+  // Trust getActivated as the activation authority when the host is clearly
+  // scanning our book (it activated some of our entries, or our book is still
+  // chat-attached); otherwise fall open to enabled entries (still honoring
+  // user-disabled ones). Off-hot-path handlers re-assert the binding.
+  const activatedIds = activated ? new Set(activated.map((a) => a.id)) : null;
+  const anyOursActivated = !!activatedIds && allEntries.some((e) => activatedIds.has(e.raw.id));
+  const hostScanningOurBook = anyOursActivated || (!!attachedBookIds && attachedBookIds.includes(ourBookId));
+  const entriesForCoverage: LMBEntry[] = activatedIds && hostScanningOurBook
+    ? allEntries.filter((e) => activatedIds.has(e.raw.id))
+    : allEntries.filter((e) => !e.raw.disabled);
   const coverage = await buildCoverage(chatId, userId, entriesForCoverage);
   if (coverage.activeEntries.length === 0) return null;
 
