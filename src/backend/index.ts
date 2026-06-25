@@ -54,7 +54,7 @@ import {
   patchPendingPreview,
   registerPipelineCallbacks,
 } from "./pipeline";
-import { buildCoverage, resyncVisibility, syncHiddenForCoveredMessages, unhideCoveredMessages } from "./coverage";
+import { buildCoverage, computeCoverageStats, resyncVisibility, syncHiddenForCoveredMessages, unhideCoveredMessages } from "./coverage";
 import { rebaseRoot, rebuildRoot, detachRoot } from "./rebase";
 import { invalidateConnectionsCache } from "./summarizer";
 import { invalidateRegexCache } from "./regex";
@@ -413,6 +413,13 @@ spindle.onFrontendMessage(async (raw, userId) => {
         if (!profile) break;
         if (getBusy(userId).some((b) => b.kind === "chapter" && b.chatId === msg.chatId)) {
           send({ type: "toast", tone: "warn", text: "Memoria is already filing a chapter" }, userId);
+          break;
+        }
+        const chapterMessages = await spindle.chat.getMessages(msg.chatId);
+        const chapterCoverage = await buildCoverage(msg.chatId, userId);
+        const chapterStats = computeCoverageStats(chapterMessages, chapterCoverage, profile);
+        if (!chapterStats.lagSatisfied || !chapterStats.windowAvailable) {
+          send({ type: "toast", tone: "info", text: "Your story needs more messages for me to generate a new entry~" }, userId);
           break;
         }
         await createChapterAuto(msg.chatId, profile, cur, userId);
