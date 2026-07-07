@@ -1,13 +1,15 @@
 export const EXTENSION_ID = "lumi_books" as const;
 export const EXTENSION_KEY = "lumibooks" as const;
+export const PROJECTION_KEY = "lumibooks_projection" as const;
 export const WORLD_BOOK_NAME_PREFIX = "LumiBooks" as const;
-export const STORAGE_VERSION = 3 as const;
+export const STORAGE_VERSION = 4 as const;
 export const SETTINGS_PATH = "settings.json" as const;
 export const CHAT_STATE_DIR = "chats" as const;
 
 export type CompressionUnit = "messages" | "tokens";
 export type CompressionTargetUnit = "percent" | "tokens";
 export type ArcTriggerMode = "chapters" | "tokens" | "manual";
+export type MemoryInjectionMode = "chat_history" | "outlet";
 
 export interface SamplerSet {
   temperature: number | null;
@@ -76,6 +78,8 @@ export interface LMBSettings {
   debugLog: boolean;
   forceConstantEntries: boolean;
   showAutomationToasts: boolean;
+  memoryInjectionMode: MemoryInjectionMode;
+  memoryOutletName: string;
 }
 
 export interface LMBEntryMeta {
@@ -173,6 +177,8 @@ export const DEFAULT_SETTINGS: LMBSettings = {
   debugLog: false,
   forceConstantEntries: true,
   showAutomationToasts: true,
+  memoryInjectionMode: "chat_history",
+  memoryOutletName: "lumibooks",
 };
 
 export function diskVersionFor(raw: Partial<LMBSettings> | null | undefined): number {
@@ -204,6 +210,8 @@ export function normalizeSettings(raw: Partial<LMBSettings> | null | undefined):
     debugLog: typeof v.debugLog === "boolean" ? v.debugLog : fallback.debugLog,
     forceConstantEntries: typeof v.forceConstantEntries === "boolean" ? v.forceConstantEntries : fallback.forceConstantEntries,
     showAutomationToasts: typeof v.showAutomationToasts === "boolean" ? v.showAutomationToasts : fallback.showAutomationToasts,
+    memoryInjectionMode: v.memoryInjectionMode === "outlet" ? "outlet" : "chat_history",
+    memoryOutletName: normalizeOutletName(v.memoryOutletName, fallback.memoryOutletName),
   };
 }
 
@@ -340,6 +348,12 @@ function numOrNull(v: unknown, min: number, max: number): number | null {
   if (typeof v !== "number" || !Number.isFinite(v)) return null;
   if (v < min || v > max) return null;
   return v;
+}
+
+export function normalizeOutletName(raw: unknown, fallback = "lumibooks"): string {
+  if (typeof raw !== "string") return fallback;
+  const clean = raw.trim().replace(/\s+/g, "_").replace(/[{}]/g, "").slice(0, 80);
+  return clean || fallback;
 }
 
 export function approximateTokensFromChars(chars: number): number {

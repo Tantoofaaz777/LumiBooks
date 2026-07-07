@@ -43,12 +43,62 @@ export function renderProfileTab(
 
   renderCompressionTargets(rest, profile, patch);
   renderAutomation(rest, profile, patch);
+  renderInjection(rest, state, send);
   renderConnection(rest, state, profile, patch);
   renderSamplers(rest, state, profile, send);
   renderContext(rest, profile, patch);
   renderRegex(rest, state, profile, patch);
   renderBehavior(rest, profile, patch);
   renderResetSettings(rest, state, send);
+}
+
+function renderInjection(
+  host: HTMLElement,
+  state: FrontendState,
+  send: (msg: FrontendToBackend) => void,
+): void {
+  const sec = section("Injection");
+  const help = document.createElement("div");
+  help.className = "lmb-help";
+  help.textContent = "Choose where active memories land in the assembled prompt.";
+  sec.body.appendChild(help);
+
+  sec.body.appendChild(
+    labelled("Mode", select({
+      value: state.settings.memoryInjectionMode,
+      options: [
+        { value: "chat_history", label: "Chat history" },
+        { value: "outlet", label: "Outlet macro" },
+      ],
+      onChange: (v) => send({
+        type: "save_settings",
+        patch: { memoryInjectionMode: v === "outlet" ? "outlet" : "chat_history" },
+        chatId: state.activeChatId,
+      }),
+    })),
+  );
+
+  const outletField = field("Outlet name");
+  const outletInput = textInput({
+    value: state.settings.memoryOutletName,
+    placeholder: "lumibooks",
+    onBlur: (v) => send({
+      type: "save_settings",
+      patch: { memoryOutletName: v },
+      chatId: state.activeChatId,
+    }),
+  });
+  outletInput.disabled = state.settings.memoryInjectionMode !== "outlet";
+  outletField.body.appendChild(outletInput);
+  const macro = document.createElement("div");
+  macro.className = "lmb-field-hint";
+  macro.textContent = state.settings.memoryInjectionMode === "outlet"
+    ? `Place {{outlet::${state.settings.memoryOutletName || "lumibooks"}}} in your preset where memories should appear.`
+    : "Outlet mode creates a single outlet-only lorebook entry containing the active LumiBooks memories.";
+  outletField.body.appendChild(macro);
+  sec.body.appendChild(outletField.wrap);
+
+  host.appendChild(sec.wrap);
 }
 
 function renderResetSettings(

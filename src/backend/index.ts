@@ -2,7 +2,7 @@ declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 import type { LlmMessageDTO } from "lumiverse-spindle-types";
 import type { FrontendToBackend } from "../types";
-import { EXTENSION_KEY, normalizeProfile, normalizeCustomPreset } from "../shared";
+import { EXTENSION_KEY, PROJECTION_KEY, normalizeProfile, normalizeCustomPreset } from "../shared";
 import {
   debug,
   describeError,
@@ -63,6 +63,7 @@ import { invalidateRegexCache } from "./regex";
 import { registerHookEndpoints } from "./hooks";
 import { buildState } from "./state";
 import { parseStmbPresetExport } from "./presets";
+import { syncProjectionEntry } from "./projection";
 
 async function notify(
   userId: string,
@@ -92,6 +93,9 @@ async function doPushState(userId: string, chatId?: string | null): Promise<void
     if (chatId) {
       const active = await spindle.chats.getActive(userId).catch(() => null);
       if (active && active.id !== chatId) return;
+      await syncProjectionEntry(chatId, userId).catch((err) => {
+        warn(`projection sync before state failed: ${describeError(err)}`);
+      });
     }
     const state = await buildState(userId, chatId);
     if (chatId) {
@@ -142,12 +146,17 @@ registerPipelineCallbacks({
 });
 
 spindle.registerWorldInfoInterceptor(async (ctx) => {
-  const ours: string[] = [];
+  const userId = ctx.userId ?? resolveUserId(ctx.chatId) ?? getBootstrapUserId();
+  const settings = userId ? await loadSettings(userId).catch(() => null) : null;
+  const outletMode = !!settings?.enabled && settings.memoryInjectionMode === "outlet";
+  const disabled: string[] = [];
   for (const entry of ctx.entries) {
     const ext = entry.extensions as Record<string, unknown> | undefined;
-    if (ext && ext[EXTENSION_KEY]) ours.push(entry.id);
+    if (!ext) continue;
+    if (ext[EXTENSION_KEY]) disabled.push(entry.id);
+    if (!outletMode && ext[PROJECTION_KEY]) disabled.push(entry.id);
   }
-  return ours.length ? { disabled: ours } : undefined;
+  return disabled.length ? { disabled } : undefined;
 }, 90);
 
 spindle.registerInterceptor(async (messages, context) => {
@@ -171,6 +180,7 @@ spindle.registerInterceptor(async (messages, context) => {
     if (!userId) return messages;
     const settings = await loadSettings(userId);
     if (!settings.enabled) return messages;
+    if (settings.memoryInjectionMode === "outlet") return messages;
     const result = await buildInjection(chatId, messages as LlmMessageDTO[], userId);
     if (!result) return messages;
     return { messages: result.messages, breakdown: result.breakdown };
