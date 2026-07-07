@@ -98,7 +98,7 @@ function renderInjection(
   macro.className = "lmb-field-hint";
   macro.textContent = state.settings.memoryInjectionMode === "outlet"
     ? `Place {{outlet::${state.settings.memoryOutletName || "lumibooks"}}} in your preset where memories should appear.`
-    : "Outlet mode creates a single outlet-only lorebook entry containing the active LumiBooks memories.";
+    : "Outlet mode sends active LumiBooks entries through the configured outlet instead of injecting them into chat history.";
   outletField.body.appendChild(macro);
   sec.body.appendChild(outletField.wrap);
 

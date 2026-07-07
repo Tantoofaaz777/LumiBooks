@@ -153,12 +153,24 @@ spindle.registerWorldInfoInterceptor(async (ctx) => {
   const userId = ctx.userId ?? resolveUserId(ctx.chatId) ?? getBootstrapUserId();
   const settings = userId ? await loadSettings(userId).catch(() => null) : null;
   const outletMode = !!settings?.enabled && settings.memoryInjectionMode === "outlet";
+  let activeOutletIds: Set<string> | null = null;
+  if (outletMode && userId && ctx.chatId) {
+    const allEntries = await listLmbEntries(ctx.chatId, userId).catch(() => []);
+    const coverage = await buildCoverage(ctx.chatId, userId, allEntries).catch(() => null);
+    activeOutletIds = coverage ? new Set(coverage.activeEntries.map((entry) => entry.raw.id)) : null;
+  }
   const disabled: string[] = [];
   for (const entry of ctx.entries) {
     const ext = entry.extensions as Record<string, unknown> | undefined;
     if (!ext) continue;
-    if (ext[EXTENSION_KEY]) disabled.push(entry.id);
-    if (!outletMode && ext[PROJECTION_KEY]) disabled.push(entry.id);
+    if (ext[PROJECTION_KEY]) {
+      disabled.push(entry.id);
+      continue;
+    }
+    if (ext[EXTENSION_KEY]) {
+      if (!outletMode) disabled.push(entry.id);
+      else if (!activeOutletIds?.has(entry.id)) disabled.push(entry.id);
+    }
   }
   return disabled.length ? { disabled } : undefined;
 }, 90);

@@ -1,11 +1,10 @@
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 import type { WorldBookEntryDTO } from "lumiverse-spindle-types";
-import { PROJECTION_KEY, normalizeOutletName } from "../shared";
-import { buildCoverage } from "./coverage";
+import { EXTENSION_KEY, PROJECTION_KEY, normalizeEntryMeta, normalizeOutletName } from "../shared";
+import { findBookForChat, invalidateBookCache, listAllEntries } from "./world-book";
 import { loadSettings } from "./storage";
 import { describeError, warn } from "./runtime";
-import { ensureBookForChat, findBookForChat, invalidateBookCache, listAllEntries, listLmbEntries, type LMBEntry } from "./world-book";
 
 interface ProjectionMeta {
   chatId: string;
@@ -18,99 +17,66 @@ function isProjection(entry: WorldBookEntryDTO, chatId: string): boolean {
   return !!meta && meta.kind === "outlet" && meta.chatId === chatId;
 }
 
-function entrySortValue(entry: LMBEntry): number {
-  if (typeof entry.meta.firstMsgIdx === "number") return entry.meta.firstMsgIdx;
-  return entry.meta.isRoot ? -1000000 : 0;
+function orderValueFor(meta: ReturnType<typeof normalizeEntryMeta>, fallback: number): number {
+  if (!meta) return fallback;
+  if (typeof meta.firstMsgIdx === "number") return meta.firstMsgIdx + 1;
+  if (meta.isRoot) return 0;
+  return meta.sceneNumber ?? fallback;
 }
 
-export async function buildProjectionContent(chatId: string, userId: string): Promise<string> {
-  const entries = await listLmbEntries(chatId, userId);
-  if (entries.length === 0) return "";
-  const coverage = await buildCoverage(chatId, userId, entries);
-  return coverage.activeEntries
-    .slice()
-    .sort((a, b) => entrySortValue(a) - entrySortValue(b))
-    .map((entry) => (entry.raw.content || "").trim())
-    .filter(Boolean)
-    .join("\n\n");
-}
-
-async function updateProjection(
-  entry: WorldBookEntryDTO,
-  patch: Record<string, unknown>,
-  userId: string,
-): Promise<void> {
+async function updateEntry(entry: WorldBookEntryDTO, patch: Record<string, unknown>, userId: string): Promise<void> {
   await spindle.world_books.entries.update(entry.id, patch as never, userId);
 }
 
 export async function syncProjectionEntry(chatId: string, userId: string): Promise<void> {
   try {
+    const bookId = await findBookForChat(chatId, userId).catch(() => null);
+    if (!bookId) return;
+
     const settings = await loadSettings(userId);
+    const outletMode = settings.enabled && settings.memoryInjectionMode === "outlet";
     const outletName = normalizeOutletName(settings.memoryOutletName);
+    const entries = await listAllEntries(bookId, userId);
+    let touched = false;
 
-    if (!settings.enabled || settings.memoryInjectionMode !== "outlet") {
-      const existingBookId = await findBookForChat(chatId, userId).catch(() => null);
-      if (!existingBookId) return;
-      const entries = await listAllEntries(existingBookId, userId);
-      const existing = entries.find((entry) => isProjection(entry, chatId)) ?? null;
-      if (existing && (!existing.disabled || existing.content)) {
-        await updateProjection(existing, { content: "", disabled: true }, userId);
-        invalidateBookCache(userId, chatId);
-      }
-      return;
+    for (const entry of entries) {
+      if (!isProjection(entry, chatId)) continue;
+      await spindle.world_books.entries.delete(entry.id, userId).catch((err) => {
+        warn(`outlet migration: failed to delete projection ${entry.id}: ${describeError(err)}`);
+      });
+      touched = true;
     }
 
-    const book = await ensureBookForChat(chatId, userId);
-    const entries = await listAllEntries(book.id, userId);
-    const existing = entries.find((entry) => isProjection(entry, chatId)) ?? null;
-    const content = await buildProjectionContent(chatId, userId);
-    if (!content.trim()) {
-      if (existing) {
-        await updateProjection(existing, { content: "", disabled: true, outlet_name: outletName, position: 8 }, userId);
-        invalidateBookCache(userId, chatId);
-      }
-      return;
+    for (const entry of entries) {
+      const ext = (entry.extensions || {}) as Record<string, unknown>;
+      const meta = normalizeEntryMeta(ext[EXTENSION_KEY]);
+      if (!meta || meta.chatId !== chatId) continue;
+
+      const orderValue = orderValueFor(meta, entry.order_value);
+      const currentOutletName = ((entry as unknown as { outlet_name?: string }).outlet_name ?? "").trim();
+      const patch = outletMode
+        ? {
+            position: 8,
+            outlet_name: outletName,
+            constant: true,
+            order_value: orderValue,
+          }
+        : {
+            position: 0,
+            outlet_name: "",
+            order_value: orderValue,
+          };
+      const needsPatch =
+        entry.position !== patch.position ||
+        entry.order_value !== orderValue ||
+        (outletMode && entry.constant !== true) ||
+        currentOutletName !== patch.outlet_name;
+      if (!needsPatch) continue;
+      await updateEntry(entry, patch, userId);
+      touched = true;
     }
 
-    const extensions = {
-      ...(existing?.extensions && typeof existing.extensions === "object" ? existing.extensions : {}),
-      [PROJECTION_KEY]: { chatId, kind: "outlet" satisfies ProjectionMeta["kind"] },
-    };
-
-    if (existing) {
-      await updateProjection(existing, {
-        content,
-        comment: "[LumiBooks outlet projection]",
-        disabled: false,
-        constant: true,
-        position: 8,
-        outlet_name: outletName,
-        key: [],
-        keysecondary: [],
-        vectorized: false,
-        extensions,
-      }, userId);
-      invalidateBookCache(userId, chatId);
-      return;
-    }
-
-    await spindle.world_books.entries.create(
-      book.id,
-      {
-        content,
-        comment: "[LumiBooks outlet projection]",
-        disabled: false,
-        constant: true,
-        position: 8,
-        outlet_name: outletName,
-        key: [],
-        keysecondary: [],
-        vectorized: false,
-        extensions,
-      } as never,
-      userId,
-    );
-    invalidateBookCache(userId, chatId);
+    if (touched) invalidateBookCache(userId, chatId);
   } catch (err) {
     warn(`syncProjectionEntry failed: ${describeError(err)}`);
   }

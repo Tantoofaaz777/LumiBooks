@@ -2,7 +2,7 @@ declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 import type { WorldBookDTO, WorldBookEntryDTO } from "lumiverse-spindle-types";
 import type { LMBEntryMeta } from "../shared";
-import { EXTENSION_KEY, WORLD_BOOK_NAME_PREFIX, normalizeEntryMeta } from "../shared";
+import { EXTENSION_KEY, WORLD_BOOK_NAME_PREFIX, normalizeEntryMeta, normalizeOutletName } from "../shared";
 import { formatBookName } from "./naming";
 import { describeError, error, warn } from "./runtime";
 import { loadSettings } from "./storage";
@@ -305,6 +305,21 @@ export async function createChapterEntry(
   keys: string[] = [],
   constant: boolean = true,
 ): Promise<WorldBookEntryDTO> {
+  const settings = await loadSettings(userId);
+  const orderValue = typeof meta.firstMsgIdx === "number"
+    ? meta.firstMsgIdx + 1
+    : meta.isRoot
+      ? 0
+      : meta.sceneNumber ?? 100;
+  const placement = settings.enabled && settings.memoryInjectionMode === "outlet"
+    ? {
+        position: 8,
+        outlet_name: normalizeOutletName(settings.memoryOutletName),
+        order_value: orderValue,
+      }
+    : {
+        order_value: orderValue,
+      };
   return spindle.world_books.entries.create(
     bookId,
     {
@@ -312,6 +327,7 @@ export async function createChapterEntry(
       comment,
       disabled: false,
       constant,
+      ...placement,
       key: keys,
       keysecondary: [],
       vectorized: false,
@@ -345,7 +361,16 @@ export async function applyConstantToAllLmbEntries(userId: string, constant: boo
 
 export async function updateEntry(
   entryId: string,
-  patch: { content?: string; comment?: string; extensions?: Record<string, unknown>; keywords?: string[] },
+  patch: {
+    content?: string;
+    comment?: string;
+    extensions?: Record<string, unknown>;
+    keywords?: string[];
+    position?: number;
+    outlet_name?: string;
+    order_value?: number;
+    constant?: boolean;
+  },
   userId: string,
 ): Promise<WorldBookEntryDTO> {
   return spindle.world_books.entries.update(entryId, patch, userId);

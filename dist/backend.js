@@ -733,11 +733,21 @@ async function listLmbEntries(chatId, userId) {
   return out;
 }
 async function createChapterEntry(bookId, meta, content, comment, userId, keys = [], constant = true) {
+  const settings = await loadSettings(userId);
+  const orderValue = typeof meta.firstMsgIdx === "number" ? meta.firstMsgIdx + 1 : meta.isRoot ? 0 : meta.sceneNumber ?? 100;
+  const placement = settings.enabled && settings.memoryInjectionMode === "outlet" ? {
+    position: 8,
+    outlet_name: normalizeOutletName(settings.memoryOutletName),
+    order_value: orderValue
+  } : {
+    order_value: orderValue
+  };
   return spindle.world_books.entries.create(bookId, {
     content,
     comment,
     disabled: false,
     constant,
+    ...placement,
     key: keys,
     keysecondary: [],
     vectorized: false,
@@ -4242,83 +4252,61 @@ function isProjection(entry, chatId) {
   const meta = ext[PROJECTION_KEY];
   return !!meta && meta.kind === "outlet" && meta.chatId === chatId;
 }
-function entrySortValue(entry) {
-  if (typeof entry.meta.firstMsgIdx === "number")
-    return entry.meta.firstMsgIdx;
-  return entry.meta.isRoot ? -1e6 : 0;
+function orderValueFor(meta, fallback) {
+  if (!meta)
+    return fallback;
+  if (typeof meta.firstMsgIdx === "number")
+    return meta.firstMsgIdx + 1;
+  if (meta.isRoot)
+    return 0;
+  return meta.sceneNumber ?? fallback;
 }
-async function buildProjectionContent(chatId, userId) {
-  const entries = await listLmbEntries(chatId, userId);
-  if (entries.length === 0)
-    return "";
-  const coverage = await buildCoverage(chatId, userId, entries);
-  return coverage.activeEntries.slice().sort((a, b) => entrySortValue(a) - entrySortValue(b)).map((entry) => (entry.raw.content || "").trim()).filter(Boolean).join(`
-
-`);
-}
-async function updateProjection(entry, patch, userId) {
+async function updateEntry2(entry, patch, userId) {
   await spindle.world_books.entries.update(entry.id, patch, userId);
 }
 async function syncProjectionEntry(chatId, userId) {
   try {
+    const bookId = await findBookForChat(chatId, userId).catch(() => null);
+    if (!bookId)
+      return;
     const settings = await loadSettings(userId);
+    const outletMode = settings.enabled && settings.memoryInjectionMode === "outlet";
     const outletName = normalizeOutletName(settings.memoryOutletName);
-    if (!settings.enabled || settings.memoryInjectionMode !== "outlet") {
-      const existingBookId = await findBookForChat(chatId, userId).catch(() => null);
-      if (!existingBookId)
-        return;
-      const entries2 = await listAllEntries(existingBookId, userId);
-      const existing2 = entries2.find((entry) => isProjection(entry, chatId)) ?? null;
-      if (existing2 && (!existing2.disabled || existing2.content)) {
-        await updateProjection(existing2, { content: "", disabled: true }, userId);
-        invalidateBookCache(userId, chatId);
-      }
-      return;
+    const entries = await listAllEntries(bookId, userId);
+    let touched = false;
+    for (const entry of entries) {
+      if (!isProjection(entry, chatId))
+        continue;
+      await spindle.world_books.entries.delete(entry.id, userId).catch((err) => {
+        warn(`outlet migration: failed to delete projection ${entry.id}: ${describeError(err)}`);
+      });
+      touched = true;
     }
-    const book = await ensureBookForChat(chatId, userId);
-    const entries = await listAllEntries(book.id, userId);
-    const existing = entries.find((entry) => isProjection(entry, chatId)) ?? null;
-    const content = await buildProjectionContent(chatId, userId);
-    if (!content.trim()) {
-      if (existing) {
-        await updateProjection(existing, { content: "", disabled: true, outlet_name: outletName, position: 8 }, userId);
-        invalidateBookCache(userId, chatId);
-      }
-      return;
-    }
-    const extensions = {
-      ...existing?.extensions && typeof existing.extensions === "object" ? existing.extensions : {},
-      [PROJECTION_KEY]: { chatId, kind: "outlet" }
-    };
-    if (existing) {
-      await updateProjection(existing, {
-        content,
-        comment: "[LumiBooks outlet projection]",
-        disabled: false,
-        constant: true,
+    for (const entry of entries) {
+      const ext = entry.extensions || {};
+      const meta = normalizeEntryMeta(ext[EXTENSION_KEY]);
+      if (!meta || meta.chatId !== chatId)
+        continue;
+      const orderValue = orderValueFor(meta, entry.order_value);
+      const currentOutletName = (entry.outlet_name ?? "").trim();
+      const patch = outletMode ? {
         position: 8,
         outlet_name: outletName,
-        key: [],
-        keysecondary: [],
-        vectorized: false,
-        extensions
-      }, userId);
-      invalidateBookCache(userId, chatId);
-      return;
+        constant: true,
+        order_value: orderValue
+      } : {
+        position: 0,
+        outlet_name: "",
+        order_value: orderValue
+      };
+      const needsPatch = entry.position !== patch.position || entry.order_value !== orderValue || outletMode && entry.constant !== true || currentOutletName !== patch.outlet_name;
+      if (!needsPatch)
+        continue;
+      await updateEntry2(entry, patch, userId);
+      touched = true;
     }
-    await spindle.world_books.entries.create(book.id, {
-      content,
-      comment: "[LumiBooks outlet projection]",
-      disabled: false,
-      constant: true,
-      position: 8,
-      outlet_name: outletName,
-      key: [],
-      keysecondary: [],
-      vectorized: false,
-      extensions
-    }, userId);
-    invalidateBookCache(userId, chatId);
+    if (touched)
+      invalidateBookCache(userId, chatId);
   } catch (err) {
     warn(`syncProjectionEntry failed: ${describeError(err)}`);
   }
@@ -4455,15 +4443,27 @@ spindle.registerWorldInfoInterceptor(async (ctx) => {
   const userId = ctx.userId ?? resolveUserId(ctx.chatId) ?? getBootstrapUserId();
   const settings = userId ? await loadSettings(userId).catch(() => null) : null;
   const outletMode = !!settings?.enabled && settings.memoryInjectionMode === "outlet";
+  let activeOutletIds = null;
+  if (outletMode && userId && ctx.chatId) {
+    const allEntries = await listLmbEntries(ctx.chatId, userId).catch(() => []);
+    const coverage = await buildCoverage(ctx.chatId, userId, allEntries).catch(() => null);
+    activeOutletIds = coverage ? new Set(coverage.activeEntries.map((entry) => entry.raw.id)) : null;
+  }
   const disabled = [];
   for (const entry of ctx.entries) {
     const ext = entry.extensions;
     if (!ext)
       continue;
-    if (ext[EXTENSION_KEY])
+    if (ext[PROJECTION_KEY]) {
       disabled.push(entry.id);
-    if (!outletMode && ext[PROJECTION_KEY])
-      disabled.push(entry.id);
+      continue;
+    }
+    if (ext[EXTENSION_KEY]) {
+      if (!outletMode)
+        disabled.push(entry.id);
+      else if (!activeOutletIds?.has(entry.id))
+        disabled.push(entry.id);
+    }
   }
   return disabled.length ? { disabled } : undefined;
 }, 90);
