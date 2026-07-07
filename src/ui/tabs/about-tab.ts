@@ -1,5 +1,6 @@
 import type { FrontendState, FrontendToBackend } from "../../types";
-import { checkbox, makeButton, section, textNode } from "../components";
+import type { LMBSettings } from "../../shared";
+import { checkbox, field, labelled, makeButton, section, select, textInput, textNode } from "../components";
 
 export function renderAboutTab(
   host: HTMLElement,
@@ -8,6 +9,10 @@ export function renderAboutTab(
 ): void {
   host.replaceChildren();
 
+  if (state) {
+    renderInjection(host, state, send);
+    renderNaming(host, state, send);
+  }
   renderExtras(host, state, send);
 
   const hero = section("Memoria");
@@ -49,6 +54,99 @@ export function renderAboutTab(
     "Memoria thanks the original Memory Books authors for the inspiration.";
   ack.body.appendChild(a);
   host.appendChild(ack.wrap);
+}
+
+function renderInjection(
+  host: HTMLElement,
+  state: FrontendState,
+  send: (msg: FrontendToBackend) => void,
+): void {
+  const sec = section("Injection");
+  const help = document.createElement("div");
+  help.className = "lmb-help";
+  help.textContent = "Choose where active memories land in the assembled prompt.";
+  sec.body.appendChild(help);
+
+  sec.body.appendChild(
+    labelled("Mode", select({
+      value: state.settings.memoryInjectionMode,
+      options: [
+        { value: "chat_history", label: "Chat history" },
+        { value: "outlet", label: "Outlet macro" },
+      ],
+      onChange: (v) => send({
+        type: "save_settings",
+        patch: { memoryInjectionMode: v === "outlet" ? "outlet" : "chat_history" },
+        chatId: state.activeChatId,
+      }),
+    })),
+  );
+
+  const outletField = field("Outlet name");
+  const outletInput = textInput({
+    value: state.settings.memoryOutletName,
+    placeholder: "lumibooks",
+    onBlur: (v) => send({
+      type: "save_settings",
+      patch: { memoryOutletName: v },
+      chatId: state.activeChatId,
+    }),
+  });
+  outletInput.disabled = state.settings.memoryInjectionMode !== "outlet";
+  outletField.body.appendChild(outletInput);
+  const macro = document.createElement("div");
+  macro.className = "lmb-field-hint";
+  macro.textContent = state.settings.memoryInjectionMode === "outlet"
+    ? `Place {{outlet::${state.settings.memoryOutletName || "lumibooks"}}} in your preset where memories should appear.`
+    : "Outlet mode creates a single outlet-only lorebook entry containing the active LumiBooks memories.";
+  outletField.body.appendChild(macro);
+  sec.body.appendChild(outletField.wrap);
+
+  host.appendChild(sec.wrap);
+}
+
+function renderNaming(
+  host: HTMLElement,
+  state: FrontendState,
+  send: (msg: FrontendToBackend) => void,
+): void {
+  const sec = section("Naming");
+  const help = document.createElement("div");
+  help.className = "lmb-help";
+  help.textContent = "Templates support Lumiverse macros like {{user}} and {{char}}, plus {{scene}}, {{sceneNumber}}, {{title}}, and {{chat}}.";
+  sec.body.appendChild(help);
+
+  const saveSetting = (patch: Partial<LMBSettings>): void => {
+    send({ type: "save_settings", patch, chatId: state.activeChatId });
+  };
+
+  const addTemplate = (
+    label: string,
+    key: "bookNameTemplate" | "chapterNameTemplate" | "arcNameTemplate" | "volumeNameTemplate",
+    placeholder: string,
+  ): void => {
+    const row = field(label);
+    row.body.appendChild(textInput({
+      value: state.settings[key],
+      placeholder,
+      onBlur: (v) => saveSetting({ [key]: v } as Partial<LMBSettings>),
+    }));
+    sec.body.appendChild(row.wrap);
+  };
+
+  addTemplate("Lorebook name", "bookNameTemplate", "LumiBooks - {{chat}}");
+  addTemplate("Chapter entry", "chapterNameTemplate", "#{{sceneNumber}} - {{title}} (msgs {{scene}})");
+  addTemplate("Arc entry", "arcNameTemplate", "{{rootPrefix}}Arc #{{sceneNumber}} - {{title}} (msgs {{scene}})");
+  addTemplate("Volume entry", "volumeNameTemplate", "{{rootPrefix}}Volume #{{sceneNumber}} - {{title}} (msgs {{scene}})");
+
+  sec.body.appendChild(checkbox({
+    checked: state.settings.includeContentHeaders,
+    label: "Save generated headers in memory content",
+    hint: "When off, entries save only the actual memory text, without the generated Chapter/ARC/VOLUME header.",
+    onChange: (v) => saveSetting({ includeContentHeaders: v }),
+  }));
+
+  host.appendChild(sec.wrap);
 }
 
 function renderExtras(

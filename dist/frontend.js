@@ -1847,6 +1847,7 @@ function renderContinuity(host, c, ctx, send) {
 }
 
 // src/shared.ts
+var WORLD_BOOK_NAME_PREFIX = "LumiBooks";
 var STORAGE_VERSION = 4;
 var DEFAULT_SAMPLERS = {
   temperature: null,
@@ -1917,7 +1918,12 @@ var DEFAULT_SETTINGS = {
   forceConstantEntries: true,
   showAutomationToasts: true,
   memoryInjectionMode: "chat_history",
-  memoryOutletName: "lumibooks"
+  memoryOutletName: "lumibooks",
+  bookNameTemplate: `${WORLD_BOOK_NAME_PREFIX} - {{chat}}`,
+  chapterNameTemplate: "#{{sceneNumber}} - {{title}} (msgs {{scene}})",
+  arcNameTemplate: "{{rootPrefix}}Arc #{{sceneNumber}} - {{title}} (msgs {{scene}})",
+  volumeNameTemplate: "{{rootPrefix}}Volume #{{sceneNumber}} - {{title}} (msgs {{scene}})",
+  includeContentHeaders: false
 };
 
 // src/ui/tabs/profile-tab.ts
@@ -1938,50 +1944,12 @@ function renderProfileTab(host, state, ctx, send) {
   host.appendChild(rest);
   renderCompressionTargets(rest, profile, patch);
   renderAutomation(rest, profile, patch);
-  renderInjection(rest, state, send);
   renderConnection(rest, state, profile, patch);
   renderSamplers(rest, state, profile, send);
   renderContext(rest, profile, patch);
   renderRegex(rest, state, profile, patch);
   renderBehavior(rest, profile, patch);
   renderResetSettings(rest, state, send);
-}
-function renderInjection(host, state, send) {
-  const sec = section("Injection");
-  const help = document.createElement("div");
-  help.className = "lmb-help";
-  help.textContent = "Choose where active memories land in the assembled prompt.";
-  sec.body.appendChild(help);
-  sec.body.appendChild(labelled("Mode", select({
-    value: state.settings.memoryInjectionMode,
-    options: [
-      { value: "chat_history", label: "Chat history" },
-      { value: "outlet", label: "Outlet macro" }
-    ],
-    onChange: (v) => send({
-      type: "save_settings",
-      patch: { memoryInjectionMode: v === "outlet" ? "outlet" : "chat_history" },
-      chatId: state.activeChatId
-    })
-  })));
-  const outletField = field("Outlet name");
-  const outletInput = textInput({
-    value: state.settings.memoryOutletName,
-    placeholder: "lumibooks",
-    onBlur: (v) => send({
-      type: "save_settings",
-      patch: { memoryOutletName: v },
-      chatId: state.activeChatId
-    })
-  });
-  outletInput.disabled = state.settings.memoryInjectionMode !== "outlet";
-  outletField.body.appendChild(outletInput);
-  const macro = document.createElement("div");
-  macro.className = "lmb-field-hint";
-  macro.textContent = state.settings.memoryInjectionMode === "outlet" ? `Place {{outlet::${state.settings.memoryOutletName || "lumibooks"}}} in your preset where memories should appear.` : "Outlet mode creates a single outlet-only lorebook entry containing the active LumiBooks memories.";
-  outletField.body.appendChild(macro);
-  sec.body.appendChild(outletField.wrap);
-  host.appendChild(sec.wrap);
 }
 function renderResetSettings(host, state, send) {
   const profile = state.activeProfile;
@@ -2815,6 +2783,10 @@ function renderHelp(host) {
 // src/ui/tabs/about-tab.ts
 function renderAboutTab(host, state, send) {
   host.replaceChildren();
+  if (state) {
+    renderInjection(host, state, send);
+    renderNaming(host, state, send);
+  }
   renderExtras(host, state, send);
   const hero = section("Memoria");
   const card = document.createElement("div");
@@ -2849,6 +2821,73 @@ function renderAboutTab(host, state, send) {
   a.textContent = "Built on Lumiverse Spindle, with prompts and UX inspired by SillyTavern Memory Books. " + "Memoria thanks the original Memory Books authors for the inspiration.";
   ack.body.appendChild(a);
   host.appendChild(ack.wrap);
+}
+function renderInjection(host, state, send) {
+  const sec = section("Injection");
+  const help = document.createElement("div");
+  help.className = "lmb-help";
+  help.textContent = "Choose where active memories land in the assembled prompt.";
+  sec.body.appendChild(help);
+  sec.body.appendChild(labelled("Mode", select({
+    value: state.settings.memoryInjectionMode,
+    options: [
+      { value: "chat_history", label: "Chat history" },
+      { value: "outlet", label: "Outlet macro" }
+    ],
+    onChange: (v) => send({
+      type: "save_settings",
+      patch: { memoryInjectionMode: v === "outlet" ? "outlet" : "chat_history" },
+      chatId: state.activeChatId
+    })
+  })));
+  const outletField = field("Outlet name");
+  const outletInput = textInput({
+    value: state.settings.memoryOutletName,
+    placeholder: "lumibooks",
+    onBlur: (v) => send({
+      type: "save_settings",
+      patch: { memoryOutletName: v },
+      chatId: state.activeChatId
+    })
+  });
+  outletInput.disabled = state.settings.memoryInjectionMode !== "outlet";
+  outletField.body.appendChild(outletInput);
+  const macro = document.createElement("div");
+  macro.className = "lmb-field-hint";
+  macro.textContent = state.settings.memoryInjectionMode === "outlet" ? `Place {{outlet::${state.settings.memoryOutletName || "lumibooks"}}} in your preset where memories should appear.` : "Outlet mode creates a single outlet-only lorebook entry containing the active LumiBooks memories.";
+  outletField.body.appendChild(macro);
+  sec.body.appendChild(outletField.wrap);
+  host.appendChild(sec.wrap);
+}
+function renderNaming(host, state, send) {
+  const sec = section("Naming");
+  const help = document.createElement("div");
+  help.className = "lmb-help";
+  help.textContent = "Templates support Lumiverse macros like {{user}} and {{char}}, plus {{scene}}, {{sceneNumber}}, {{title}}, and {{chat}}.";
+  sec.body.appendChild(help);
+  const saveSetting = (patch) => {
+    send({ type: "save_settings", patch, chatId: state.activeChatId });
+  };
+  const addTemplate = (label, key, placeholder) => {
+    const row = field(label);
+    row.body.appendChild(textInput({
+      value: state.settings[key],
+      placeholder,
+      onBlur: (v) => saveSetting({ [key]: v })
+    }));
+    sec.body.appendChild(row.wrap);
+  };
+  addTemplate("Lorebook name", "bookNameTemplate", "LumiBooks - {{chat}}");
+  addTemplate("Chapter entry", "chapterNameTemplate", "#{{sceneNumber}} - {{title}} (msgs {{scene}})");
+  addTemplate("Arc entry", "arcNameTemplate", "{{rootPrefix}}Arc #{{sceneNumber}} - {{title}} (msgs {{scene}})");
+  addTemplate("Volume entry", "volumeNameTemplate", "{{rootPrefix}}Volume #{{sceneNumber}} - {{title}} (msgs {{scene}})");
+  sec.body.appendChild(checkbox({
+    checked: state.settings.includeContentHeaders,
+    label: "Save generated headers in memory content",
+    hint: "When off, entries save only the actual memory text, without the generated Chapter/ARC/VOLUME header.",
+    onChange: (v) => saveSetting({ includeContentHeaders: v })
+  }));
+  host.appendChild(sec.wrap);
 }
 function renderExtras(host, state, send) {
   const sec = section("Extras");

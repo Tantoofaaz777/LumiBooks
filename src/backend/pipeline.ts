@@ -14,6 +14,7 @@ import {
 } from "./coverage";
 import { createChapterEntry, deleteEntry, ensureBookForChat, invalidateBookCache, listLmbEntries, patchEntryMeta, type LMBEntry } from "./world-book";
 import { loadSettings } from "./storage";
+import { formatEntryName, savedMemoryContent } from "./naming";
 import {
   AbortedSummarizerError,
   FatalSummarizerError,
@@ -500,8 +501,8 @@ async function commitChapter(
     ? replacedEntry.meta.sceneNumber
     : await nextSceneNumber(chatId, 1, userId);
   const title = fromPreview
-    ? (result.title?.trim() || `Chapter - msgs ${firstIdx + 1}-${lastIdx + 1}`)
-    : deriveTitle(result, firstIdx + 1, lastIdx + 1);
+    ? (result.title?.trim() || `Chapter ${firstIdx + 1}-${lastIdx + 1}`)
+    : deriveTitle(result);
   const msgIds = window.map((m) => m.id);
   const meta: LMBEntryMeta = {
     tier: 1,
@@ -520,11 +521,19 @@ async function commitChapter(
     sceneNumber,
     rawOutput: result.rawOutput,
   };
-  const baseComment = meta.title ?? `Chapter - msgs ${(firstIdx + 1)}-${(lastIdx + 1)}`;
-  const comment = `#${sceneNumber} - ${baseComment}`;
   const settings = await loadSettings(userId);
+  const comment = await formatEntryName(settings, {
+    chatId,
+    userId,
+    tier: "chapter",
+    title: meta.title ?? "",
+    sceneNumber,
+    firstMsgIdx: meta.firstMsgIdx,
+    lastMsgIdx: meta.lastMsgIdx,
+    turnCount: msgIds.length,
+  });
   const opener = buildChapterHeader(sceneNumber, msgIds.length);
-  const finalContent = `${opener}\n\n${result.content}`;
+  const finalContent = savedMemoryContent(settings, opener, result.content);
   const entry = await createChapterEntry(book.id, meta, finalContent, comment, userId, result.keywords ?? [], settings.forceConstantEntries);
   invalidateBookCache(userId, chatId);
 
@@ -765,7 +774,7 @@ async function commitArc(
   }
   const arcTitle = isRootArc
     ? (result.title?.trim() || "Inherited Arc")
-    : deriveTitle(result, firstIdx + 1, lastIdx + 1);
+    : deriveTitle(result);
   const meta: LMBEntryMeta = {
     tier: 2,
     chatId,
@@ -785,11 +794,21 @@ async function commitArc(
     rawOutput: result.rawOutput,
     ...(isRootArc ? { isRoot: true, rootOrigin } : {}),
   };
-  const baseComment = meta.title ?? `Arc - msgs ${(firstIdx + 1)}-${(lastIdx + 1)}`;
-  const comment = `${isRootArc ? "[Root] " : ""}Arc #${sceneNumber} - ${baseComment}`;
   const arcSettings = await loadSettings(userId);
+  const comment = await formatEntryName(arcSettings, {
+    chatId,
+    userId,
+    tier: "arc",
+    title: meta.title ?? "",
+    sceneNumber,
+    firstMsgIdx: meta.firstMsgIdx,
+    lastMsgIdx: meta.lastMsgIdx,
+    sourceCount: sourceChapterEntryIds.length,
+    turnCount: msgIds.length,
+    isRoot: isRootArc,
+  });
   const arcOpener = buildArcHeader(sceneNumber, sourceChapterEntryIds.length, msgIds.length);
-  const finalArcContent = `${arcOpener}\n\n${result.content}`;
+  const finalArcContent = savedMemoryContent(arcSettings, arcOpener, result.content);
   const arcEntry = await createChapterEntry(book.id, meta, finalArcContent, comment, userId, result.keywords ?? [], arcSettings.forceConstantEntries);
   const failedSupersedes: string[] = [];
   for (const ch of selected) {
@@ -975,7 +994,7 @@ async function commitVolume(
   }
   const volumeTitle = isRootVolume
     ? (result.title?.trim() || "Inherited Volume")
-    : deriveTitle(result, firstIdx + 1, lastIdx + 1);
+    : deriveTitle(result);
   const meta: LMBEntryMeta = {
     tier: 3,
     chatId,
@@ -995,11 +1014,21 @@ async function commitVolume(
     rawOutput: result.rawOutput,
     ...(isRootVolume ? { isRoot: true, rootOrigin } : {}),
   };
-  const baseComment = meta.title ?? `Volume - msgs ${(firstIdx + 1)}-${(lastIdx + 1)}`;
-  const comment = `${isRootVolume ? "[Root] " : ""}Vol #${sceneNumber} - ${baseComment}`;
   const volumeSettings = await loadSettings(userId);
+  const comment = await formatEntryName(volumeSettings, {
+    chatId,
+    userId,
+    tier: "volume",
+    title: meta.title ?? "",
+    sceneNumber,
+    firstMsgIdx: meta.firstMsgIdx,
+    lastMsgIdx: meta.lastMsgIdx,
+    sourceCount: sourceArcEntryIds.length,
+    turnCount: msgIds.length,
+    isRoot: isRootVolume,
+  });
   const volumeOpener = buildVolumeHeader(sceneNumber, sourceArcEntryIds.length, msgIds.length);
-  const finalVolumeContent = `${volumeOpener}\n\n${result.content}`;
+  const finalVolumeContent = savedMemoryContent(volumeSettings, volumeOpener, result.content);
   const volumeEntry = await createChapterEntry(book.id, meta, finalVolumeContent, comment, userId, result.keywords ?? [], volumeSettings.forceConstantEntries);
   const failedSupersedes: string[] = [];
   for (const arc of selected) {
@@ -1299,13 +1328,13 @@ async function nextSceneNumber(chatId: string, tier: 1 | 2 | 3, userId: string):
   return max + 1;
 }
 
-function deriveTitle(result: SummarizationResult, firstMsg: number, lastMsg: number): string {
-  if (result.title && result.title.trim()) return `${result.title.trim()} (msgs ${firstMsg}-${lastMsg})`;
+function deriveTitle(result: SummarizationResult): string {
+  if (result.title && result.title.trim()) return result.title.trim();
   const firstLine = (result.content.split(/\n+/, 1)[0] || "").trim();
   const firstSentence = firstLine.split(/(?<=[.!?])\s/, 1)[0] || firstLine;
   const trimmed = firstSentence.slice(0, 60).trim();
-  if (trimmed) return `${trimmed}${trimmed.length === 60 ? "..." : ""} (msgs ${firstMsg}-${lastMsg})`;
-  return `Compressed - msgs ${firstMsg}-${lastMsg}`;
+  if (trimmed) return `${trimmed}${trimmed.length === 60 ? "..." : ""}`;
+  return "Compressed";
 }
 
 function makePreview(

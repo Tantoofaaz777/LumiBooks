@@ -76,7 +76,12 @@ var DEFAULT_SETTINGS = {
   forceConstantEntries: true,
   showAutomationToasts: true,
   memoryInjectionMode: "chat_history",
-  memoryOutletName: "lumibooks"
+  memoryOutletName: "lumibooks",
+  bookNameTemplate: `${WORLD_BOOK_NAME_PREFIX} - {{chat}}`,
+  chapterNameTemplate: "#{{sceneNumber}} - {{title}} (msgs {{scene}})",
+  arcNameTemplate: "{{rootPrefix}}Arc #{{sceneNumber}} - {{title}} (msgs {{scene}})",
+  volumeNameTemplate: "{{rootPrefix}}Volume #{{sceneNumber}} - {{title}} (msgs {{scene}})",
+  includeContentHeaders: false
 };
 function diskVersionFor(raw) {
   const v = raw && typeof raw === "object" ? raw : {};
@@ -101,8 +106,19 @@ function normalizeSettings(raw) {
     forceConstantEntries: typeof v.forceConstantEntries === "boolean" ? v.forceConstantEntries : fallback.forceConstantEntries,
     showAutomationToasts: typeof v.showAutomationToasts === "boolean" ? v.showAutomationToasts : fallback.showAutomationToasts,
     memoryInjectionMode: v.memoryInjectionMode === "outlet" ? "outlet" : "chat_history",
-    memoryOutletName: normalizeOutletName(v.memoryOutletName, fallback.memoryOutletName)
+    memoryOutletName: normalizeOutletName(v.memoryOutletName, fallback.memoryOutletName),
+    bookNameTemplate: normalizeTemplate(v.bookNameTemplate, fallback.bookNameTemplate),
+    chapterNameTemplate: normalizeTemplate(v.chapterNameTemplate, fallback.chapterNameTemplate),
+    arcNameTemplate: normalizeTemplate(v.arcNameTemplate, fallback.arcNameTemplate),
+    volumeNameTemplate: normalizeTemplate(v.volumeNameTemplate, fallback.volumeNameTemplate),
+    includeContentHeaders: typeof v.includeContentHeaders === "boolean" ? v.includeContentHeaders : fallback.includeContentHeaders
   };
+}
+function normalizeTemplate(raw, fallback) {
+  if (typeof raw !== "string")
+    return fallback;
+  const trimmed = raw.trim();
+  return trimmed || fallback;
 }
 function normalizeProfile(raw) {
   if (!raw || typeof raw !== "object")
@@ -403,6 +419,95 @@ async function mutateSettings(userId, fn) {
   });
 }
 
+// src/backend/naming.ts
+var LOCAL_MACRO_RE = /\{\{\s*([a-zA-Z][\w-]*)\s*\}\}/g;
+function sceneRange(firstMsgIdx, lastMsgIdx) {
+  if (typeof firstMsgIdx === "number" && typeof lastMsgIdx === "number" && lastMsgIdx >= firstMsgIdx) {
+    return `${firstMsgIdx + 1}-${lastMsgIdx + 1}`;
+  }
+  if (typeof firstMsgIdx === "number")
+    return String(firstMsgIdx + 1);
+  return "";
+}
+function savedMemoryContent(settings, opener, content) {
+  const clean = content.trim();
+  if (!settings.includeContentHeaders)
+    return clean;
+  return `${opener.trim()}
+
+${clean}`.trim();
+}
+function stripGeneratedHeader(content) {
+  return content.replace(/^\s*\d+(?:st|nd|rd|th) Summary (?:Chapter|ARC|VOLUME) Containing [^\n]*\n{2,}/i, "").trim();
+}
+async function formatEntryName(settings, ctx) {
+  const template = ctx.tier === "volume" ? settings.volumeNameTemplate : ctx.tier === "arc" ? settings.arcNameTemplate : settings.chapterNameTemplate;
+  const fallback = fallbackEntryName(ctx);
+  return resolveTemplate(template, ctx, fallback);
+}
+async function formatBookName(settings, chatId, userId, chatName) {
+  return resolveTemplate(settings.bookNameTemplate, {
+    chatId,
+    userId,
+    tier: "chapter",
+    title: chatName?.trim() || chatId.slice(0, 8),
+    sceneNumber: 1,
+    chatName
+  }, bookNameFor(chatName, chatId));
+}
+async function resolveTemplate(template, ctx, fallback) {
+  const local = applyLocalMacros(template, ctx).trim();
+  const candidate = local || fallback;
+  try {
+    const resolved = await spindle.macros.resolve(candidate, {
+      chatId: ctx.chatId,
+      userId: ctx.userId,
+      commit: false
+    });
+    return resolved.text.trim() || fallback;
+  } catch (err) {
+    warn(`name macro resolve failed: ${describeError(err)}`);
+    return candidate;
+  }
+}
+function applyLocalMacros(template, ctx) {
+  const range = sceneRange(ctx.firstMsgIdx, ctx.lastMsgIdx);
+  const chatLabel = ctx.chatName?.trim() || ctx.chatId.slice(0, 8);
+  const values = {
+    scene: range || String(ctx.sceneNumber),
+    scenenumber: String(ctx.sceneNumber),
+    title: ctx.title.trim() || fallbackTitle(ctx),
+    tier: ctx.tier,
+    chat: chatLabel,
+    chatname: chatLabel,
+    rootprefix: ctx.isRoot ? "[Root] " : "",
+    turns: typeof ctx.turnCount === "number" ? String(ctx.turnCount) : "",
+    sources: typeof ctx.sourceCount === "number" ? String(ctx.sourceCount) : ""
+  };
+  return template.replace(LOCAL_MACRO_RE, (match, key) => {
+    const value = values[key.toLowerCase()];
+    return value === undefined ? match : value;
+  });
+}
+function fallbackEntryName(ctx) {
+  const prefix = ctx.isRoot ? "[Root] " : "";
+  const title = ctx.title.trim() || fallbackTitle(ctx);
+  const range = sceneRange(ctx.firstMsgIdx, ctx.lastMsgIdx);
+  const suffix = range ? ` (msgs ${range})` : "";
+  if (ctx.tier === "chapter")
+    return `#${ctx.sceneNumber} - ${title}${suffix}`;
+  if (ctx.tier === "arc")
+    return `${prefix}Arc #${ctx.sceneNumber} - ${title}${suffix}`;
+  return `${prefix}Volume #${ctx.sceneNumber} - ${title}${suffix}`;
+}
+function fallbackTitle(ctx) {
+  if (ctx.tier === "volume")
+    return "Volume";
+  if (ctx.tier === "arc")
+    return "Arc";
+  return "Chapter";
+}
+
 // src/backend/world-book.ts
 var PAGE_LIMIT = 200;
 var BOOK_INDEX_CACHE_TTL_MS = 4000;
@@ -527,8 +632,10 @@ async function doEnsureBookForChat(chatId, userId) {
     error(`book mismatch: chat ${chatId.slice(0, 8)} claims book ${claim} but it could not be resolved OR recovered; ` + `creating a NEW book. userId=${userId.slice(0, 6)}`);
     bookAnomalyCb?.(userId, "error", "Memoria couldn't find this chat's old notebook and started a new one, older chapters may live in a separate notebook");
   }
+  const settings = await loadSettings(userId);
+  const bookName = await formatBookName(settings, chatId, userId, chat.name);
   const book = await spindle.world_books.create({
-    name: bookNameFor(chat.name, chatId),
+    name: bookName,
     description: "Memoria's shelf for this chat. Chapters and arcs live here.",
     metadata: {
       lumibooks_chat_id: chatId,
@@ -2664,8 +2771,10 @@ async function cloneShelfForFork(forkChatId, forkChatName, parentChatId, userId)
     }
     return { msgIds: ids, firstMsgIdx: firstIdx, lastMsgIdx: lastIdx, extra: { chatId: forkChatId } };
   };
+  const settings = await loadSettings(userId);
+  const newBookName = await formatBookName(settings, forkChatId, userId, forkChatName);
   const newBook = await spindle.world_books.create({
-    name: bookNameFor(forkChatName, forkChatId),
+    name: newBookName,
     description: "Memoria's shelf for this chat. Chapters and arcs live here.",
     metadata: {
       lumibooks_chat_id: forkChatId,
@@ -2684,7 +2793,6 @@ async function cloneShelfForFork(forkChatId, forkChatName, parentChatId, userId)
   }
   invalidateBookCache(userId, forkChatId);
   try {
-    const settings = await loadSettings(userId);
     const profile = settings.profiles.find((p) => p.id === settings.activeProfileId);
     const desiredHidden = profile ? profile.hideCoveredMessages : true;
     await resyncVisibility(forkChatId, userId, desiredHidden);
@@ -3101,7 +3209,7 @@ async function commitChapter(chatId, profile, userId, window, result, firstIdx, 
     const book = await ensureBookForChat(chatId, userId);
     const replacedEntry = replacesEntryId ? freshEntries.find((e) => e.raw.id === replacesEntryId) : undefined;
     const sceneNumber = typeof replacedEntry?.meta.sceneNumber === "number" ? replacedEntry.meta.sceneNumber : await nextSceneNumber(chatId, 1, userId);
-    const title = fromPreview ? result.title?.trim() || `Chapter - msgs ${firstIdx + 1}-${lastIdx + 1}` : deriveTitle(result, firstIdx + 1, lastIdx + 1);
+    const title = fromPreview ? result.title?.trim() || `Chapter ${firstIdx + 1}-${lastIdx + 1}` : deriveTitle(result);
     const msgIds = window.map((m) => m.id);
     const meta = {
       tier: 1,
@@ -3120,13 +3228,19 @@ async function commitChapter(chatId, profile, userId, window, result, firstIdx, 
       sceneNumber,
       rawOutput: result.rawOutput
     };
-    const baseComment = meta.title ?? `Chapter - msgs ${firstIdx + 1}-${lastIdx + 1}`;
-    const comment = `#${sceneNumber} - ${baseComment}`;
     const settings = await loadSettings(userId);
+    const comment = await formatEntryName(settings, {
+      chatId,
+      userId,
+      tier: "chapter",
+      title: meta.title ?? "",
+      sceneNumber,
+      firstMsgIdx: meta.firstMsgIdx,
+      lastMsgIdx: meta.lastMsgIdx,
+      turnCount: msgIds.length
+    });
     const opener = buildChapterHeader(sceneNumber, msgIds.length);
-    const finalContent = `${opener}
-
-${result.content}`;
+    const finalContent = savedMemoryContent(settings, opener, result.content);
     const entry = await createChapterEntry(book.id, meta, finalContent, comment, userId, result.keywords ?? [], settings.forceConstantEntries);
     invalidateBookCache(userId, chatId);
     if (replacesEntryId) {
@@ -3319,7 +3433,7 @@ async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, re
       else if (lastIdx < firstIdx)
         lastIdx = firstIdx;
     }
-    const arcTitle = isRootArc ? result.title?.trim() || "Inherited Arc" : deriveTitle(result, firstIdx + 1, lastIdx + 1);
+    const arcTitle = isRootArc ? result.title?.trim() || "Inherited Arc" : deriveTitle(result);
     const meta = {
       tier: 2,
       chatId,
@@ -3339,13 +3453,21 @@ async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, re
       rawOutput: result.rawOutput,
       ...isRootArc ? { isRoot: true, rootOrigin } : {}
     };
-    const baseComment = meta.title ?? `Arc - msgs ${firstIdx + 1}-${lastIdx + 1}`;
-    const comment = `${isRootArc ? "[Root] " : ""}Arc #${sceneNumber} - ${baseComment}`;
     const arcSettings = await loadSettings(userId);
+    const comment = await formatEntryName(arcSettings, {
+      chatId,
+      userId,
+      tier: "arc",
+      title: meta.title ?? "",
+      sceneNumber,
+      firstMsgIdx: meta.firstMsgIdx,
+      lastMsgIdx: meta.lastMsgIdx,
+      sourceCount: sourceChapterEntryIds.length,
+      turnCount: msgIds.length,
+      isRoot: isRootArc
+    });
     const arcOpener = buildArcHeader(sceneNumber, sourceChapterEntryIds.length, msgIds.length);
-    const finalArcContent = `${arcOpener}
-
-${result.content}`;
+    const finalArcContent = savedMemoryContent(arcSettings, arcOpener, result.content);
     const arcEntry = await createChapterEntry(book.id, meta, finalArcContent, comment, userId, result.keywords ?? [], arcSettings.forceConstantEntries);
     const failedSupersedes = [];
     for (const ch of selected) {
@@ -3490,7 +3612,7 @@ async function commitVolume(chatId, userId, selected, result, firstIdx, lastIdx,
       else if (lastIdx < firstIdx)
         lastIdx = firstIdx;
     }
-    const volumeTitle = isRootVolume ? result.title?.trim() || "Inherited Volume" : deriveTitle(result, firstIdx + 1, lastIdx + 1);
+    const volumeTitle = isRootVolume ? result.title?.trim() || "Inherited Volume" : deriveTitle(result);
     const meta = {
       tier: 3,
       chatId,
@@ -3510,13 +3632,21 @@ async function commitVolume(chatId, userId, selected, result, firstIdx, lastIdx,
       rawOutput: result.rawOutput,
       ...isRootVolume ? { isRoot: true, rootOrigin } : {}
     };
-    const baseComment = meta.title ?? `Volume - msgs ${firstIdx + 1}-${lastIdx + 1}`;
-    const comment = `${isRootVolume ? "[Root] " : ""}Vol #${sceneNumber} - ${baseComment}`;
     const volumeSettings = await loadSettings(userId);
+    const comment = await formatEntryName(volumeSettings, {
+      chatId,
+      userId,
+      tier: "volume",
+      title: meta.title ?? "",
+      sceneNumber,
+      firstMsgIdx: meta.firstMsgIdx,
+      lastMsgIdx: meta.lastMsgIdx,
+      sourceCount: sourceArcEntryIds.length,
+      turnCount: msgIds.length,
+      isRoot: isRootVolume
+    });
     const volumeOpener = buildVolumeHeader(sceneNumber, sourceArcEntryIds.length, msgIds.length);
-    const finalVolumeContent = `${volumeOpener}
-
-${result.content}`;
+    const finalVolumeContent = savedMemoryContent(volumeSettings, volumeOpener, result.content);
     const volumeEntry = await createChapterEntry(book.id, meta, finalVolumeContent, comment, userId, result.keywords ?? [], volumeSettings.forceConstantEntries);
     const failedSupersedes = [];
     for (const arc of selected) {
@@ -3748,15 +3878,15 @@ async function nextSceneNumber(chatId, tier, userId) {
   }
   return max + 1;
 }
-function deriveTitle(result, firstMsg, lastMsg) {
+function deriveTitle(result) {
   if (result.title && result.title.trim())
-    return `${result.title.trim()} (msgs ${firstMsg}-${lastMsg})`;
+    return result.title.trim();
   const firstLine = (result.content.split(/\n+/, 1)[0] || "").trim();
   const firstSentence = firstLine.split(/(?<=[.!?])\s/, 1)[0] || firstLine;
   const trimmed = firstSentence.slice(0, 60).trim();
   if (trimmed)
-    return `${trimmed}${trimmed.length === 60 ? "..." : ""} (msgs ${firstMsg}-${lastMsg})`;
-  return `Compressed - msgs ${firstMsg}-${lastMsg}`;
+    return `${trimmed}${trimmed.length === 60 ? "..." : ""}`;
+  return "Compressed";
 }
 function makePreview(kind, chatId, window, result, firstIdx, lastIdx, replacesEntryId) {
   return {
@@ -4194,6 +4324,53 @@ async function syncProjectionEntry(chatId, userId) {
   }
 }
 
+// src/backend/naming-sync.ts
+async function syncNamingForChat(chatId, userId) {
+  const settings = await loadSettings(userId);
+  const bookId = await findBookForChat(chatId, userId);
+  if (!bookId)
+    return;
+  const chat = await spindle.chats.get(chatId, userId).catch(() => null);
+  const book = await spindle.world_books.get(bookId, userId).catch(() => null);
+  if (book) {
+    const nextName = await formatBookName(settings, chatId, userId, chat?.name);
+    if (nextName && nextName !== book.name) {
+      await spindle.world_books.update(book.id, { name: nextName }, userId).catch((err) => {
+        warn(`book rename failed: ${describeError(err)}`);
+      });
+    }
+  }
+  const entries = await listLmbEntries(chatId, userId).catch(() => []);
+  for (const entry of entries) {
+    const tier = entry.meta.tier === 3 ? "volume" : entry.meta.tier === 2 ? "arc" : "chapter";
+    const nextComment = await formatEntryName(settings, {
+      chatId,
+      userId,
+      tier,
+      title: entry.meta.title ?? "",
+      sceneNumber: entry.meta.sceneNumber ?? 1,
+      firstMsgIdx: entry.meta.firstMsgIdx,
+      lastMsgIdx: entry.meta.lastMsgIdx,
+      sourceCount: entry.meta.sourceChapterEntryIds?.length,
+      turnCount: entry.meta.msgIds.length,
+      isRoot: entry.meta.isRoot
+    });
+    const rawContent = entry.raw.content || "";
+    const nextContent = settings.includeContentHeaders ? rawContent : stripGeneratedHeader(rawContent);
+    const patch = {};
+    if (nextComment && nextComment !== entry.raw.comment)
+      patch.comment = nextComment;
+    if (nextContent !== rawContent)
+      patch.content = nextContent;
+    if (Object.keys(patch).length === 0)
+      continue;
+    await updateEntry(entry.raw.id, patch, userId).catch((err) => {
+      warn(`entry rename failed for ${entry.raw.id}: ${describeError(err)}`);
+    });
+  }
+  invalidateBookCache(userId, chatId);
+}
+
 // src/backend/index.ts
 async function notify(userId, tone, text, automation = false) {
   try {
@@ -4218,6 +4395,9 @@ async function doPushState(userId, chatId) {
       const active = await spindle.chats.getActive(userId).catch(() => null);
       if (active && active.id !== chatId)
         return;
+      await syncNamingForChat(chatId, userId).catch((err) => {
+        warn(`naming sync before state failed: ${describeError(err)}`);
+      });
       await syncProjectionEntry(chatId, userId).catch((err) => {
         warn(`projection sync before state failed: ${describeError(err)}`);
       });

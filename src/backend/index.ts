@@ -64,6 +64,7 @@ import { registerHookEndpoints } from "./hooks";
 import { buildState } from "./state";
 import { parseStmbPresetExport } from "./presets";
 import { syncProjectionEntry } from "./projection";
+import { syncNamingForChat } from "./naming-sync";
 
 async function notify(
   userId: string,
@@ -93,6 +94,9 @@ async function doPushState(userId: string, chatId?: string | null): Promise<void
     if (chatId) {
       const active = await spindle.chats.getActive(userId).catch(() => null);
       if (active && active.id !== chatId) return;
+      await syncNamingForChat(chatId, userId).catch((err) => {
+        warn(`naming sync before state failed: ${describeError(err)}`);
+      });
       await syncProjectionEntry(chatId, userId).catch((err) => {
         warn(`projection sync before state failed: ${describeError(err)}`);
       });

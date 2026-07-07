@@ -80,6 +80,11 @@ export interface LMBSettings {
   showAutomationToasts: boolean;
   memoryInjectionMode: MemoryInjectionMode;
   memoryOutletName: string;
+  bookNameTemplate: string;
+  chapterNameTemplate: string;
+  arcNameTemplate: string;
+  volumeNameTemplate: string;
+  includeContentHeaders: boolean;
 }
 
 export interface LMBEntryMeta {
@@ -179,6 +184,11 @@ export const DEFAULT_SETTINGS: LMBSettings = {
   showAutomationToasts: true,
   memoryInjectionMode: "chat_history",
   memoryOutletName: "lumibooks",
+  bookNameTemplate: `${WORLD_BOOK_NAME_PREFIX} - {{chat}}`,
+  chapterNameTemplate: "#{{sceneNumber}} - {{title}} (msgs {{scene}})",
+  arcNameTemplate: "{{rootPrefix}}Arc #{{sceneNumber}} - {{title}} (msgs {{scene}})",
+  volumeNameTemplate: "{{rootPrefix}}Volume #{{sceneNumber}} - {{title}} (msgs {{scene}})",
+  includeContentHeaders: false,
 };
 
 export function diskVersionFor(raw: Partial<LMBSettings> | null | undefined): number {
@@ -212,7 +222,18 @@ export function normalizeSettings(raw: Partial<LMBSettings> | null | undefined):
     showAutomationToasts: typeof v.showAutomationToasts === "boolean" ? v.showAutomationToasts : fallback.showAutomationToasts,
     memoryInjectionMode: v.memoryInjectionMode === "outlet" ? "outlet" : "chat_history",
     memoryOutletName: normalizeOutletName(v.memoryOutletName, fallback.memoryOutletName),
+    bookNameTemplate: normalizeTemplate(v.bookNameTemplate, fallback.bookNameTemplate),
+    chapterNameTemplate: normalizeTemplate(v.chapterNameTemplate, fallback.chapterNameTemplate),
+    arcNameTemplate: normalizeTemplate(v.arcNameTemplate, fallback.arcNameTemplate),
+    volumeNameTemplate: normalizeTemplate(v.volumeNameTemplate, fallback.volumeNameTemplate),
+    includeContentHeaders: typeof v.includeContentHeaders === "boolean" ? v.includeContentHeaders : fallback.includeContentHeaders,
   };
+}
+
+export function normalizeTemplate(raw: unknown, fallback: string): string {
+  if (typeof raw !== "string") return fallback;
+  const trimmed = raw.trim();
+  return trimmed || fallback;
 }
 
 export function normalizeProfile(raw: unknown): LMBProfile | null {

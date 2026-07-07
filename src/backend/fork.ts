@@ -1,11 +1,11 @@
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
-import { bookNameFor } from "../shared";
 import { findBookForChat, invalidateBookCache, listLmbEntries } from "./world-book";
 import { copyLmbEntries, type CopyTransform } from "./book-copy";
 import { loadSettings } from "./storage";
 import { resyncVisibility } from "./coverage";
 import { describeError, info, warn } from "./runtime";
+import { formatBookName } from "./naming";
 
 
 const FORK_ADOPTED_FLAG = "lumibooks_fork_adopted";
@@ -152,9 +152,11 @@ async function cloneShelfForFork(
     return { msgIds: ids, firstMsgIdx: firstIdx, lastMsgIdx: lastIdx, extra: { chatId: forkChatId } };
   };
 
+  const settings = await loadSettings(userId);
+  const newBookName = await formatBookName(settings, forkChatId, userId, forkChatName);
   const newBook = await spindle.world_books.create(
     {
-      name: bookNameFor(forkChatName, forkChatId),
+      name: newBookName,
       description: "Memoria's shelf for this chat. Chapters and arcs live here.",
       metadata: {
         lumibooks_chat_id: forkChatId,
@@ -178,7 +180,6 @@ async function cloneShelfForFork(
   invalidateBookCache(userId, forkChatId);
 
   try {
-    const settings = await loadSettings(userId);
     const profile = settings.profiles.find((p) => p.id === settings.activeProfileId);
     const desiredHidden = profile ? profile.hideCoveredMessages : true;
     await resyncVisibility(forkChatId, userId, desiredHidden);

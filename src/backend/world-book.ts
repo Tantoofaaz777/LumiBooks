@@ -2,8 +2,10 @@ declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 import type { WorldBookDTO, WorldBookEntryDTO } from "lumiverse-spindle-types";
 import type { LMBEntryMeta } from "../shared";
-import { EXTENSION_KEY, WORLD_BOOK_NAME_PREFIX, bookNameFor, normalizeEntryMeta } from "../shared";
+import { EXTENSION_KEY, WORLD_BOOK_NAME_PREFIX, normalizeEntryMeta } from "../shared";
+import { formatBookName } from "./naming";
 import { describeError, error, warn } from "./runtime";
+import { loadSettings } from "./storage";
 
 const PAGE_LIMIT = 200;
 const BOOK_INDEX_CACHE_TTL_MS = 4000;
@@ -166,9 +168,11 @@ async function doEnsureBookForChat(chatId: string, userId: string): Promise<Worl
     );
   }
 
+  const settings = await loadSettings(userId);
+  const bookName = await formatBookName(settings, chatId, userId, chat.name);
   const book = await spindle.world_books.create(
     {
-      name: bookNameFor(chat.name, chatId),
+      name: bookName,
       description: "Memoria's shelf for this chat. Chapters and arcs live here.",
       metadata: {
         lumibooks_chat_id: chatId,
@@ -341,7 +345,7 @@ export async function applyConstantToAllLmbEntries(userId: string, constant: boo
 
 export async function updateEntry(
   entryId: string,
-  patch: { content?: string; comment?: string; extensions?: Record<string, unknown> },
+  patch: { content?: string; comment?: string; extensions?: Record<string, unknown>; keywords?: string[] },
   userId: string,
 ): Promise<WorldBookEntryDTO> {
   return spindle.world_books.entries.update(entryId, patch, userId);
