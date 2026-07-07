@@ -46,7 +46,7 @@ export async function resolveConnection(
   const modelStr = typeof picked.model === "string" ? picked.model : "";
   if (!modelStr.trim()) {
     throw new FatalSummarizerError(
-      `Connection "${picked.name || picked.id}" has no model set. Open the connection settings and pick a model.`,
+      `Connection "${picked.name || picked.id}" has no model set, pick one in its settings`,
     );
   }
   return picked;
@@ -222,12 +222,12 @@ async function runStreamingGeneration(
       }
     }
     if (externalAborted) throw new AbortedSummarizerError();
-    if (!aggregated.trim()) throw new Error("Stream ended without a completion marker");
+    if (!aggregated.trim()) throw new Error("The stream ended before completing");
     return { content: aggregated, usage };
   } catch (err) {
     if (externalAborted) throw new AbortedSummarizerError();
     if (ttftFired) {
-      throw new Error(`Generation stalled: no token within ${Math.round(ttftMs / 1000)}s. The provider may be slow or unreachable.`);
+      throw new Error(`No token within ${Math.round(ttftMs / 1000)}s, the provider may be slow or unreachable`);
     }
     throw err;
   } finally {
@@ -527,7 +527,7 @@ export async function summarizeChapter(
   const processed = await applySelectedRegex(rawText, profile.regexIncomingScriptIds, userId);
 
   const parsed = parseSummaryJson(processed);
-  if (!parsed.content.trim()) throw new Error("Parsed summary content was empty");
+  if (!parsed.content.trim()) throw new Error("The summary came back empty");
   return {
     rawOutput: rawText,
     title: parsed.title,
@@ -597,7 +597,7 @@ export async function summarizeArc(
   if (!rawText) throw new Error("Empty model output");
   const processed = await applySelectedRegex(rawText, profile.regexIncomingScriptIds, userId);
   const parsed = parseSummaryJson(processed);
-  if (!parsed.content.trim()) throw new Error("Parsed arc content was empty");
+  if (!parsed.content.trim()) throw new Error("The arc summary came back empty");
   return {
     rawOutput: rawText,
     title: parsed.title,
@@ -641,9 +641,9 @@ function parseSummaryJson(raw: string): ParsedSummary {
     return { title, opener, content: contentRaw, keywords, shortComment: sc };
   }
   if (sawParseableObject) {
-    throw new Error("Model returned JSON but no string `content` field was found");
+    throw new Error("The model's JSON had no content field");
   }
-  throw new Error("Model output was not valid JSON");
+  throw new Error("The model didn't return valid JSON");
 }
 
 function stripThinkBlocks(raw: string): string {

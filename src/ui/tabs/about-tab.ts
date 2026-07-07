@@ -63,6 +63,13 @@ function renderExtras(
   }
 
   sec.body.appendChild(checkbox({
+    checked: state.settings.showAutomationToasts,
+    label: "Automation toasts",
+    hint: "When off, Memoria's background runs stay quiet. Errors and your own actions still toast.",
+    onChange: (v) => send({ type: "save_settings", patch: { showAutomationToasts: v }, chatId: state.activeChatId }),
+  }));
+
+  sec.body.appendChild(checkbox({
     checked: state.settings.forceConstantEntries,
     label: "Force constant entries",
     hint: "When on, every LumiBooks lorebook entry (current and future) is marked constant so it activates without keyword matching. Toggling re-flips every existing LumiBooks entry across all chats.",

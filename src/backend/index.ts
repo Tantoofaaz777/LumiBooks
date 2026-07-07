@@ -34,7 +34,7 @@ import {
   reassertChatBinding,
   registerBookAnomalyCallback,
 } from "./world-book";
-import { buildInjection } from "./injection";
+import { buildInjection, registerInjectionAnomalyCallback } from "./injection";
 import {
   abortBusy,
   acceptPreview,
@@ -61,6 +61,24 @@ import { invalidateRegexCache } from "./regex";
 import { registerHookEndpoints } from "./hooks";
 import { buildState } from "./state";
 import { parseStmbPresetExport } from "./presets";
+
+async function notify(
+  userId: string,
+  tone: "success" | "info" | "warn" | "error",
+  text: string,
+  automation = false,
+): Promise<void> {
+  try {
+    if (automation && tone !== "error") {
+      const settings = await loadSettings(userId).catch(() => null);
+      if (settings && !settings.showAutomationToasts) return;
+    }
+    hostToast(userId, tone, text);
+    send({ type: "toast", tone, text }, userId);
+  } catch (err) {
+    warn(`toast delivery failed: ${describeError(err)}`);
+  }
+}
 
 const PUSH_DEBOUNCE_MS = 30;
 const pushTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -113,9 +131,8 @@ registerPipelineCallbacks({
   onBusyChange(userId, entries) {
     send({ type: "busy", entries }, userId);
   },
-  onToast(userId, tone, text) {
-    hostToast(userId, tone, text);
-    send({ type: "toast", tone, text }, userId);
+  onToast(userId, tone, text, automation) {
+    void notify(userId, tone, text, automation === true);
   },
   onStateChange(userId, chatId) {
     void pushState(userId, chatId);
@@ -245,11 +262,7 @@ async function handleExternalEntryDeletion(userId: string, bookId: string, isBoo
     const desiredHidden = profile ? profile.hideCoveredMessages : true;
     const { unhidden } = await resyncVisibility(chatId, userId, desiredHidden);
     if (unhidden > 0) {
-      send({
-        type: "toast",
-        tone: "info",
-        text: `Memoria unhid ${unhidden} message${unhidden === 1 ? "" : "s"} after an external lorebook change`,
-      }, userId);
+      await notify(userId, "info", `Memoria unhid ${unhidden} message${unhidden === 1 ? "" : "s"} after an external lorebook change`);
     }
   } catch (err) {
     warn(`external deletion resync failed: ${describeError(err)}`);
@@ -276,9 +289,8 @@ async function retryLastFailure(
     const ids = await collectActiveChapterIds(chatId, userId);
     if (ids.length === 0) {
       clearLastFailure(userId, chatId);
-      const msg = "Memoria has no active chapters left to retry the arc against.";
-      hostToast(userId, "warn", msg);
-      send({ type: "toast", tone: "warn", text: msg }, userId);
+      const msg = "Memoria has no chapters left to retry the arc";
+      await notify(userId, "warn", msg);
       return;
     }
     await createArcFromChapters(chatId, ids, profile, settings, userId);
@@ -392,7 +404,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
           return { ...cur, profiles, activeProfileId };
         });
         if (warned) {
-          send({ type: "toast", tone: "warn", text: "Memoria keeps at least one profile" }, userId);
+          await notify(userId, "warn", "Memoria keeps at least one profile");
         }
         await pushState(userId, msg.chatId);
         break;
@@ -412,14 +424,14 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
         if (!profile) break;
         if (getBusy(userId).some((b) => b.kind === "chapter" && b.chatId === msg.chatId)) {
-          send({ type: "toast", tone: "warn", text: "Memoria is already filing a chapter" }, userId);
+          await notify(userId, "warn", "Memoria is already filing a chapter");
           break;
         }
         const chapterMessages = await spindle.chat.getMessages(msg.chatId);
         const chapterCoverage = await buildCoverage(msg.chatId, userId);
         const chapterStats = computeCoverageStats(chapterMessages, chapterCoverage, profile);
         if (!chapterStats.lagSatisfied || !chapterStats.windowAvailable) {
-          send({ type: "toast", tone: "info", text: "Your story needs more messages for me to generate a new entry~" }, userId);
+          await notify(userId, "info", "Your story needs more messages for me to generate a new entry~");
           break;
         }
         await createChapterAuto(msg.chatId, profile, cur, userId);
@@ -433,7 +445,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
         if (!profile) break;
         if (getBusy(userId).some((b) => b.kind === "chapter" && b.chatId === msg.chatId)) {
-          send({ type: "toast", tone: "warn", text: "Memoria is already filing a chapter" }, userId);
+          await notify(userId, "warn", "Memoria is already filing a chapter");
           break;
         }
         const rangeMessages = await spindle.chat.getMessages(msg.chatId);
@@ -463,7 +475,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
         if (!profile) break;
         if (getBusy(userId).some((b) => b.kind === "chapter" && b.chatId === msg.chatId)) {
-          send({ type: "toast", tone: "warn", text: "Memoria is already filing a chapter" }, userId);
+          await notify(userId, "warn", "Memoria is already filing a chapter");
           break;
         }
         await drainChapterBacklog(msg.chatId, profile, cur, userId);
@@ -477,7 +489,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
         if (!profile) break;
         if (getBusy(userId).some((b) => b.kind === "arc" && b.chatId === msg.chatId)) {
-          send({ type: "toast", tone: "warn", text: "Memoria is already binding an arc" }, userId);
+          await notify(userId, "warn", "Memoria is already binding an arc");
           break;
         }
         const ids = await collectActiveChapterIds(msg.chatId, userId);
@@ -491,7 +503,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
         if (!profile) break;
         if (getBusy(userId).some((b) => b.kind === "arc" && b.chatId === msg.chatId)) {
-          send({ type: "toast", tone: "warn", text: "Memoria is already binding an arc" }, userId);
+          await notify(userId, "warn", "Memoria is already binding an arc");
           break;
         }
         await createArcFromChapters(msg.chatId, msg.chapterEntryIds, profile, cur, userId);
@@ -504,7 +516,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
         if (!profile) break;
         if (getBusy(userId).some((b) => b.kind === "arc" && b.chatId === msg.chatId)) {
-          send({ type: "toast", tone: "warn", text: "Memoria is already binding an arc" }, userId);
+          await notify(userId, "warn", "Memoria is already binding an arc");
           break;
         }
         await drainArcBacklog(msg.chatId, profile, cur, userId);
@@ -555,7 +567,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const entries = await listLmbEntries(msg.chatId, userId);
         const entry = entries.find((e) => e.raw.id === msg.entryId);
         if (!entry) {
-          send({ type: "toast", tone: "warn", text: "Memoria can't find that entry to release" }, userId);
+          await notify(userId, "warn", "Memoria can't find that entry to release");
           break;
         }
         if (entry.meta.tier === 2 && Array.isArray(entry.meta.sourceChapterEntryIds)) {
@@ -579,7 +591,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         if (toUnhide.length > 0) {
           await unhideCoveredMessages(msg.chatId, toUnhide, userId).catch(() => {});
         }
-        send({ type: "toast", tone: "success", text: "Memoria released the entry to your lorebook" }, userId);
+        await notify(userId, "success", "Memoria released the entry to your lorebook");
         await pushState(userId, msg.chatId);
         break;
       }
@@ -591,16 +603,16 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const entries = await listLmbEntries(msg.chatId, userId);
         const entry = entries.find((e) => e.raw.id === msg.entryId);
         if (!entry) {
-          send({ type: "toast", tone: "warn", text: "Memoria can't find that entry to regenerate" }, userId);
+          await notify(userId, "warn", "Memoria can't find that entry to regenerate");
           break;
         }
         const busyKind = entry.meta.tier === 2 ? "arc" : "chapter";
         if (getBusy(userId).some((b) => b.kind === busyKind && b.chatId === msg.chatId)) {
-          send({ type: "toast", tone: "warn", text: `Memoria is already busy with a ${busyKind}` }, userId);
+          await notify(userId, "warn", `Memoria is already busy with a ${busyKind}`);
           break;
         }
         if (entry.meta.isRoot && entry.meta.tier === 1) {
-          send({ type: "toast", tone: "warn", text: "Memoria can't regenerate an inherited chapter - its original messages live in another chat" }, userId);
+          await notify(userId, "warn", "Memoria can't regenerate inherited chapters");
           break;
         }
         const isArc = entry.meta.tier === 2;
@@ -609,11 +621,11 @@ spindle.onFrontendMessage(async (raw, userId) => {
           ? entry.meta.sourceChapterEntryIds.slice()
           : [];
         if (isArc && chapterIds.length === 0) {
-          send({ type: "toast", tone: "warn", text: "Memoria has no chapter sources to regenerate this arc from" }, userId);
+          await notify(userId, "warn", "Memoria has no chapter sources to regenerate this arc from");
           break;
         }
         if (!isArc && msgIds.length === 0) {
-          send({ type: "toast", tone: "warn", text: "Memoria has no messages to regenerate this chapter from" }, userId);
+          await notify(userId, "warn", "Memoria has no messages to regenerate this chapter from");
           break;
         }
         if (!isArc) {
@@ -624,11 +636,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
             const blockerEntryId = otherCoverage.coveredBy.get(blockingIds[0]!);
             const blocker = otherEntries.find((e) => e.raw.id === blockerEntryId);
             const blockerLabel = blocker?.meta.tier === 2 ? "an arc" : "another entry";
-            send({
-              type: "toast",
-              tone: "warn",
-              text: `Memoria can't regenerate this chapter, its messages are bound into ${blockerLabel}. Release/delete the arc first.`,
-            }, userId);
+            await notify(userId, "warn", `These messages are bound into ${blockerLabel}, release or delete it first`);
             break;
           }
         }
@@ -666,7 +674,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         } catch (err) {
           const text = describeError(err);
           warn(`dry_run_chapter failed: ${text}`);
-          send({ type: "toast", tone: "error", text: `Dry run failed: ${text}` }, userId);
+          await notify(userId, "error", `Dry run failed: ${text}`);
         }
         break;
       }
@@ -681,7 +689,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         } catch (err) {
           const text = describeError(err);
           warn(`dry_run_arc failed: ${text}`);
-          send({ type: "toast", tone: "error", text: `Dry run failed: ${text}` }, userId);
+          await notify(userId, "error", `Dry run failed: ${text}`);
         }
         break;
       }
@@ -689,7 +697,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
       case "abort_busy": {
         const aborted = abortBusy(userId, msg.chatId, msg.kind);
         if (!aborted) {
-          send({ type: "toast", tone: "warn", text: "Memoria is not in the middle of anything to abort" }, userId);
+          await notify(userId, "warn", "Memoria is not in the middle of anything to abort");
         }
         break;
       }
@@ -701,9 +709,9 @@ spindle.onFrontendMessage(async (raw, userId) => {
           return 0;
         });
         const text = updated === 0
-          ? `Memoria set future entries to ${msg.value ? "constant" : "keyword-triggered"} (no existing entries needed updating)`
+          ? `Future entries will be ${msg.value ? "constant" : "keyword-triggered"}`
           : `Memoria flipped ${updated} entr${updated === 1 ? "y" : "ies"} to ${msg.value ? "constant" : "keyword-triggered"}`;
-        send({ type: "toast", tone: "info", text }, userId);
+        await notify(userId, "info", text);
         await pushState(userId, msg.chatId);
         break;
       }
@@ -717,7 +725,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const text = total === 0
           ? "Memoria's shelf is already aligned, nya"
           : `Memoria resynced ${total} message${total === 1 ? "" : "s"} (${hidden} hidden, ${unhidden} unhidden)`;
-        send({ type: "toast", tone: "info", text }, userId);
+        await notify(userId, "info", text);
         await pushState(userId, msg.chatId);
         break;
       }
@@ -731,7 +739,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
       case "import_preset": {
         const parsed = parseStmbPresetExport(msg.raw, msg.category);
         if (parsed.length === 0) {
-          send({ type: "toast", tone: "warn", text: "Memoria found no usable presets in that file" }, userId);
+          await notify(userId, "warn", "Memoria found no usable presets in that file");
           break;
         }
         await mutateSettings(userId, (cur) => {
@@ -744,7 +752,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
           }
           return { ...cur, customPresets: merged };
         });
-        send({ type: "toast", tone: "success", text: `Memoria imported ${parsed.length} preset${parsed.length === 1 ? "" : "s"}` }, userId);
+        await notify(userId, "success", `Memoria imported ${parsed.length} preset${parsed.length === 1 ? "" : "s"}`);
         await pushState(userId, msg.chatId);
         break;
       }
@@ -807,21 +815,21 @@ spindle.onFrontendMessage(async (raw, userId) => {
 
       case "rebase_root": {
         if (getBusy(userId).some((b) => b.chatId === msg.chatId)) {
-          send({ type: "toast", tone: "warn", text: "Memoria is busy - let her finish before rebasing" }, userId);
+          await notify(userId, "warn", "Memoria is busy, wait for her to finish");
           break;
         }
         const result = await rebaseRoot(msg.chatId, msg.sourceChatId, userId);
         if (!result.ok) {
           const text = result.reason === "has_own"
-            ? "This chat already has its own memories - use Rebuild to reseed (it will rewrite them)."
+            ? "This chat already has memories, use Rebuild instead"
             : result.reason === "empty_source"
-              ? "That chat has no memories to inherit."
+              ? "That chat has no memories to inherit"
               : result.reason === "busy"
-                ? "Memoria is already rebasing this chat - hold on."
-                : "Memoria can't rebase a chat onto itself.";
-          send({ type: "toast", tone: "warn", text }, userId);
+                ? "Memoria is already rebasing this chat"
+                : "Memoria can't rebase a chat onto itself";
+          await notify(userId, "warn", text);
         } else {
-          send({ type: "toast", tone: "success", text: `Memoria seeded ${result.count} inherited memor${result.count === 1 ? "y" : "ies"} before the greeting` }, userId);
+          await notify(userId, "success", `Memoria seeded ${result.count} inherited memor${result.count === 1 ? "y" : "ies"} before the greeting`);
         }
         await pushState(userId, msg.chatId);
         break;
@@ -829,21 +837,21 @@ spindle.onFrontendMessage(async (raw, userId) => {
 
       case "rebuild_root": {
         if (getBusy(userId).some((b) => b.chatId === msg.chatId)) {
-          send({ type: "toast", tone: "warn", text: "Memoria is busy - let her finish before rebuilding" }, userId);
+          await notify(userId, "warn", "Memoria is busy, wait for her to finish");
           break;
         }
         const result = await rebuildRoot(msg.chatId, msg.sourceChatId, userId);
         if (!result.ok) {
           const text = result.reason === "empty_source"
-            ? "That chat has no memories to inherit."
+            ? "That chat has no memories to inherit"
             : result.reason === "busy"
-              ? "Memoria is already rebuilding this chat - hold on."
-              : "Memoria can't rebuild a chat onto itself.";
-          send({ type: "toast", tone: "warn", text }, userId);
+              ? "Memoria is already rebuilding this chat"
+              : "Memoria can't rebuild a chat onto itself";
+          await notify(userId, "warn", text);
           await pushState(userId, msg.chatId);
           break;
         }
-        send({ type: "toast", tone: "success", text: `Memoria rebuilt onto ${result.count} inherited memor${result.count === 1 ? "y" : "ies"}; re-summarizing this chat…` }, userId);
+        await notify(userId, "success", `Memoria rebuilt onto ${result.count} inherited memor${result.count === 1 ? "y" : "ies"} and is re-summarizing this chat`);
         await pushState(userId, msg.chatId);
         const cur = await loadSettings(userId);
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
@@ -895,13 +903,9 @@ spindle.onFrontendMessage(async (raw, userId) => {
             }
           }
         }
-        send({
-          type: "toast",
-          tone: "info",
-          text: msg.excluded
-            ? `Memoria will leave ${ids.length} message${ids.length === 1 ? "" : "s"} untouched`
-            : `Memoria will compress ${ids.length} message${ids.length === 1 ? "" : "s"} again`,
-        }, userId);
+        await notify(userId, "info", msg.excluded
+          ? `Memoria will leave ${ids.length} message${ids.length === 1 ? "" : "s"} untouched`
+          : `Memoria will compress ${ids.length} message${ids.length === 1 ? "" : "s"} again`);
         await pushState(userId, msg.chatId);
         break;
       }
@@ -911,7 +915,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const text = removed === 0
           ? "This chat has no inherited memories to detach"
           : `Memoria detached ${removed} inherited memor${removed === 1 ? "y" : "ies"}`;
-        send({ type: "toast", tone: "info", text }, userId);
+        await notify(userId, "info", text);
         await pushState(userId, msg.chatId);
         break;
       }
@@ -927,8 +931,11 @@ spindle.onFrontendMessage(async (raw, userId) => {
 });
 
 registerBookAnomalyCallback((userId, tone, text) => {
-  hostToast(userId, tone, text);
-  send({ type: "toast", tone, text }, userId);
+  void notify(userId, tone, text);
+});
+
+registerInjectionAnomalyCallback((userId, text) => {
+  void notify(userId, "error", text);
 });
 
 registerHookEndpoints();

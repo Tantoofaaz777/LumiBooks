@@ -40,17 +40,11 @@ const ARC_SUCCESS_PHRASES: string[] = [
   "Memoria stitched the spine of a new arc",
 ];
 
-const FAIL_PHRASES: string[] = [
-  "Memoria's pen ran dry, please look at me later",
-  "Memoria couldn't reach the right shelf, try again nyaa",
-];
-
-export function pickPhrase(kind: "fire" | "retry" | "success" | "fail" | "arc_fire" | "arc_success"): string {
+export function pickPhrase(kind: "fire" | "retry" | "success" | "arc_fire" | "arc_success"): string {
   const pool =
     kind === "fire" ? FIRE_PHRASES
       : kind === "retry" ? RETRY_PHRASES
       : kind === "success" ? SUCCESS_PHRASES
-      : kind === "fail" ? FAIL_PHRASES
       : kind === "arc_fire" ? ARC_FIRE_PHRASES
       : ARC_SUCCESS_PHRASES;
   return pool[Math.floor(Math.random() * pool.length)] ?? "Memoria nyaa";

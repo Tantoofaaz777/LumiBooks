@@ -79,7 +79,7 @@ function chatKey(userId: string, chatId: string): string {
 
 export interface PipelineCallbacks {
   onBusyChange(userId: string, entries: BusyEntry[]): void;
-  onToast(userId: string, tone: "success" | "info" | "warn" | "error", text: string): void;
+  onToast(userId: string, tone: "success" | "info" | "warn" | "error", text: string, automation?: boolean): void;
   onStateChange(userId: string, chatId: string): void;
 }
 
@@ -305,10 +305,22 @@ function recordFailure(userId: string, chatId: string, kind: BusyKind, retries: 
   capMap(failureByChat, FAILURE_MAP_CAP);
 }
 
-function nyaaToast(userId: string, kind: "fire" | "retry" | "success" | "fail" | "arc_fire" | "arc_success"): void {
+function nyaaToast(userId: string, kind: "fire" | "retry" | "success" | "arc_fire" | "arc_success", automation: boolean): void {
   if (!cb) return;
-  const tone = kind === "fail" ? "error" : kind === "retry" ? "warn" : kind === "success" || kind === "arc_success" ? "success" : "info";
-  cb.onToast(userId, tone, pickPhrase(kind));
+  const tone = kind === "retry" ? "warn" : kind === "success" || kind === "arc_success" ? "success" : "info";
+  cb.onToast(userId, tone, pickPhrase(kind), automation);
+}
+
+function shortErrorText(err: unknown): string {
+  const raw = describeError(err).replace(/\s+/g, " ").trim();
+  const firstSentence = raw.split(/(?<=[.!?])\s/, 1)[0] || raw;
+  const cleaned = firstSentence.replace(/;/g, ",");
+  return cleaned.length > 160 ? `${cleaned.slice(0, 159)}…` : cleaned;
+}
+
+function failToast(userId: string, kind: BusyKind, err: unknown): void {
+  const noun = kind === "arc" ? "bind the arc" : "file the chapter";
+  cb?.onToast(userId, "error", `Memoria couldn't ${noun}: ${shortErrorText(err)}`);
 }
 
 export async function createChapterAuto(
@@ -316,6 +328,7 @@ export async function createChapterAuto(
   profile: LMBProfile,
   settings: LMBSettings,
   userId: string,
+  automation = false,
 ): Promise<string | null> {
   if (!setBusy(userId, chatId, "chapter", "Memoria is filing a chapter")) return null;
   try {
@@ -327,7 +340,7 @@ export async function createChapterAuto(
     const uncoveredTail = pickUncoveredTail(messages, coverage);
     const window = selectNextChapterWindow(uncoveredTail, profile);
     if (window.length === 0) return null;
-    return await runChapter(chatId, profile, settings, userId, messages, window);
+    return await runChapter(chatId, profile, settings, userId, messages, window, { automation });
   } finally {
     clearBusy(userId, chatId, "chapter");
   }
@@ -348,7 +361,7 @@ export async function createChapterFromRange(
     const set = new Set(messageIds);
     const window = messages.filter((m) => set.has(m.id) && !isExcluded(m));
     if (window.length === 0) return null;
-    return await runChapter(chatId, profile, settings, userId, messages, window, opts.replacesEntryId);
+    return await runChapter(chatId, profile, settings, userId, messages, window, { replacesEntryId: opts.replacesEntryId });
   } finally {
     clearBusy(userId, chatId, "chapter");
   }
@@ -361,9 +374,11 @@ async function runChapter(
   userId: string,
   allMessages: ChatMessageDTO[],
   window: ChatMessageDTO[],
-  replacesEntryId?: string,
+  opts: { replacesEntryId?: string; automation?: boolean } = {},
 ): Promise<string | null> {
-  nyaaToast(userId, "fire");
+  const { replacesEntryId } = opts;
+  const automation = opts.automation === true;
+  nyaaToast(userId, "fire", automation);
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
   const chapters = coverage.activeEntries
@@ -391,7 +406,7 @@ async function runChapter(
     }
   }, (n, err) => {
     warn(`chapter attempt ${n} failed: ${describeError(err)}`);
-    nyaaToast(userId, "retry");
+    nyaaToast(userId, "retry", automation);
   });
 
   if (!outcome.ok) {
@@ -401,7 +416,7 @@ async function runChapter(
       return null;
     }
     recordFailure(userId, chatId, "chapter", outcome.retries, outcome.err);
-    nyaaToast(userId, "fail");
+    failToast(userId, "chapter", outcome.err);
     cb?.onStateChange(userId, chatId);
     return null;
   }
@@ -419,12 +434,12 @@ async function runChapter(
   }
   try {
     const entryId = await commitChapter(chatId, profile, userId, window, result, firstIdx, lastIdx, allMessages, false, replacesEntryId);
-    nyaaToast(userId, "success");
+    nyaaToast(userId, "success", automation);
     return entryId;
   } catch (err) {
     warn(`commitChapter failed: ${describeError(err)}`);
     recordFailure(userId, chatId, "chapter", 0, err);
-    nyaaToast(userId, "fail");
+    failToast(userId, "chapter", err);
     cb?.onStateChange(userId, chatId);
     return null;
   }
@@ -544,6 +559,7 @@ export async function createArcAuto(
   profile: LMBProfile,
   settings: LMBSettings,
   userId: string,
+  automation = false,
 ): Promise<string | null> {
   if (!setBusy(userId, chatId, "arc", "Memoria is binding an arc")) return null;
   try {
@@ -581,7 +597,7 @@ export async function createArcAuto(
       return null;
     }
     if (selected.length === 0) return null;
-    return await runArc(chatId, profile, settings, userId, selected);
+    return await runArc(chatId, profile, settings, userId, selected, { automation });
   } finally {
     clearBusy(userId, chatId, "arc");
   }
@@ -607,7 +623,7 @@ export async function createArcFromChapters(
       .filter((e) => e.meta.tier === 1 && wanted.has(e.raw.id))
       .sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
     if (chapters.length === 0) return null;
-    return await runArc(chatId, profile, settings, userId, chapters, opts.replacesEntryId);
+    return await runArc(chatId, profile, settings, userId, chapters, { replacesEntryId: opts.replacesEntryId });
   } finally {
     clearBusy(userId, chatId, "arc");
   }
@@ -619,9 +635,11 @@ async function runArc(
   settings: LMBSettings,
   userId: string,
   selected: LMBEntry[],
-  replacesEntryId?: string,
+  opts: { replacesEntryId?: string; automation?: boolean } = {},
 ): Promise<string | null> {
-  nyaaToast(userId, "arc_fire");
+  const { replacesEntryId } = opts;
+  const automation = opts.automation === true;
+  nyaaToast(userId, "arc_fire", automation);
   const totalTurns = selected.reduce((acc, c) => acc + c.meta.msgIds.length, 0);
   const provisionalSceneNumber = await nextSceneNumber(chatId, 2, userId);
   const opener = buildArcHeader(provisionalSceneNumber, selected.length, totalTurns);
@@ -641,7 +659,7 @@ async function runArc(
     }
   }, (n, err) => {
     warn(`arc attempt ${n} failed: ${describeError(err)}`);
-    nyaaToast(userId, "retry");
+    nyaaToast(userId, "retry", automation);
   });
 
   if (!outcome.ok) {
@@ -651,7 +669,7 @@ async function runArc(
       return null;
     }
     recordFailure(userId, chatId, "arc", outcome.retries, outcome.err);
-    nyaaToast(userId, "fail");
+    failToast(userId, "arc", outcome.err);
     cb?.onStateChange(userId, chatId);
     return null;
   }
@@ -670,13 +688,13 @@ async function runArc(
     return null;
   }
   try {
-    const entryId = await commitArc(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId);
-    nyaaToast(userId, "arc_success");
+    const entryId = await commitArc(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId, automation);
+    nyaaToast(userId, "arc_success", automation);
     return entryId;
   } catch (err) {
     warn(`commitArc failed: ${describeError(err)}`);
     recordFailure(userId, chatId, "arc", 0, err);
-    nyaaToast(userId, "fail");
+    failToast(userId, "arc", err);
     cb?.onStateChange(userId, chatId);
     return null;
   }
@@ -690,6 +708,7 @@ async function commitArc(
   firstIdx: number,
   lastIdx: number,
   replacesEntryId?: string,
+  automation = false,
 ): Promise<string> {
   return withCommitMutex(userId, chatId, 2, async () => {
   const freshEntries = await listLmbEntries(chatId, userId);
@@ -769,7 +788,8 @@ async function commitArc(
     cb?.onToast(
       userId,
       "warn",
-      `Memoria's arc is shelved but ${failedSupersedes.length} chapter${failedSupersedes.length === 1 ? "" : "s"} resisted being marked superseded`,
+      `The arc saved but ${failedSupersedes.length} chapter${failedSupersedes.length === 1 ? "" : "s"} couldn't be marked superseded`,
+      automation,
     );
   }
   invalidateBookCache(userId, chatId);
@@ -818,12 +838,12 @@ export async function acceptPreview(
       const window = messages.filter((m) => intent.has(m.id) && !coverage.coveredBy.has(m.id) && !isExcluded(m));
       if (window.length === 0) {
         dropPendingPreview(userId, chatId, draftId);
-        cb?.onToast(userId, "warn", "Memoria can't save this chapter - its messages were deleted or already filed by another chapter");
+        cb?.onToast(userId, "warn", "Memoria can't save this chapter, its messages were deleted or already filed");
         cb?.onStateChange(userId, chatId);
         return null;
       }
       if (window.length < preview.sourceMessageIds.length) {
-        cb?.onToast(userId, "warn", "Memoria notes some messages went missing or were already covered, saving what is left");
+        cb?.onToast(userId, "warn", "Some messages were missing or already covered, Memoria saved the rest");
       }
       const firstIdx = messages.findIndex((m) => m.id === window[0]!.id);
       const lastIdx = messages.findIndex((m) => m.id === window[window.length - 1]!.id);
@@ -846,12 +866,12 @@ export async function acceptPreview(
           firstIdx, lastIdx, messages, true, preview.replacesEntryId,
         );
         dropPendingPreview(userId, chatId, draftId);
-        nyaaToast(userId, "success");
+        nyaaToast(userId, "success", false);
         cb?.onStateChange(userId, chatId);
         return entryId;
       } catch (err) {
         recordFailure(userId, chatId, "chapter", 0, err);
-        nyaaToast(userId, "fail");
+        failToast(userId, "chapter", err);
         cb?.onStateChange(userId, chatId);
         return null;
       }
@@ -865,7 +885,7 @@ export async function acceptPreview(
     const selected = coverage.activeEntries.filter((e) => e.meta.tier === 1 && wanted.has(e.raw.id));
     if (selected.length === 0) {
       dropPendingPreview(userId, chatId, draftId);
-      cb?.onToast(userId, "warn", "Memoria can't save this arc, all source chapters were deleted or already bound by another arc");
+      cb?.onToast(userId, "warn", "Memoria can't save this arc, its chapters were deleted or already bound");
       cb?.onStateChange(userId, chatId);
       return null;
     }
@@ -888,12 +908,12 @@ export async function acceptPreview(
         preview.firstMsgIdx ?? 0, preview.lastMsgIdx ?? 0, preview.replacesEntryId,
       );
       dropPendingPreview(userId, chatId, draftId);
-      nyaaToast(userId, "arc_success");
+      nyaaToast(userId, "arc_success", false);
       cb?.onStateChange(userId, chatId);
       return entryId;
     } catch (err) {
       recordFailure(userId, chatId, "arc", 0, err);
-      nyaaToast(userId, "fail");
+      failToast(userId, "arc", err);
       cb?.onStateChange(userId, chatId);
       return null;
     }
@@ -910,10 +930,11 @@ export async function drainChapterBacklog(
   profile: LMBProfile,
   settings: LMBSettings,
   userId: string,
+  automation = false,
 ): Promise<number> {
   let made = 0;
   for (let i = 0; i < CHAPTER_BACKLOG_CAP; i++) {
-    const created = await createChapterAuto(chatId, profile, settings, userId).catch((err) => {
+    const created = await createChapterAuto(chatId, profile, settings, userId, automation).catch((err) => {
       warn(`createChapterAuto failed: ${describeError(err)}`);
       return null;
     });
@@ -936,7 +957,7 @@ export async function dryRunChapter(
   const uncoveredTail = pickUncoveredTail(messages, coverage);
   const window = selectNextChapterWindow(uncoveredTail, profile);
   if (window.length === 0) {
-    throw new Error("No window available. Increase the chat length or lower the lag and window thresholds.");
+    throw new Error("No window available, lower the lag or window thresholds");
   }
   const chapters = coverage.activeEntries
     .filter((e) => e.meta.tier === 1 && typeof e.meta.firstMsgIdx === "number")
@@ -960,7 +981,7 @@ export async function dryRunArc(
   const chapters = coverage.activeEntries
     .filter((e) => e.meta.tier === 1 && !e.meta.isRoot)
     .sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
-  if (chapters.length === 0) throw new Error("No chapters to bind. File a few chapters first.");
+  if (chapters.length === 0) throw new Error("No chapters to bind yet");
   const totalTurns = chapters.reduce((acc, c) => acc + c.meta.msgIds.length, 0);
   const provisionalSceneNumber = await nextSceneNumber(chatId, 2, userId);
   const opener = buildArcHeader(provisionalSceneNumber, chapters.length, totalTurns);
@@ -972,11 +993,12 @@ export async function drainArcBacklog(
   profile: LMBProfile,
   settings: LMBSettings,
   userId: string,
+  automation = false,
 ): Promise<number> {
   if (profile.arcTrigger === "manual") return 0;
   let made = 0;
   for (let i = 0; i < ARC_BACKLOG_CAP; i++) {
-    const created = await createArcAuto(chatId, profile, settings, userId).catch((err) => {
+    const created = await createArcAuto(chatId, profile, settings, userId, automation).catch((err) => {
       warn(`createArcAuto failed: ${describeError(err)}`);
       return null;
     });
@@ -995,9 +1017,9 @@ export async function maybeRunPipeline(
   if (!profile.autoCreate) return;
   await ensureForkAdoption(chatId, userId).catch(() => {});
   if (profile.autoCreateChapter) {
-    await drainChapterBacklog(chatId, profile, settings, userId);
+    await drainChapterBacklog(chatId, profile, settings, userId, true);
   }
-  await maybeRunArcCheck(chatId, profile, settings, userId);
+  await maybeRunArcCheck(chatId, profile, settings, userId, true);
 }
 
 export async function maybeRunArcCheck(
@@ -1005,11 +1027,12 @@ export async function maybeRunArcCheck(
   profile: LMBProfile,
   settings: LMBSettings,
   userId: string,
+  automation = false,
 ): Promise<void> {
   if (!profile.autoCreate) return;
   if (!profile.autoCreateArc) return;
   if (profile.arcTrigger === "manual") return;
-  await drainArcBacklog(chatId, profile, settings, userId);
+  await drainArcBacklog(chatId, profile, settings, userId, automation);
 }
 
 async function nextSceneNumber(chatId: string, tier: 1 | 2, userId: string): Promise<number> {

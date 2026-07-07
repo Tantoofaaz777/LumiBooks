@@ -68,7 +68,8 @@ var DEFAULT_SETTINGS = {
   activeProfileId: "default",
   customPresets: [],
   debugLog: false,
-  forceConstantEntries: true
+  forceConstantEntries: true,
+  showAutomationToasts: true
 };
 function diskVersionFor(raw) {
   const v = raw && typeof raw === "object" ? raw : {};
@@ -90,7 +91,8 @@ function normalizeSettings(raw) {
     activeProfileId,
     customPresets,
     debugLog: typeof v.debugLog === "boolean" ? v.debugLog : fallback.debugLog,
-    forceConstantEntries: typeof v.forceConstantEntries === "boolean" ? v.forceConstantEntries : fallback.forceConstantEntries
+    forceConstantEntries: typeof v.forceConstantEntries === "boolean" ? v.forceConstantEntries : fallback.forceConstantEntries,
+    showAutomationToasts: typeof v.showAutomationToasts === "boolean" ? v.showAutomationToasts : fallback.showAutomationToasts
   };
 }
 function normalizeProfile(raw) {
@@ -495,13 +497,13 @@ async function doEnsureBookForChat(chatId, userId) {
       await bindBookToChat(chatId, existing.id, userId).catch(() => {});
       setBookCache(cacheKey(userId, chatId), { bookId: existing.id, expiresAt: Date.now() + BOOK_INDEX_CACHE_TTL_MS });
       error(`book recovery: re-linked book ${existing.id} for chat ${chatId.slice(0, 8)} ` + `(${recovery.count} LumiBooks entries; normal lookup MISSED it; chat claim=${typeof claim === "string" ? claim : "none"}; ` + `${recovery.candidates} candidate book(s); userId=${userId.slice(0, 6)})`);
-      bookAnomalyCb?.(userId, "warn", recovery.candidates > 1 ? `Memoria re-linked this chat's notebook, but found ${recovery.candidates} notebooks for it \u2014 you may have duplicates to consolidate. If this recurs, please report it.` : `Memoria re-linked this chat's existing notebook (its link had been lost). If this recurs, please report it.`);
+      bookAnomalyCb?.(userId, "warn", recovery.candidates > 1 ? `Memoria re-linked this chat's notebook but found ${recovery.candidates} candidates, you may have duplicate notebooks` : "Memoria re-linked this chat's notebook after its link was lost");
       return existing;
     }
   }
   if (typeof claim === "string" && claim.trim()) {
     error(`book mismatch: chat ${chatId.slice(0, 8)} claims book ${claim} but it could not be resolved OR recovered; ` + `creating a NEW book. userId=${userId.slice(0, 6)}`);
-    bookAnomalyCb?.(userId, "error", "Memoria expected an existing notebook for this chat but couldn't find it, so it started a new one. Older chapters may be in a separate notebook - please report this.");
+    bookAnomalyCb?.(userId, "error", "Memoria couldn't find this chat's old notebook and started a new one, older chapters may live in a separate notebook");
   }
   const book = await spindle.world_books.create({
     name: bookNameFor(chat.name, chatId),
@@ -1001,6 +1003,10 @@ async function resyncVisibility(chatId, userId, desiredHiddenForCovered) {
 }
 
 // src/backend/injection.ts
+var injectionAnomalyCb = null;
+function registerInjectionAnomalyCallback(cb) {
+  injectionAnomalyCb = cb;
+}
 function isAssembledHistory(lm) {
   return lm["__isChatHistory"] === true;
 }
@@ -1060,7 +1066,8 @@ async function buildInjection(chatId, llmMessages, userId) {
   const historyMsgs = llmMessages.filter(isAssembledHistory);
   if (historyMsgs.length === 0) {
     if (hasVisibleMessage) {
-      error(`injection: no "__isChatHistory" messages on ${llmMessages.length} assembled message(s) despite ` + `visible chat messages. Lumiverse's chat-history contract likely changed - skipping injection.`);
+      error(`injection: no "__isChatHistory" messages on ${llmMessages.length} assembled message(s) despite ` + `visible chat messages. The host most likely clipped all history because max context is too small, skipping injection.`);
+      injectionAnomalyCb?.(userId, "Memoria can't see any chat history, your max context is likely too small");
     }
     return null;
   }
@@ -1068,12 +1075,12 @@ async function buildInjection(chatId, llmMessages, userId) {
   for (const m of historyMsgs) {
     const id = sourceMessageId(m);
     if (id === undefined) {
-      error(`injection: a "__isChatHistory" message is missing sourceMessageId. Host identity contract ` + `looks inconsistent - skipping injection.`);
+      error(`injection: a "__isChatHistory" message is missing sourceMessageId. Host identity contract ` + `looks inconsistent, skipping injection.`);
       return null;
     }
     const idx = msgIdToIdx.get(id);
     if (idx === undefined) {
-      error(`injection: sourceMessageId "${id}" is not in the chat - skipping injection.`);
+      error(`injection: sourceMessageId "${id}" is not in the chat, skipping injection.`);
       return null;
     }
     const md = chatMessages[idx]?.metadata;
@@ -1533,12 +1540,8 @@ var ARC_SUCCESS_PHRASES = [
   "Memoria bound the arc and pressed it shut, nyaa~",
   "Memoria stitched the spine of a new arc"
 ];
-var FAIL_PHRASES = [
-  "Memoria's pen ran dry, please look at me later",
-  "Memoria couldn't reach the right shelf, try again nyaa"
-];
 function pickPhrase(kind) {
-  const pool = kind === "fire" ? FIRE_PHRASES : kind === "retry" ? RETRY_PHRASES : kind === "success" ? SUCCESS_PHRASES : kind === "fail" ? FAIL_PHRASES : kind === "arc_fire" ? ARC_FIRE_PHRASES : ARC_SUCCESS_PHRASES;
+  const pool = kind === "fire" ? FIRE_PHRASES : kind === "retry" ? RETRY_PHRASES : kind === "success" ? SUCCESS_PHRASES : kind === "arc_fire" ? ARC_FIRE_PHRASES : ARC_SUCCESS_PHRASES;
   return pool[Math.floor(Math.random() * pool.length)] ?? "Memoria nyaa";
 }
 var MEMORIA_PERSONA_LINE = "You are Memoria, a young nyandere catgirl librarian with black hair and blue eyes, wearing a maid uniform. " + "You quietly keep this user's story shelved and organized. " + "When you write a JSON memory, you obey the schema strictly and never break it, " + "but the short_comment field is your one allowed indulgence: one nyandere remark about the scene you just filed.";
@@ -1576,7 +1579,7 @@ async function resolveConnection(profile, userId) {
     return null;
   const modelStr = typeof picked.model === "string" ? picked.model : "";
   if (!modelStr.trim()) {
-    throw new FatalSummarizerError(`Connection "${picked.name || picked.id}" has no model set. Open the connection settings and pick a model.`);
+    throw new FatalSummarizerError(`Connection "${picked.name || picked.id}" has no model set, pick one in its settings`);
   }
   return picked;
 }
@@ -1716,13 +1719,13 @@ async function runStreamingGeneration(conn, messages, profile, userId, options) 
     if (externalAborted)
       throw new AbortedSummarizerError;
     if (!aggregated.trim())
-      throw new Error("Stream ended without a completion marker");
+      throw new Error("The stream ended before completing");
     return { content: aggregated, usage };
   } catch (err) {
     if (externalAborted)
       throw new AbortedSummarizerError;
     if (ttftFired) {
-      throw new Error(`Generation stalled: no token within ${Math.round(ttftMs / 1000)}s. The provider may be slow or unreachable.`);
+      throw new Error(`No token within ${Math.round(ttftMs / 1000)}s, the provider may be slow or unreachable`);
     }
     throw err;
   } finally {
@@ -1932,7 +1935,7 @@ async function summarizeChapter(profile, customPresets, chatId, messages, previo
   const processed = await applySelectedRegex(rawText, profile.regexIncomingScriptIds, userId);
   const parsed = parseSummaryJson(processed);
   if (!parsed.content.trim())
-    throw new Error("Parsed summary content was empty");
+    throw new Error("The summary came back empty");
   return {
     rawOutput: rawText,
     title: parsed.title,
@@ -1983,7 +1986,7 @@ ${c.raw.content}`).join(`
   const processed = await applySelectedRegex(rawText, profile.regexIncomingScriptIds, userId);
   const parsed = parseSummaryJson(processed);
   if (!parsed.content.trim())
-    throw new Error("Parsed arc content was empty");
+    throw new Error("The arc summary came back empty");
   return {
     rawOutput: rawText,
     title: parsed.title,
@@ -2019,9 +2022,9 @@ function parseSummaryJson(raw) {
     return { title, opener, content: contentRaw, keywords, shortComment: sc };
   }
   if (sawParseableObject) {
-    throw new Error("Model returned JSON but no string `content` field was found");
+    throw new Error("The model's JSON had no content field");
   }
-  throw new Error("Model output was not valid JSON");
+  throw new Error("The model didn't return valid JSON");
 }
 function stripThinkBlocks(raw) {
   return raw.replace(/<(?:think(?:ing)?|reasoning)>[\s\S]*?<\/(?:think(?:ing)?|reasoning)>/gi, "");
@@ -2704,13 +2707,23 @@ function recordFailure(userId, chatId, kind, retries, err) {
   });
   capMap(failureByChat, FAILURE_MAP_CAP);
 }
-function nyaaToast(userId, kind) {
+function nyaaToast(userId, kind, automation) {
   if (!cb)
     return;
-  const tone = kind === "fail" ? "error" : kind === "retry" ? "warn" : kind === "success" || kind === "arc_success" ? "success" : "info";
-  cb.onToast(userId, tone, pickPhrase(kind));
+  const tone = kind === "retry" ? "warn" : kind === "success" || kind === "arc_success" ? "success" : "info";
+  cb.onToast(userId, tone, pickPhrase(kind), automation);
 }
-async function createChapterAuto(chatId, profile, settings, userId) {
+function shortErrorText(err) {
+  const raw = describeError(err).replace(/\s+/g, " ").trim();
+  const firstSentence = raw.split(/(?<=[.!?])\s/, 1)[0] || raw;
+  const cleaned = firstSentence.replace(/;/g, ",");
+  return cleaned.length > 160 ? `${cleaned.slice(0, 159)}\u2026` : cleaned;
+}
+function failToast(userId, kind, err) {
+  const noun = kind === "arc" ? "bind the arc" : "file the chapter";
+  cb?.onToast(userId, "error", `Memoria couldn't ${noun}: ${shortErrorText(err)}`);
+}
+async function createChapterAuto(chatId, profile, settings, userId, automation = false) {
   if (!setBusy(userId, chatId, "chapter", "Memoria is filing a chapter"))
     return null;
   try {
@@ -2725,7 +2738,7 @@ async function createChapterAuto(chatId, profile, settings, userId) {
     const window = selectNextChapterWindow(uncoveredTail, profile);
     if (window.length === 0)
       return null;
-    return await runChapter(chatId, profile, settings, userId, messages, window);
+    return await runChapter(chatId, profile, settings, userId, messages, window, { automation });
   } finally {
     clearBusy(userId, chatId, "chapter");
   }
@@ -2741,13 +2754,15 @@ async function createChapterFromRange(chatId, messageIds, profile, settings, use
     const window = messages.filter((m) => set.has(m.id) && !isExcluded(m));
     if (window.length === 0)
       return null;
-    return await runChapter(chatId, profile, settings, userId, messages, window, opts.replacesEntryId);
+    return await runChapter(chatId, profile, settings, userId, messages, window, { replacesEntryId: opts.replacesEntryId });
   } finally {
     clearBusy(userId, chatId, "chapter");
   }
 }
-async function runChapter(chatId, profile, settings, userId, allMessages, window, replacesEntryId) {
-  nyaaToast(userId, "fire");
+async function runChapter(chatId, profile, settings, userId, allMessages, window, opts = {}) {
+  const { replacesEntryId } = opts;
+  const automation = opts.automation === true;
+  nyaaToast(userId, "fire", automation);
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
   const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && typeof e.meta.firstMsgIdx === "number").sort((a, b) => a.meta.firstMsgIdx - b.meta.firstMsgIdx);
@@ -2767,7 +2782,7 @@ async function runChapter(chatId, profile, settings, userId, allMessages, window
     }
   }, (n, err) => {
     warn(`chapter attempt ${n} failed: ${describeError(err)}`);
-    nyaaToast(userId, "retry");
+    nyaaToast(userId, "retry", automation);
   });
   if (!outcome.ok) {
     if (outcome.err instanceof AbortedSummarizerError) {
@@ -2776,7 +2791,7 @@ async function runChapter(chatId, profile, settings, userId, allMessages, window
       return null;
     }
     recordFailure(userId, chatId, "chapter", outcome.retries, outcome.err);
-    nyaaToast(userId, "fail");
+    failToast(userId, "chapter", outcome.err);
     cb?.onStateChange(userId, chatId);
     return null;
   }
@@ -2792,12 +2807,12 @@ async function runChapter(chatId, profile, settings, userId, allMessages, window
   }
   try {
     const entryId = await commitChapter(chatId, profile, userId, window, result, firstIdx, lastIdx, allMessages, false, replacesEntryId);
-    nyaaToast(userId, "success");
+    nyaaToast(userId, "success", automation);
     return entryId;
   } catch (err) {
     warn(`commitChapter failed: ${describeError(err)}`);
     recordFailure(userId, chatId, "chapter", 0, err);
-    nyaaToast(userId, "fail");
+    failToast(userId, "chapter", err);
     cb?.onStateChange(userId, chatId);
     return null;
   }
@@ -2887,7 +2902,7 @@ ${result.content}`;
     return entry.id;
   });
 }
-async function createArcAuto(chatId, profile, settings, userId) {
+async function createArcAuto(chatId, profile, settings, userId, automation = false) {
   if (!setBusy(userId, chatId, "arc", "Memoria is binding an arc"))
     return null;
   try {
@@ -2928,7 +2943,7 @@ async function createArcAuto(chatId, profile, settings, userId) {
     }
     if (selected.length === 0)
       return null;
-    return await runArc(chatId, profile, settings, userId, selected);
+    return await runArc(chatId, profile, settings, userId, selected, { automation });
   } finally {
     clearBusy(userId, chatId, "arc");
   }
@@ -2944,13 +2959,15 @@ async function createArcFromChapters(chatId, chapterEntryIds, profile, settings,
     const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && wanted.has(e.raw.id)).sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
     if (chapters.length === 0)
       return null;
-    return await runArc(chatId, profile, settings, userId, chapters, opts.replacesEntryId);
+    return await runArc(chatId, profile, settings, userId, chapters, { replacesEntryId: opts.replacesEntryId });
   } finally {
     clearBusy(userId, chatId, "arc");
   }
 }
-async function runArc(chatId, profile, settings, userId, selected, replacesEntryId) {
-  nyaaToast(userId, "arc_fire");
+async function runArc(chatId, profile, settings, userId, selected, opts = {}) {
+  const { replacesEntryId } = opts;
+  const automation = opts.automation === true;
+  nyaaToast(userId, "arc_fire", automation);
   const totalTurns = selected.reduce((acc, c) => acc + c.meta.msgIds.length, 0);
   const provisionalSceneNumber = await nextSceneNumber(chatId, 2, userId);
   const opener = buildArcHeader(provisionalSceneNumber, selected.length, totalTurns);
@@ -2967,7 +2984,7 @@ async function runArc(chatId, profile, settings, userId, selected, replacesEntry
     }
   }, (n, err) => {
     warn(`arc attempt ${n} failed: ${describeError(err)}`);
-    nyaaToast(userId, "retry");
+    nyaaToast(userId, "retry", automation);
   });
   if (!outcome.ok) {
     if (outcome.err instanceof AbortedSummarizerError) {
@@ -2976,7 +2993,7 @@ async function runArc(chatId, profile, settings, userId, selected, replacesEntry
       return null;
     }
     recordFailure(userId, chatId, "arc", outcome.retries, outcome.err);
-    nyaaToast(userId, "fail");
+    failToast(userId, "arc", outcome.err);
     cb?.onStateChange(userId, chatId);
     return null;
   }
@@ -2993,18 +3010,18 @@ async function runArc(chatId, profile, settings, userId, selected, replacesEntry
     return null;
   }
   try {
-    const entryId = await commitArc(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId);
-    nyaaToast(userId, "arc_success");
+    const entryId = await commitArc(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId, automation);
+    nyaaToast(userId, "arc_success", automation);
     return entryId;
   } catch (err) {
     warn(`commitArc failed: ${describeError(err)}`);
     recordFailure(userId, chatId, "arc", 0, err);
-    nyaaToast(userId, "fail");
+    failToast(userId, "arc", err);
     cb?.onStateChange(userId, chatId);
     return null;
   }
 }
-async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId) {
+async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId, automation = false) {
   return withCommitMutex(userId, chatId, 2, async () => {
     const freshEntries = await listLmbEntries(chatId, userId);
     const entriesForCoverage = replacesEntryId ? freshEntries.filter((e) => e.raw.id !== replacesEntryId) : freshEntries;
@@ -3079,7 +3096,7 @@ ${result.content}`;
       }
     }
     if (failedSupersedes.length > 0) {
-      cb?.onToast(userId, "warn", `Memoria's arc is shelved but ${failedSupersedes.length} chapter${failedSupersedes.length === 1 ? "" : "s"} resisted being marked superseded`);
+      cb?.onToast(userId, "warn", `The arc saved but ${failedSupersedes.length} chapter${failedSupersedes.length === 1 ? "" : "s"} couldn't be marked superseded`, automation);
     }
     invalidateBookCache(userId, chatId);
     if (replacesEntryId) {
@@ -3121,12 +3138,12 @@ async function acceptPreview(chatId, draftId, profile, userId) {
       const window = messages.filter((m) => intent.has(m.id) && !coverage2.coveredBy.has(m.id) && !isExcluded(m));
       if (window.length === 0) {
         dropPendingPreview(userId, chatId, draftId);
-        cb?.onToast(userId, "warn", "Memoria can't save this chapter - its messages were deleted or already filed by another chapter");
+        cb?.onToast(userId, "warn", "Memoria can't save this chapter, its messages were deleted or already filed");
         cb?.onStateChange(userId, chatId);
         return null;
       }
       if (window.length < preview.sourceMessageIds.length) {
-        cb?.onToast(userId, "warn", "Memoria notes some messages went missing or were already covered, saving what is left");
+        cb?.onToast(userId, "warn", "Some messages were missing or already covered, Memoria saved the rest");
       }
       const firstIdx = messages.findIndex((m) => m.id === window[0].id);
       const lastIdx = messages.findIndex((m) => m.id === window[window.length - 1].id);
@@ -3146,12 +3163,12 @@ async function acceptPreview(chatId, draftId, profile, userId) {
       try {
         const entryId = await commitChapter(chatId, profile, userId, window, fakeResult2, firstIdx, lastIdx, messages, true, preview.replacesEntryId);
         dropPendingPreview(userId, chatId, draftId);
-        nyaaToast(userId, "success");
+        nyaaToast(userId, "success", false);
         cb?.onStateChange(userId, chatId);
         return entryId;
       } catch (err) {
         recordFailure(userId, chatId, "chapter", 0, err);
-        nyaaToast(userId, "fail");
+        failToast(userId, "chapter", err);
         cb?.onStateChange(userId, chatId);
         return null;
       }
@@ -3163,7 +3180,7 @@ async function acceptPreview(chatId, draftId, profile, userId) {
     const selected = coverage.activeEntries.filter((e) => e.meta.tier === 1 && wanted.has(e.raw.id));
     if (selected.length === 0) {
       dropPendingPreview(userId, chatId, draftId);
-      cb?.onToast(userId, "warn", "Memoria can't save this arc, all source chapters were deleted or already bound by another arc");
+      cb?.onToast(userId, "warn", "Memoria can't save this arc, its chapters were deleted or already bound");
       cb?.onStateChange(userId, chatId);
       return null;
     }
@@ -3183,12 +3200,12 @@ async function acceptPreview(chatId, draftId, profile, userId) {
     try {
       const entryId = await commitArc(chatId, userId, selected, fakeResult, preview.firstMsgIdx ?? 0, preview.lastMsgIdx ?? 0, preview.replacesEntryId);
       dropPendingPreview(userId, chatId, draftId);
-      nyaaToast(userId, "arc_success");
+      nyaaToast(userId, "arc_success", false);
       cb?.onStateChange(userId, chatId);
       return entryId;
     } catch (err) {
       recordFailure(userId, chatId, "arc", 0, err);
-      nyaaToast(userId, "fail");
+      failToast(userId, "arc", err);
       cb?.onStateChange(userId, chatId);
       return null;
     }
@@ -3198,10 +3215,10 @@ async function acceptPreview(chatId, draftId, profile, userId) {
 }
 var CHAPTER_BACKLOG_CAP = 500;
 var ARC_BACKLOG_CAP = 100;
-async function drainChapterBacklog(chatId, profile, settings, userId) {
+async function drainChapterBacklog(chatId, profile, settings, userId, automation = false) {
   let made = 0;
   for (let i = 0;i < CHAPTER_BACKLOG_CAP; i++) {
-    const created = await createChapterAuto(chatId, profile, settings, userId).catch((err) => {
+    const created = await createChapterAuto(chatId, profile, settings, userId, automation).catch((err) => {
       warn(`createChapterAuto failed: ${describeError(err)}`);
       return null;
     });
@@ -3220,7 +3237,7 @@ async function dryRunChapter(chatId, profile, settings, userId) {
   const uncoveredTail = pickUncoveredTail(messages, coverage);
   const window = selectNextChapterWindow(uncoveredTail, profile);
   if (window.length === 0) {
-    throw new Error("No window available. Increase the chat length or lower the lag and window thresholds.");
+    throw new Error("No window available, lower the lag or window thresholds");
   }
   const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && typeof e.meta.firstMsgIdx === "number").sort((a, b) => a.meta.firstMsgIdx - b.meta.firstMsgIdx);
   const previousMemories = profile.previousMemoriesCount > 0 ? chapters.slice(-profile.previousMemoriesCount) : [];
@@ -3233,18 +3250,18 @@ async function dryRunArc(chatId, profile, settings, userId) {
   const coverage = await buildCoverage(chatId, userId, entries);
   const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && !e.meta.isRoot).sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
   if (chapters.length === 0)
-    throw new Error("No chapters to bind. File a few chapters first.");
+    throw new Error("No chapters to bind yet");
   const totalTurns = chapters.reduce((acc, c) => acc + c.meta.msgIds.length, 0);
   const provisionalSceneNumber = await nextSceneNumber(chatId, 2, userId);
   const opener = buildArcHeader(provisionalSceneNumber, chapters.length, totalTurns);
   return assembleArcPrompt(profile, settings.customPresets, chatId, chapters, userId, opener);
 }
-async function drainArcBacklog(chatId, profile, settings, userId) {
+async function drainArcBacklog(chatId, profile, settings, userId, automation = false) {
   if (profile.arcTrigger === "manual")
     return 0;
   let made = 0;
   for (let i = 0;i < ARC_BACKLOG_CAP; i++) {
-    const created = await createArcAuto(chatId, profile, settings, userId).catch((err) => {
+    const created = await createArcAuto(chatId, profile, settings, userId, automation).catch((err) => {
       warn(`createArcAuto failed: ${describeError(err)}`);
       return null;
     });
@@ -3259,18 +3276,18 @@ async function maybeRunPipeline(chatId, profile, settings, userId) {
     return;
   await ensureForkAdoption(chatId, userId).catch(() => {});
   if (profile.autoCreateChapter) {
-    await drainChapterBacklog(chatId, profile, settings, userId);
+    await drainChapterBacklog(chatId, profile, settings, userId, true);
   }
-  await maybeRunArcCheck(chatId, profile, settings, userId);
+  await maybeRunArcCheck(chatId, profile, settings, userId, true);
 }
-async function maybeRunArcCheck(chatId, profile, settings, userId) {
+async function maybeRunArcCheck(chatId, profile, settings, userId, automation = false) {
   if (!profile.autoCreate)
     return;
   if (!profile.autoCreateArc)
     return;
   if (profile.arcTrigger === "manual")
     return;
-  await drainArcBacklog(chatId, profile, settings, userId);
+  await drainArcBacklog(chatId, profile, settings, userId, automation);
 }
 async function nextSceneNumber(chatId, tier, userId) {
   const entries = await listLmbEntries(chatId, userId).catch(() => []);
@@ -3638,6 +3655,19 @@ function countArcBacklog(activeChapters, profile) {
 }
 
 // src/backend/index.ts
+async function notify(userId, tone, text, automation = false) {
+  try {
+    if (automation && tone !== "error") {
+      const settings = await loadSettings(userId).catch(() => null);
+      if (settings && !settings.showAutomationToasts)
+        return;
+    }
+    hostToast(userId, tone, text);
+    send({ type: "toast", tone, text }, userId);
+  } catch (err) {
+    warn(`toast delivery failed: ${describeError(err)}`);
+  }
+}
 var PUSH_DEBOUNCE_MS = 30;
 var pushTimers = new Map;
 var pendingPushChatIds = new Map;
@@ -3691,9 +3721,8 @@ registerPipelineCallbacks({
   onBusyChange(userId, entries) {
     send({ type: "busy", entries }, userId);
   },
-  onToast(userId, tone, text) {
-    hostToast(userId, tone, text);
-    send({ type: "toast", tone, text }, userId);
+  onToast(userId, tone, text, automation) {
+    notify(userId, tone, text, automation === true);
   },
   onStateChange(userId, chatId) {
     pushState(userId, chatId);
@@ -3834,11 +3863,7 @@ async function handleExternalEntryDeletion(userId, bookId, isBookDeletion) {
     const desiredHidden = profile ? profile.hideCoveredMessages : true;
     const { unhidden } = await resyncVisibility(chatId, userId, desiredHidden);
     if (unhidden > 0) {
-      send({
-        type: "toast",
-        tone: "info",
-        text: `Memoria unhid ${unhidden} message${unhidden === 1 ? "" : "s"} after an external lorebook change`
-      }, userId);
+      await notify(userId, "info", `Memoria unhid ${unhidden} message${unhidden === 1 ? "" : "s"} after an external lorebook change`);
     }
   } catch (err) {
     warn(`external deletion resync failed: ${describeError(err)}`);
@@ -3856,9 +3881,8 @@ async function retryLastFailure(chatId, userId, profile, settings) {
     const ids = await collectActiveChapterIds(chatId, userId);
     if (ids.length === 0) {
       clearLastFailure(userId, chatId);
-      const msg = "Memoria has no active chapters left to retry the arc against.";
-      hostToast(userId, "warn", msg);
-      send({ type: "toast", tone: "warn", text: msg }, userId);
+      const msg = "Memoria has no chapters left to retry the arc";
+      await notify(userId, "warn", msg);
       return;
     }
     await createArcFromChapters(chatId, ids, profile, settings, userId);
@@ -3960,7 +3984,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
           return { ...cur, profiles, activeProfileId };
         });
         if (warned) {
-          send({ type: "toast", tone: "warn", text: "Memoria keeps at least one profile" }, userId);
+          await notify(userId, "warn", "Memoria keeps at least one profile");
         }
         await pushState(userId, msg.chatId);
         break;
@@ -3980,7 +4004,14 @@ spindle.onFrontendMessage(async (raw, userId) => {
         if (!profile)
           break;
         if (getBusy(userId).some((b) => b.kind === "chapter" && b.chatId === msg.chatId)) {
-          send({ type: "toast", tone: "warn", text: "Memoria is already filing a chapter" }, userId);
+          await notify(userId, "warn", "Memoria is already filing a chapter");
+          break;
+        }
+        const chapterMessages = await spindle.chat.getMessages(msg.chatId);
+        const chapterCoverage = await buildCoverage(msg.chatId, userId);
+        const chapterStats = computeCoverageStats(chapterMessages, chapterCoverage, profile);
+        if (!chapterStats.lagSatisfied || !chapterStats.windowAvailable) {
+          await notify(userId, "info", "Your story needs more messages for me to generate a new entry~");
           break;
         }
         await createChapterAuto(msg.chatId, profile, cur, userId);
@@ -3994,7 +4025,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         if (!profile)
           break;
         if (getBusy(userId).some((b) => b.kind === "chapter" && b.chatId === msg.chatId)) {
-          send({ type: "toast", tone: "warn", text: "Memoria is already filing a chapter" }, userId);
+          await notify(userId, "warn", "Memoria is already filing a chapter");
           break;
         }
         const rangeMessages = await spindle.chat.getMessages(msg.chatId);
@@ -4022,7 +4053,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         if (!profile)
           break;
         if (getBusy(userId).some((b) => b.kind === "chapter" && b.chatId === msg.chatId)) {
-          send({ type: "toast", tone: "warn", text: "Memoria is already filing a chapter" }, userId);
+          await notify(userId, "warn", "Memoria is already filing a chapter");
           break;
         }
         await drainChapterBacklog(msg.chatId, profile, cur, userId);
@@ -4036,7 +4067,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         if (!profile)
           break;
         if (getBusy(userId).some((b) => b.kind === "arc" && b.chatId === msg.chatId)) {
-          send({ type: "toast", tone: "warn", text: "Memoria is already binding an arc" }, userId);
+          await notify(userId, "warn", "Memoria is already binding an arc");
           break;
         }
         const ids = await collectActiveChapterIds(msg.chatId, userId);
@@ -4050,7 +4081,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         if (!profile)
           break;
         if (getBusy(userId).some((b) => b.kind === "arc" && b.chatId === msg.chatId)) {
-          send({ type: "toast", tone: "warn", text: "Memoria is already binding an arc" }, userId);
+          await notify(userId, "warn", "Memoria is already binding an arc");
           break;
         }
         await createArcFromChapters(msg.chatId, msg.chapterEntryIds, profile, cur, userId);
@@ -4063,7 +4094,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         if (!profile)
           break;
         if (getBusy(userId).some((b) => b.kind === "arc" && b.chatId === msg.chatId)) {
-          send({ type: "toast", tone: "warn", text: "Memoria is already binding an arc" }, userId);
+          await notify(userId, "warn", "Memoria is already binding an arc");
           break;
         }
         await drainArcBacklog(msg.chatId, profile, cur, userId);
@@ -4115,7 +4146,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const entries = await listLmbEntries(msg.chatId, userId);
         const entry = entries.find((e) => e.raw.id === msg.entryId);
         if (!entry) {
-          send({ type: "toast", tone: "warn", text: "Memoria can't find that entry to release" }, userId);
+          await notify(userId, "warn", "Memoria can't find that entry to release");
           break;
         }
         if (entry.meta.tier === 2 && Array.isArray(entry.meta.sourceChapterEntryIds)) {
@@ -4142,7 +4173,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         if (toUnhide.length > 0) {
           await unhideCoveredMessages(msg.chatId, toUnhide, userId).catch(() => {});
         }
-        send({ type: "toast", tone: "success", text: "Memoria released the entry to your lorebook" }, userId);
+        await notify(userId, "success", "Memoria released the entry to your lorebook");
         await pushState(userId, msg.chatId);
         break;
       }
@@ -4154,27 +4185,27 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const entries = await listLmbEntries(msg.chatId, userId);
         const entry = entries.find((e) => e.raw.id === msg.entryId);
         if (!entry) {
-          send({ type: "toast", tone: "warn", text: "Memoria can't find that entry to regenerate" }, userId);
+          await notify(userId, "warn", "Memoria can't find that entry to regenerate");
           break;
         }
         const busyKind = entry.meta.tier === 2 ? "arc" : "chapter";
         if (getBusy(userId).some((b) => b.kind === busyKind && b.chatId === msg.chatId)) {
-          send({ type: "toast", tone: "warn", text: `Memoria is already busy with a ${busyKind}` }, userId);
+          await notify(userId, "warn", `Memoria is already busy with a ${busyKind}`);
           break;
         }
         if (entry.meta.isRoot && entry.meta.tier === 1) {
-          send({ type: "toast", tone: "warn", text: "Memoria can't regenerate an inherited chapter - its original messages live in another chat" }, userId);
+          await notify(userId, "warn", "Memoria can't regenerate inherited chapters");
           break;
         }
         const isArc = entry.meta.tier === 2;
         const msgIds = entry.meta.msgIds.slice();
         const chapterIds = Array.isArray(entry.meta.sourceChapterEntryIds) ? entry.meta.sourceChapterEntryIds.slice() : [];
         if (isArc && chapterIds.length === 0) {
-          send({ type: "toast", tone: "warn", text: "Memoria has no chapter sources to regenerate this arc from" }, userId);
+          await notify(userId, "warn", "Memoria has no chapter sources to regenerate this arc from");
           break;
         }
         if (!isArc && msgIds.length === 0) {
-          send({ type: "toast", tone: "warn", text: "Memoria has no messages to regenerate this chapter from" }, userId);
+          await notify(userId, "warn", "Memoria has no messages to regenerate this chapter from");
           break;
         }
         if (!isArc) {
@@ -4185,11 +4216,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
             const blockerEntryId = otherCoverage.coveredBy.get(blockingIds[0]);
             const blocker = otherEntries.find((e) => e.raw.id === blockerEntryId);
             const blockerLabel = blocker?.meta.tier === 2 ? "an arc" : "another entry";
-            send({
-              type: "toast",
-              tone: "warn",
-              text: `Memoria can't regenerate this chapter, its messages are bound into ${blockerLabel}. Release/delete the arc first.`
-            }, userId);
+            await notify(userId, "warn", `These messages are bound into ${blockerLabel}, release or delete it first`);
             break;
           }
         }
@@ -4225,7 +4252,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         } catch (err) {
           const text = describeError(err);
           warn(`dry_run_chapter failed: ${text}`);
-          send({ type: "toast", tone: "error", text: `Dry run failed: ${text}` }, userId);
+          await notify(userId, "error", `Dry run failed: ${text}`);
         }
         break;
       }
@@ -4240,14 +4267,14 @@ spindle.onFrontendMessage(async (raw, userId) => {
         } catch (err) {
           const text = describeError(err);
           warn(`dry_run_arc failed: ${text}`);
-          send({ type: "toast", tone: "error", text: `Dry run failed: ${text}` }, userId);
+          await notify(userId, "error", `Dry run failed: ${text}`);
         }
         break;
       }
       case "abort_busy": {
         const aborted = abortBusy(userId, msg.chatId, msg.kind);
         if (!aborted) {
-          send({ type: "toast", tone: "warn", text: "Memoria is not in the middle of anything to abort" }, userId);
+          await notify(userId, "warn", "Memoria is not in the middle of anything to abort");
         }
         break;
       }
@@ -4257,8 +4284,8 @@ spindle.onFrontendMessage(async (raw, userId) => {
           warn(`applyConstantToAllLmbEntries failed: ${describeError(err)}`);
           return 0;
         });
-        const text = updated === 0 ? `Memoria set future entries to ${msg.value ? "constant" : "keyword-triggered"} (no existing entries needed updating)` : `Memoria flipped ${updated} entr${updated === 1 ? "y" : "ies"} to ${msg.value ? "constant" : "keyword-triggered"}`;
-        send({ type: "toast", tone: "info", text }, userId);
+        const text = updated === 0 ? `Future entries will be ${msg.value ? "constant" : "keyword-triggered"}` : `Memoria flipped ${updated} entr${updated === 1 ? "y" : "ies"} to ${msg.value ? "constant" : "keyword-triggered"}`;
+        await notify(userId, "info", text);
         await pushState(userId, msg.chatId);
         break;
       }
@@ -4269,7 +4296,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const { unhidden, hidden } = await resyncVisibility(msg.chatId, userId, desiredHidden);
         const total = unhidden + hidden;
         const text = total === 0 ? "Memoria's shelf is already aligned, nya" : `Memoria resynced ${total} message${total === 1 ? "" : "s"} (${hidden} hidden, ${unhidden} unhidden)`;
-        send({ type: "toast", tone: "info", text }, userId);
+        await notify(userId, "info", text);
         await pushState(userId, msg.chatId);
         break;
       }
@@ -4281,7 +4308,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
       case "import_preset": {
         const parsed = parseStmbPresetExport(msg.raw, msg.category);
         if (parsed.length === 0) {
-          send({ type: "toast", tone: "warn", text: "Memoria found no usable presets in that file" }, userId);
+          await notify(userId, "warn", "Memoria found no usable presets in that file");
           break;
         }
         await mutateSettings(userId, (cur) => {
@@ -4296,7 +4323,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
           }
           return { ...cur, customPresets: merged };
         });
-        send({ type: "toast", tone: "success", text: `Memoria imported ${parsed.length} preset${parsed.length === 1 ? "" : "s"}` }, userId);
+        await notify(userId, "success", `Memoria imported ${parsed.length} preset${parsed.length === 1 ? "" : "s"}`);
         await pushState(userId, msg.chatId);
         break;
       }
@@ -4357,32 +4384,32 @@ spindle.onFrontendMessage(async (raw, userId) => {
       }
       case "rebase_root": {
         if (getBusy(userId).some((b) => b.chatId === msg.chatId)) {
-          send({ type: "toast", tone: "warn", text: "Memoria is busy - let her finish before rebasing" }, userId);
+          await notify(userId, "warn", "Memoria is busy, wait for her to finish");
           break;
         }
         const result = await rebaseRoot(msg.chatId, msg.sourceChatId, userId);
         if (!result.ok) {
-          const text = result.reason === "has_own" ? "This chat already has its own memories - use Rebuild to reseed (it will rewrite them)." : result.reason === "empty_source" ? "That chat has no memories to inherit." : result.reason === "busy" ? "Memoria is already rebasing this chat - hold on." : "Memoria can't rebase a chat onto itself.";
-          send({ type: "toast", tone: "warn", text }, userId);
+          const text = result.reason === "has_own" ? "This chat already has memories, use Rebuild instead" : result.reason === "empty_source" ? "That chat has no memories to inherit" : result.reason === "busy" ? "Memoria is already rebasing this chat" : "Memoria can't rebase a chat onto itself";
+          await notify(userId, "warn", text);
         } else {
-          send({ type: "toast", tone: "success", text: `Memoria seeded ${result.count} inherited memor${result.count === 1 ? "y" : "ies"} before the greeting` }, userId);
+          await notify(userId, "success", `Memoria seeded ${result.count} inherited memor${result.count === 1 ? "y" : "ies"} before the greeting`);
         }
         await pushState(userId, msg.chatId);
         break;
       }
       case "rebuild_root": {
         if (getBusy(userId).some((b) => b.chatId === msg.chatId)) {
-          send({ type: "toast", tone: "warn", text: "Memoria is busy - let her finish before rebuilding" }, userId);
+          await notify(userId, "warn", "Memoria is busy, wait for her to finish");
           break;
         }
         const result = await rebuildRoot(msg.chatId, msg.sourceChatId, userId);
         if (!result.ok) {
-          const text = result.reason === "empty_source" ? "That chat has no memories to inherit." : result.reason === "busy" ? "Memoria is already rebuilding this chat - hold on." : "Memoria can't rebuild a chat onto itself.";
-          send({ type: "toast", tone: "warn", text }, userId);
+          const text = result.reason === "empty_source" ? "That chat has no memories to inherit" : result.reason === "busy" ? "Memoria is already rebuilding this chat" : "Memoria can't rebuild a chat onto itself";
+          await notify(userId, "warn", text);
           await pushState(userId, msg.chatId);
           break;
         }
-        send({ type: "toast", tone: "success", text: `Memoria rebuilt onto ${result.count} inherited memor${result.count === 1 ? "y" : "ies"}; re-summarizing this chat\u2026` }, userId);
+        await notify(userId, "success", `Memoria rebuilt onto ${result.count} inherited memor${result.count === 1 ? "y" : "ies"} and is re-summarizing this chat`);
         await pushState(userId, msg.chatId);
         const cur = await loadSettings(userId);
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
@@ -4436,18 +4463,14 @@ spindle.onFrontendMessage(async (raw, userId) => {
             }
           }
         }
-        send({
-          type: "toast",
-          tone: "info",
-          text: msg.excluded ? `Memoria will leave ${ids.length} message${ids.length === 1 ? "" : "s"} untouched` : `Memoria will compress ${ids.length} message${ids.length === 1 ? "" : "s"} again`
-        }, userId);
+        await notify(userId, "info", msg.excluded ? `Memoria will leave ${ids.length} message${ids.length === 1 ? "" : "s"} untouched` : `Memoria will compress ${ids.length} message${ids.length === 1 ? "" : "s"} again`);
         await pushState(userId, msg.chatId);
         break;
       }
       case "detach_root": {
         const removed = await detachRoot(msg.chatId, userId);
         const text = removed === 0 ? "This chat has no inherited memories to detach" : `Memoria detached ${removed} inherited memor${removed === 1 ? "y" : "ies"}`;
-        send({ type: "toast", tone: "info", text }, userId);
+        await notify(userId, "info", text);
         await pushState(userId, msg.chatId);
         break;
       }
@@ -4461,8 +4484,10 @@ spindle.onFrontendMessage(async (raw, userId) => {
   }
 });
 registerBookAnomalyCallback((userId, tone, text) => {
-  hostToast(userId, tone, text);
-  send({ type: "toast", tone, text }, userId);
+  notify(userId, tone, text);
+});
+registerInjectionAnomalyCallback((userId, text) => {
+  notify(userId, "error", text);
 });
 registerHookEndpoints();
 info("LumiBooks loaded.");

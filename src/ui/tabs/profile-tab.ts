@@ -48,6 +48,49 @@ export function renderProfileTab(
   renderContext(rest, profile, patch);
   renderRegex(rest, state, profile, patch);
   renderBehavior(rest, profile, patch);
+  renderResetSettings(rest, state, send);
+}
+
+function renderResetSettings(
+  host: HTMLElement,
+  state: FrontendState,
+  send: (msg: FrontendToBackend) => void,
+): void {
+  const profile = state.activeProfile;
+  const sec = section("Reset");
+  const help = document.createElement("div");
+  help.className = "lmb-help";
+  help.textContent =
+    "Resets this profile's settings to their defaults.";
+  sec.body.appendChild(help);
+
+  const IDLE = "Reset profile to defaults";
+  const CONFIRM = "Click again to confirm";
+  let btn: HTMLButtonElement;
+  let armed = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const disarm = (): void => {
+    armed = false;
+    if (timer) { clearTimeout(timer); timer = undefined; }
+    btn.textContent = IDLE;
+  };
+  btn = makeButton(IDLE, () => {
+    if (!armed) {
+      armed = true;
+      btn.textContent = CONFIRM;
+      timer = setTimeout(disarm, 3000);
+      return;
+    }
+    disarm();
+    send({
+      type: "save_profile",
+      profile: makeDefaultProfile(profile.id, profile.name),
+      chatId: state.activeChatId,
+    });
+  }, { danger: true });
+  sec.body.appendChild(btn);
+
+  host.appendChild(sec.wrap);
 }
 
 function renderProfilePicker(

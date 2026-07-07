@@ -71,6 +71,7 @@ export interface LMBSettings {
   customPresets: CustomPreset[];
   debugLog: boolean;
   forceConstantEntries: boolean;
+  showAutomationToasts: boolean;
 }
 
 export interface LMBEntryMeta {
@@ -161,6 +162,7 @@ export const DEFAULT_SETTINGS: LMBSettings = {
   customPresets: [],
   debugLog: false,
   forceConstantEntries: true,
+  showAutomationToasts: true,
 };
 
 export function diskVersionFor(raw: Partial<LMBSettings> | null | undefined): number {
@@ -191,6 +193,7 @@ export function normalizeSettings(raw: Partial<LMBSettings> | null | undefined):
     customPresets,
     debugLog: typeof v.debugLog === "boolean" ? v.debugLog : fallback.debugLog,
     forceConstantEntries: typeof v.forceConstantEntries === "boolean" ? v.forceConstantEntries : fallback.forceConstantEntries,
+    showAutomationToasts: typeof v.showAutomationToasts === "boolean" ? v.showAutomationToasts : fallback.showAutomationToasts,
   };
 }
 

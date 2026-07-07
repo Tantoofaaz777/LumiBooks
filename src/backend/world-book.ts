@@ -147,8 +147,8 @@ async function doEnsureBookForChat(chatId: string, userId: string): Promise<Worl
         userId,
         "warn",
         recovery.candidates > 1
-          ? `Memoria re-linked this chat's notebook, but found ${recovery.candidates} notebooks for it — you may have duplicates to consolidate. If this recurs, please report it.`
-          : `Memoria re-linked this chat's existing notebook (its link had been lost). If this recurs, please report it.`,
+          ? `Memoria re-linked this chat's notebook but found ${recovery.candidates} candidates, you may have duplicate notebooks`
+          : "Memoria re-linked this chat's notebook after its link was lost",
       );
       return existing;
     }
@@ -162,7 +162,7 @@ async function doEnsureBookForChat(chatId: string, userId: string): Promise<Worl
     bookAnomalyCb?.(
       userId,
       "error",
-      "Memoria expected an existing notebook for this chat but couldn't find it, so it started a new one. Older chapters may be in a separate notebook - please report this.",
+      "Memoria couldn't find this chat's old notebook and started a new one, older chapters may live in a separate notebook",
     );
   }
 

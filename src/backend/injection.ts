@@ -5,6 +5,12 @@ import { buildCoverage, type CoverageMap } from "./coverage";
 import { getChatAttachedBookIds, listLmbEntries, type LMBEntry } from "./world-book";
 import { error } from "./runtime";
 
+let injectionAnomalyCb: ((userId: string, text: string) => void) | null = null;
+
+export function registerInjectionAnomalyCallback(cb: (userId: string, text: string) => void): void {
+  injectionAnomalyCb = cb;
+}
+
 function isAssembledHistory(lm: LlmMessageDTO): boolean {
   return (lm as unknown as Record<string, unknown>)["__isChatHistory"] === true;
 }
@@ -101,7 +107,11 @@ export async function buildInjection(
     if (hasVisibleMessage) {
       error(
         `injection: no "__isChatHistory" messages on ${llmMessages.length} assembled message(s) despite ` +
-          `visible chat messages. Lumiverse's chat-history contract likely changed - skipping injection.`,
+          `visible chat messages. The host most likely clipped all history because max context is too small, skipping injection.`,
+      );
+      injectionAnomalyCb?.(
+        userId,
+        "Memoria can't see any chat history, your max context is likely too small",
       );
     }
     return null;
@@ -113,14 +123,14 @@ export async function buildInjection(
     if (id === undefined) {
       error(
         `injection: a "__isChatHistory" message is missing sourceMessageId. Host identity contract ` +
-          `looks inconsistent - skipping injection.`,
+          `looks inconsistent, skipping injection.`,
       );
       return null;
     }
     const idx = msgIdToIdx.get(id);
     if (idx === undefined) {
       error(
-        `injection: sourceMessageId "${id}" is not in the chat - skipping injection.`,
+        `injection: sourceMessageId "${id}" is not in the chat, skipping injection.`,
       );
       return null;
     }
