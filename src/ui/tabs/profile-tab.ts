@@ -394,6 +394,46 @@ function renderCompressionTargets(host: HTMLElement, profile: LMBProfile, patch:
   );
   sec.body.appendChild(arcRatioGrid);
 
+  const volumeTitle = document.createElement("div");
+  volumeTitle.className = "lmb-subgroup-title";
+  volumeTitle.style.marginTop = "6px";
+  volumeTitle.textContent = "Volume";
+  sec.body.appendChild(volumeTitle);
+
+  const volumeHint = document.createElement("div");
+  volumeHint.className = "lmb-field-hint";
+  volumeHint.textContent = "Volumes are manual only. Turn arcs into a volume from the Make tab.";
+  sec.body.appendChild(volumeHint);
+
+  const volumeRatioGrid = document.createElement("div");
+  volumeRatioGrid.className = "lmb-grid-2";
+  volumeRatioGrid.append(
+    labelled("Volume ratio", select({
+      value: profile.volumeTargetUnit,
+      options: [
+        { value: "percent", label: "% of input" },
+        { value: "tokens", label: "token budget" },
+      ],
+      onChange: (v) => patch({ volumeTargetUnit: v === "tokens" ? "tokens" : "percent" }),
+    })),
+    labelled(
+      profile.volumeTargetUnit === "tokens" ? "Volume tokens" : "Volume %",
+      numberInput({
+        value: profile.volumeTargetUnit === "tokens" ? profile.volumeTargetTokens : profile.volumeTargetPercent,
+        min: profile.volumeTargetUnit === "tokens" ? 50 : 5,
+        max: profile.volumeTargetUnit === "tokens" ? 1000000 : 95,
+        step: profile.volumeTargetUnit === "tokens" ? 50 : 1,
+        defaultValue: profile.volumeTargetUnit === "tokens" ? PROFILE_DEFAULTS.volumeTargetTokens : PROFILE_DEFAULTS.volumeTargetPercent,
+        onBlur: (v) => {
+          if (v === null) return;
+          if (profile.volumeTargetUnit === "tokens") patch({ volumeTargetTokens: v });
+          else patch({ volumeTargetPercent: v });
+        },
+      }),
+    ),
+  );
+  sec.body.appendChild(volumeRatioGrid);
+
   host.appendChild(sec.wrap);
 }
 

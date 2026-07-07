@@ -32,6 +32,9 @@ export interface LMBProfile {
   arcTargetUnit: CompressionTargetUnit;
   arcTargetPercent: number;
   arcTargetTokens: number;
+  volumeTargetUnit: CompressionTargetUnit;
+  volumeTargetPercent: number;
+  volumeTargetTokens: number;
   arcTrigger: ArcTriggerMode;
   arcAfterChapters: number;
   arcAfterTokens: number;
@@ -39,6 +42,7 @@ export interface LMBProfile {
   arcLagTokens: number;
   chapterPresetKey: string;
   arcPresetKey: string;
+  volumePresetKey: string;
   previousMemoriesCount: number;
   regexOutgoingScriptIds: string[];
   regexIncomingScriptIds: string[];
@@ -59,7 +63,7 @@ export interface CustomPreset {
   key: string;
   displayName: string;
   prompt: string;
-  category: "chapter" | "arc";
+  category: "chapter" | "arc" | "volume";
   createdAt: number;
 }
 
@@ -75,9 +79,11 @@ export interface LMBSettings {
 }
 
 export interface LMBEntryMeta {
-  tier: 1 | 2;
+  /** 1 = chapter, 2 = arc, 3 = volume. */
+  tier: 1 | 2 | 3;
   chatId: string;
   msgIds: string[];
+  /** Ids of the tier below: chapter ids on an arc, arc ids on a volume. */
   sourceChapterEntryIds?: string[];
   firstMsgIdx?: number;
   lastMsgIdx?: number;
@@ -130,6 +136,9 @@ export function makeDefaultProfile(id: string, name: string): LMBProfile {
     arcTargetUnit: "percent",
     arcTargetPercent: 20,
     arcTargetTokens: 1500,
+    volumeTargetUnit: "percent",
+    volumeTargetPercent: 25,
+    volumeTargetTokens: 3000,
     arcTrigger: "chapters",
     arcAfterChapters: 6,
     arcAfterTokens: 8000,
@@ -137,6 +146,7 @@ export function makeDefaultProfile(id: string, name: string): LMBProfile {
     arcLagTokens: 2000,
     chapterPresetKey: "summary",
     arcPresetKey: "arc_default",
+    volumePresetKey: "volume_default",
     previousMemoriesCount: 7,
     regexOutgoingScriptIds: [],
     regexIncomingScriptIds: [],
@@ -215,6 +225,9 @@ export function normalizeProfile(raw: unknown): LMBProfile | null {
     arcTargetUnit: v.arcTargetUnit === "tokens" ? "tokens" : "percent",
     arcTargetPercent: clampInt(v.arcTargetPercent, 5, 95, base.arcTargetPercent),
     arcTargetTokens: clampInt(v.arcTargetTokens, 50, 1000000, base.arcTargetTokens),
+    volumeTargetUnit: v.volumeTargetUnit === "tokens" ? "tokens" : "percent",
+    volumeTargetPercent: clampInt(v.volumeTargetPercent, 5, 95, base.volumeTargetPercent),
+    volumeTargetTokens: clampInt(v.volumeTargetTokens, 50, 1000000, base.volumeTargetTokens),
     arcTrigger: v.arcTrigger === "tokens" || v.arcTrigger === "manual" ? v.arcTrigger : "chapters",
     arcAfterChapters: clampInt(v.arcAfterChapters, 2, 100, base.arcAfterChapters),
     arcAfterTokens: clampInt(v.arcAfterTokens, 500, 200000, base.arcAfterTokens),
@@ -222,6 +235,7 @@ export function normalizeProfile(raw: unknown): LMBProfile | null {
     arcLagTokens: clampInt(v.arcLagTokens, 0, 200000, base.arcLagTokens),
     chapterPresetKey: typeof v.chapterPresetKey === "string" && v.chapterPresetKey.trim() ? v.chapterPresetKey : base.chapterPresetKey,
     arcPresetKey: typeof v.arcPresetKey === "string" && v.arcPresetKey.trim() ? v.arcPresetKey : base.arcPresetKey,
+    volumePresetKey: typeof v.volumePresetKey === "string" && v.volumePresetKey.trim() ? v.volumePresetKey : base.volumePresetKey,
     previousMemoriesCount: clampInt(v.previousMemoriesCount, 0, 20, base.previousMemoriesCount),
     regexOutgoingScriptIds: Array.isArray(v.regexOutgoingScriptIds)
       ? v.regexOutgoingScriptIds.filter((x): x is string => typeof x === "string")
@@ -267,7 +281,7 @@ export function normalizeCustomPreset(raw: unknown): CustomPreset | null {
   const v = raw as Partial<CustomPreset>;
   if (typeof v.key !== "string" || !v.key.trim()) return null;
   if (typeof v.prompt !== "string" || !v.prompt.trim()) return null;
-  const category = v.category === "arc" ? "arc" : "chapter";
+  const category = v.category === "arc" ? "arc" : v.category === "volume" ? "volume" : "chapter";
   return {
     key: v.key,
     displayName: typeof v.displayName === "string" && v.displayName.trim() ? v.displayName : v.key,
@@ -280,7 +294,7 @@ export function normalizeCustomPreset(raw: unknown): CustomPreset | null {
 export function normalizeEntryMeta(raw: unknown): LMBEntryMeta | null {
   if (!raw || typeof raw !== "object") return null;
   const v = raw as Partial<LMBEntryMeta>;
-  const tier = v.tier === 2 ? 2 : v.tier === 1 ? 1 : null;
+  const tier = v.tier === 3 ? 3 : v.tier === 2 ? 2 : v.tier === 1 ? 1 : null;
   if (!tier) return null;
   if (typeof v.chatId !== "string" || !v.chatId.trim()) return null;
   const msgIds = Array.isArray(v.msgIds) ? v.msgIds.filter((x): x is string => typeof x === "string") : [];
@@ -350,6 +364,10 @@ export function buildChapterHeader(sceneNumber: number, turnCount: number): stri
 
 export function buildArcHeader(sceneNumber: number, chapterCount: number, turnCount: number): string {
   return `${ordinal(sceneNumber)} Summary ARC Containing ${chapterCount} Prior Chapter${chapterCount === 1 ? "" : "s"} and ${turnCount} Prior Turn${turnCount === 1 ? "" : "s"}`;
+}
+
+export function buildVolumeHeader(sceneNumber: number, arcCount: number, turnCount: number): string {
+  return `${ordinal(sceneNumber)} Summary VOLUME Containing ${arcCount} Prior Arc${arcCount === 1 ? "" : "s"} and ${turnCount} Prior Turn${turnCount === 1 ? "" : "s"}`;
 }
 
 export function bookNameFor(chatName: string | null | undefined, chatId: string): string {

@@ -68,7 +68,7 @@ export async function confirmDelete(
 }
 
 export function showDryRunModal(
-  kind: "chapter" | "arc",
+  kind: "chapter" | "arc" | "volume",
   messages: DryRunMessage[],
   diagnostics: DryRunDiagnostic[],
 ): void {
@@ -81,7 +81,7 @@ export function showDryRunModal(
   const header = document.createElement("div");
   header.className = "lmb-preview-modal__header";
   const title = document.createElement("h3");
-  title.textContent = `Dry run: ${kind === "arc" ? "Arc" : "Chapter"}`;
+  title.textContent = `Dry run: ${kind === "arc" ? "Arc" : kind === "volume" ? "Volume" : "Chapter"}`;
   header.appendChild(title);
   const closeBtn = document.createElement("button");
   closeBtn.type = "button";

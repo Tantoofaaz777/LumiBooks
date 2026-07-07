@@ -143,7 +143,7 @@ async function cloneShelfForFork(
     let lastIdx = last;
     if (firstIdx === undefined || lastIdx === undefined) {
       for (const oldId of entry.meta.sourceChapterEntryIds ?? []) {
-        const cm = ctx.clonedChapterMeta.get(oldId);
+        const cm = ctx.clonedMeta.get(oldId);
         if (!cm) continue;
         if (cm.firstMsgIdx !== undefined) firstIdx = firstIdx === undefined ? cm.firstMsgIdx : Math.min(firstIdx, cm.firstMsgIdx);
         if (cm.lastMsgIdx !== undefined) lastIdx = lastIdx === undefined ? cm.lastMsgIdx : Math.max(lastIdx, cm.lastMsgIdx);

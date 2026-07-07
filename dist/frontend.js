@@ -186,6 +186,7 @@ var STYLES = `
 }
 .lmb-entry.superseded { opacity: 0.45; }
 .lmb-entry.arc { border-left: 3px solid var(--lumiverse-primary, #6b8ff0); }
+.lmb-entry.volume { border-left: 3px solid var(--lumiverse-warning, #d4a73a); }
 .lmb-entry.root { border-left: 3px solid var(--lumiverse-muted, #8a7fb0); opacity: 0.8; }
 .lmb-entry-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .lmb-entry-title {
@@ -215,6 +216,10 @@ var STYLES = `
 .lmb-entry-tag.arc {
   background: var(--lumiverse-primary-020, rgba(107, 143, 240, 0.2));
   color: var(--lumiverse-primary, #6b8ff0);
+}
+.lmb-entry-tag.volume {
+  background: var(--lumiverse-warning-020, rgba(212, 167, 58, 0.2));
+  color: var(--lumiverse-warning, #d4a73a);
 }
 .lmb-entry-meta {
   font-size: 11px;
@@ -883,7 +888,7 @@ function showDryRunModal(kind, messages, diagnostics) {
   const header = document.createElement("div");
   header.className = "lmb-preview-modal__header";
   const title = document.createElement("h3");
-  title.textContent = `Dry run: ${kind === "arc" ? "Arc" : "Chapter"}`;
+  title.textContent = `Dry run: ${kind === "arc" ? "Arc" : kind === "volume" ? "Volume" : "Chapter"}`;
   header.appendChild(title);
   const closeBtn = document.createElement("button");
   closeBtn.type = "button";
@@ -1066,7 +1071,7 @@ function renderFailure(host, state, send) {
   sec.className = "lmb-failure";
   const head = document.createElement("div");
   head.style.fontWeight = "600";
-  head.textContent = f.kind === "arc" ? "Last arc attempt failed" : "Last chapter attempt failed";
+  head.textContent = f.kind === "arc" ? "Last arc attempt failed" : f.kind === "volume" ? "Last volume attempt failed" : "Last chapter attempt failed";
   const detail = document.createElement("div");
   detail.style.opacity = "0.85";
   detail.textContent = `${f.message} (tried ${f.retriedTimes}x)`;
@@ -1094,7 +1099,7 @@ function renderPreviewCard(preview, chatId, send) {
   head.style.alignItems = "center";
   head.style.gap = "8px";
   const tag = document.createElement("span");
-  tag.className = `lmb-entry-tag ${preview.kind === "arc" ? "arc" : ""}`;
+  tag.className = `lmb-entry-tag ${preview.kind !== "chapter" ? preview.kind : ""}`.trim();
   tag.textContent = preview.kind.toUpperCase();
   head.append(tag, span(preview.title, "lmb-entry-title"));
   card.appendChild(head);
@@ -1196,10 +1201,19 @@ function renderEntries(host, state, ctx, send) {
   }
   const chapters = state.chapters.filter((c) => !c.isRoot);
   const arcs = state.arcs.filter((a) => !a.isRoot);
-  if (chapters.length + arcs.length === 0) {
+  const volumes = state.volumes.filter((v) => !v.isRoot);
+  if (chapters.length + arcs.length + volumes.length === 0) {
     sec.body.appendChild(textNode("Empty shelf for now. Memoria will start filing once the lag fills.", "lmb-empty"));
     host.appendChild(sec.wrap);
     return;
+  }
+  if (volumes.length) {
+    sec.body.appendChild(buildSubtitle(`Volumes (${volumes.length})`));
+    const list = document.createElement("ul");
+    list.className = "lmb-entry-list";
+    for (const vol of volumes)
+      list.appendChild(renderEntryItem(vol, "volume", state, ctx, send));
+    sec.body.appendChild(list);
   }
   if (arcs.length) {
     sec.body.appendChild(buildSubtitle(`Arcs (${arcs.length})`));
@@ -1243,7 +1257,7 @@ function renderEntryItem(view, kind, state, ctx, send, readOnly = false) {
     const actions = document.createElement("div");
     actions.className = "lmb-entry-actions";
     actions.append(makeButton("Edit", () => {
-      openEditModal(ctx, kind === "arc" ? "Edit arc" : "Edit chapter", {
+      openEditModal(ctx, kind === "arc" ? "Edit arc" : kind === "volume" ? "Edit volume" : "Edit chapter", {
         comment: view.comment,
         content: view.content
       }, (next) => {
@@ -1313,6 +1327,7 @@ function addRow(grid, label, value) {
 var localState = {
   selectedMessages: new Set,
   selectedChapters: new Set,
+  selectedArcs: new Set,
   messageFilter: "uncovered",
   messageQuery: "",
   lastChatId: null,
@@ -1326,6 +1341,7 @@ function renderMakeTab(host, state, ctx, send) {
   if (localState.lastChatId !== state.activeChatId) {
     localState.selectedMessages.clear();
     localState.selectedChapters.clear();
+    localState.selectedArcs.clear();
     localState.anchorMessageId = null;
     localState.rebaseSourceId = "";
     localState.lastChatId = state.activeChatId;
@@ -1337,6 +1353,7 @@ function renderMakeTab(host, state, ctx, send) {
         state,
         selectedMessages: localState.selectedMessages,
         selectedChapters: localState.selectedChapters,
+        selectedArcs: localState.selectedArcs,
         messageFilter: localState.messageFilter,
         messageQuery: localState.messageQuery,
         rerender: draw
@@ -1347,6 +1364,7 @@ function renderMakeTab(host, state, ctx, send) {
       }
       renderChapterPicker(host, c, send);
       renderArcPicker(host, c, send);
+      renderVolumePicker(host, c, send);
       renderContinuity(host, c, ctx, send);
     });
   };
@@ -1673,10 +1691,82 @@ function renderArcPicker(host, c, send) {
   sec.body.appendChild(actions);
   host.appendChild(sec.wrap);
 }
+function renderVolumePicker(host, c, send) {
+  const sec = section("Press arcs into a volume");
+  const activeArcs = c.state.arcs.filter((a) => a.active && !a.isRoot);
+  if (activeArcs.length === 0) {
+    sec.body.appendChild(textNode("Memoria has no unbound arcs to press yet", "lmb-empty"));
+    host.appendChild(sec.wrap);
+    return;
+  }
+  const help = document.createElement("div");
+  help.className = "lmb-help";
+  help.textContent = "A volume replaces its source arcs in the prompt, the highest compression tier. Volumes are manual only.";
+  sec.body.appendChild(help);
+  const list = document.createElement("div");
+  list.className = "lmb-multiselect";
+  const counts = document.createElement("div");
+  counts.className = "lmb-help";
+  const updateCounts = () => {
+    let before = 0;
+    for (const a of activeArcs) {
+      if (!c.selectedArcs.has(a.entryId))
+        continue;
+      before += a.sourceTokensInput > 0 ? a.sourceTokensInput : a.contentTokens;
+    }
+    counts.textContent = `${c.selectedArcs.size} selected (~${formatTokens(before)} tokens before)`;
+  };
+  for (const arc of activeArcs) {
+    const row = document.createElement("label");
+    row.className = "lmb-multiselect-row";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = c.selectedArcs.has(arc.entryId);
+    cb.addEventListener("change", () => {
+      if (cb.checked)
+        c.selectedArcs.add(arc.entryId);
+      else
+        c.selectedArcs.delete(arc.entryId);
+      updateCounts();
+    });
+    const text = document.createElement("span");
+    const range = arc.meta.firstMsgIdx !== undefined && arc.meta.lastMsgIdx !== undefined ? ` (msgs ${arc.meta.firstMsgIdx + 1}-${arc.meta.lastMsgIdx + 1})` : "";
+    const tokenStr = arc.sourceTokensInput > 0 ? `${formatTokens(arc.sourceTokensInput)}t→${formatTokens(arc.contentTokens)}t` : `${formatTokens(arc.contentTokens)}t`;
+    text.textContent = `${arc.comment || arc.meta.title || arc.entryId.slice(0, 6)}${range} - ${tokenStr}`;
+    row.append(cb, text);
+    list.appendChild(row);
+  }
+  sec.body.appendChild(list);
+  updateCounts();
+  sec.body.appendChild(counts);
+  const chatId = c.state.activeChatId;
+  const actions = document.createElement("div");
+  actions.className = "lmb-actions";
+  actions.append(makeButton("Press selected", () => {
+    const ids = Array.from(c.selectedArcs);
+    if (ids.length === 0)
+      return;
+    send({ type: "create_volume_from", chatId, arcEntryIds: ids });
+    localState.selectedArcs.clear();
+    c.selectedArcs.clear();
+    c.rerender();
+  }, { primary: true }), makeButton("Select all active", () => {
+    const next = new Set(activeArcs.map((a) => a.entryId));
+    localState.selectedArcs = next;
+    c.selectedArcs = next;
+    c.rerender();
+  }), makeButton("Clear", () => {
+    localState.selectedArcs.clear();
+    c.selectedArcs.clear();
+    c.rerender();
+  }));
+  sec.body.appendChild(actions);
+  host.appendChild(sec.wrap);
+}
 function renderContinuity(host, c, ctx, send) {
   const state = c.state;
   const chatId = state.activeChatId;
-  const hasOwn = state.chapters.some((ch) => !ch.isRoot) || state.arcs.some((a) => !a.isRoot);
+  const hasOwn = state.chapters.some((ch) => !ch.isRoot) || state.arcs.some((a) => !a.isRoot) || state.volumes.some((v) => !v.isRoot);
   const hasRoot = state.rootEntryCount > 0;
   const candidates = state.availableRoots;
   if (!hasRoot && candidates.length === 0)
@@ -1688,7 +1778,11 @@ function renderContinuity(host, c, ctx, send) {
     const originName = state.rootOriginName || state.rootOrigin?.slice(0, 8) || "another chat";
     status.textContent = `Inherited from ${originName}: ${state.rootEntryCount} memor${state.rootEntryCount === 1 ? "y" : "ies"}, injected before the greeting.`;
     sec.body.appendChild(status);
-    const rootEntries = [...state.arcs.filter((a) => a.isRoot), ...state.chapters.filter((ch) => ch.isRoot)];
+    const rootEntries = [
+      ...state.volumes.filter((v) => v.isRoot),
+      ...state.arcs.filter((a) => a.isRoot),
+      ...state.chapters.filter((ch) => ch.isRoot)
+    ];
     if (rootEntries.length) {
       const list = document.createElement("div");
       list.className = "lmb-multiselect";
@@ -1696,7 +1790,7 @@ function renderContinuity(host, c, ctx, send) {
         const rowEl = document.createElement("div");
         rowEl.className = "lmb-multiselect-row";
         rowEl.style.opacity = "0.75";
-        const tag = e.meta.tier === 2 ? "ARC" : "CH";
+        const tag = e.meta.tier === 3 ? "VOL" : e.meta.tier === 2 ? "ARC" : "CH";
         rowEl.textContent = `[${tag}] ${e.comment || e.meta.title || e.entryId.slice(0, 6)} (${formatTokens(e.contentTokens)}t)`;
         list.appendChild(rowEl);
       }
@@ -1786,6 +1880,9 @@ function makeDefaultProfile(id, name) {
     arcTargetUnit: "percent",
     arcTargetPercent: 20,
     arcTargetTokens: 1500,
+    volumeTargetUnit: "percent",
+    volumeTargetPercent: 25,
+    volumeTargetTokens: 3000,
     arcTrigger: "chapters",
     arcAfterChapters: 6,
     arcAfterTokens: 8000,
@@ -1793,6 +1890,7 @@ function makeDefaultProfile(id, name) {
     arcLagTokens: 2000,
     chapterPresetKey: "summary",
     arcPresetKey: "arc_default",
+    volumePresetKey: "volume_default",
     previousMemoriesCount: 7,
     regexOutgoingScriptIds: [],
     regexIncomingScriptIds: [],
@@ -2120,6 +2218,40 @@ function renderCompressionTargets(host, profile, patch) {
     }
   })));
   sec.body.appendChild(arcRatioGrid);
+  const volumeTitle = document.createElement("div");
+  volumeTitle.className = "lmb-subgroup-title";
+  volumeTitle.style.marginTop = "6px";
+  volumeTitle.textContent = "Volume";
+  sec.body.appendChild(volumeTitle);
+  const volumeHint = document.createElement("div");
+  volumeHint.className = "lmb-field-hint";
+  volumeHint.textContent = "Volumes are manual only. Turn arcs into a volume from the Make tab.";
+  sec.body.appendChild(volumeHint);
+  const volumeRatioGrid = document.createElement("div");
+  volumeRatioGrid.className = "lmb-grid-2";
+  volumeRatioGrid.append(labelled("Volume ratio", select({
+    value: profile.volumeTargetUnit,
+    options: [
+      { value: "percent", label: "% of input" },
+      { value: "tokens", label: "token budget" }
+    ],
+    onChange: (v) => patch({ volumeTargetUnit: v === "tokens" ? "tokens" : "percent" })
+  })), labelled(profile.volumeTargetUnit === "tokens" ? "Volume tokens" : "Volume %", numberInput({
+    value: profile.volumeTargetUnit === "tokens" ? profile.volumeTargetTokens : profile.volumeTargetPercent,
+    min: profile.volumeTargetUnit === "tokens" ? 50 : 5,
+    max: profile.volumeTargetUnit === "tokens" ? 1e6 : 95,
+    step: profile.volumeTargetUnit === "tokens" ? 50 : 1,
+    defaultValue: profile.volumeTargetUnit === "tokens" ? PROFILE_DEFAULTS.volumeTargetTokens : PROFILE_DEFAULTS.volumeTargetPercent,
+    onBlur: (v) => {
+      if (v === null)
+        return;
+      if (profile.volumeTargetUnit === "tokens")
+        patch({ volumeTargetTokens: v });
+      else
+        patch({ volumeTargetPercent: v });
+    }
+  })));
+  sec.body.appendChild(volumeRatioGrid);
   host.appendChild(sec.wrap);
 }
 function renderConnection(host, state, profile, patch) {
@@ -2309,13 +2441,14 @@ function renderPromptsTab(host, state, ctx, send) {
   host.replaceChildren();
   const profile = state.activeProfile;
   const setKey = (category, key) => {
-    const p = category === "arc" ? { arcPresetKey: key } : { chapterPresetKey: key };
+    const p = category === "arc" ? { arcPresetKey: key } : category === "volume" ? { volumePresetKey: key } : { chapterPresetKey: key };
     send({ type: "save_profile", profile: { id: profile.id, ...p }, chatId: state.activeChatId });
   };
   renderHelp(host);
   renderMemoriaOverrides(host, state, send);
   renderCategory(host, state, ctx, send, "chapter", profile.chapterPresetKey, setKey);
   renderCategory(host, state, ctx, send, "arc", profile.arcPresetKey, setKey);
+  renderCategory(host, state, ctx, send, "volume", profile.volumePresetKey, setKey);
   renderImport(host, state, ctx, send);
 }
 var ALPHABET_PICK = "{{pick::A::B::C::D::E::F::G::H::I::J::K::L::M::N::O::P::Q::R::S::T::U::V::W::X::Y::Z}}";
@@ -2408,8 +2541,8 @@ function buildOverrideBlock(opts) {
   return wrap;
 }
 function renderCategory(host, state, ctx, send, category, selectedKey, setKey) {
-  const sec = section(category === "arc" ? "Arc prompt" : "Chapter prompt");
-  const builtIns = category === "arc" ? state.arcPresets : state.chapterPresets;
+  const sec = section(category === "arc" ? "Arc prompt" : category === "volume" ? "Volume prompt" : "Chapter prompt");
+  const builtIns = category === "arc" ? state.arcPresets : category === "volume" ? state.volumePresets : state.chapterPresets;
   const customs = state.customPresets.filter((p) => p.category === category);
   const opts = [
     ...builtIns.map((b) => ({ value: b.key, label: `Built-in: ${b.displayName}` })),
@@ -2468,7 +2601,7 @@ function renderCategory(host, state, ctx, send, category, selectedKey, setKey) {
   }, { small: true }), makeButton("Dry run", () => {
     if (!state.activeChatId)
       return;
-    send(category === "arc" ? { type: "dry_run_arc", chatId: state.activeChatId } : { type: "dry_run_chapter", chatId: state.activeChatId });
+    send(category === "arc" ? { type: "dry_run_arc", chatId: state.activeChatId } : category === "volume" ? { type: "dry_run_volume", chatId: state.activeChatId } : { type: "dry_run_chapter", chatId: state.activeChatId });
   }, {
     small: true,
     disabled: !state.activeChatId || !state.settings.enabled,
@@ -2522,7 +2655,7 @@ function renderCategory(host, state, ctx, send, category, selectedKey, setKey) {
   host.appendChild(sec.wrap);
 }
 function blankPromptTemplate(category) {
-  const noun = category === "arc" ? "arc" : "chapter";
+  const noun = category === "arc" ? "arc" : category === "volume" ? "volume" : "chapter";
   return [
     `Summarize the following ${noun} into a JSON memory.`,
     "",
@@ -2542,7 +2675,7 @@ function findPresetText(state, category, key) {
   const c = state.customPresets.find((p) => p.key === key && p.category === category);
   if (c)
     return c.prompt;
-  const builtIns = category === "arc" ? state.arcPresets : state.chapterPresets;
+  const builtIns = category === "arc" ? state.arcPresets : category === "volume" ? state.volumePresets : state.chapterPresets;
   const b = builtIns.find((p) => p.key === key);
   return b?.prompt ?? "";
 }
@@ -2663,6 +2796,7 @@ function renderAboutTab(host, state, send) {
     "Tail messages stay uncompressed until they pass the lag.",
     "Once the window fills, Memoria writes a chapter, hides those messages in the chat, and slices the chapter into the prompt at the same spot.",
     "Several chapters can be bound into a single arc that replaces them.",
+    "Arcs can be pressed into a volume the same way, manually from the Make tab.",
     "Storage lives in a per-chat world book named LumiBooks. Renaming or deleting entries there releases the messages back."
   ];
   for (const l of lines) {
@@ -2672,7 +2806,7 @@ function renderAboutTab(host, state, send) {
   const ack = section("Acknowledgements");
   const a = document.createElement("div");
   a.className = "lmb-about-line";
-  a.textContent = "Built on Lumiverse Spindle, with prompts and UX inspired by SillyTavern Memory Books. " + "Memoria thanks the original Memory Books authors for the trail.";
+  a.textContent = "Built on Lumiverse Spindle, with prompts and UX inspired by SillyTavern Memory Books. " + "Memoria thanks the original Memory Books authors for the inspiration.";
   ack.body.appendChild(a);
   host.appendChild(ack.wrap);
 }

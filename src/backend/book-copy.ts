@@ -17,7 +17,8 @@ export interface CopyOverride {
 
 export interface CopyCtx {
   idMap: Map<string, string>;
-  clonedChapterMeta: Map<string, LMBEntryMeta>;
+  /** Meta of every cloned entry (chapters and arcs), keyed by the OLD entry id. */
+  clonedMeta: Map<string, LMBEntryMeta>;
 }
 
 export type CopyTransform = (entry: LMBEntry, ctx: CopyCtx) => CopyOverride | null;
@@ -29,10 +30,11 @@ export async function copyLmbEntries(
   transform: CopyTransform,
 ): Promise<Map<string, string>> {
   const idMap = new Map<string, string>();
-  const clonedChapterMeta = new Map<string, LMBEntryMeta>();
-  const ctx: CopyCtx = { idMap, clonedChapterMeta };
+  const clonedMeta = new Map<string, LMBEntryMeta>();
+  const ctx: CopyCtx = { idMap, clonedMeta };
   const chapters = sourceEntries.filter((e) => e.meta.tier === 1);
   const arcs = sourceEntries.filter((e) => e.meta.tier === 2);
+  const volumes = sourceEntries.filter((e) => e.meta.tier === 3);
 
   for (const ch of chapters) {
     const o = transform(ch, ctx);
@@ -47,46 +49,53 @@ export async function copyLmbEntries(
     };
     const created = await createClone(targetBookId, ch.raw, meta, userId, o.comment);
     idMap.set(ch.raw.id, created.id);
-    clonedChapterMeta.set(ch.raw.id, meta);
+    clonedMeta.set(ch.raw.id, meta);
   }
 
-  for (const arc of arcs) {
-    const o = transform(arc, ctx);
-    if (!o) continue;
-    const sourceChapterEntryIds = (arc.meta.sourceChapterEntryIds ?? [])
-      .map((oldId) => idMap.get(oldId))
-      .filter((x): x is string => typeof x === "string");
-    const meta: LMBEntryMeta = {
-      ...arc.meta,
-      msgIds: o.msgIds,
-      sourceChapterEntryIds,
-      firstMsgIdx: o.firstMsgIdx,
-      lastMsgIdx: o.lastMsgIdx,
-      supersededByEntryId: null,
-      ...o.extra,
-    };
-    const created = await createClone(targetBookId, arc.raw, meta, userId, o.comment);
-    idMap.set(arc.raw.id, created.id);
+  // Arcs after chapters, volumes after arcs, so each pass can remap its
+  // source ids (sourceChapterEntryIds) through the ids cloned before it.
+  for (const group of [arcs, volumes]) {
+    for (const entry of group) {
+      const o = transform(entry, ctx);
+      if (!o) continue;
+      const sourceChapterEntryIds = (entry.meta.sourceChapterEntryIds ?? [])
+        .map((oldId) => idMap.get(oldId))
+        .filter((x): x is string => typeof x === "string");
+      const meta: LMBEntryMeta = {
+        ...entry.meta,
+        msgIds: o.msgIds,
+        sourceChapterEntryIds,
+        firstMsgIdx: o.firstMsgIdx,
+        lastMsgIdx: o.lastMsgIdx,
+        supersededByEntryId: null,
+        ...o.extra,
+      };
+      const created = await createClone(targetBookId, entry.raw, meta, userId, o.comment);
+      idMap.set(entry.raw.id, created.id);
+      clonedMeta.set(entry.raw.id, meta);
+    }
   }
 
-  for (const ch of chapters) {
-    const newChId = idMap.get(ch.raw.id);
-    if (!newChId) continue;
-    const oldArcId = ch.meta.supersededByEntryId;
-    if (!oldArcId) continue;
-    const newArcId = idMap.get(oldArcId);
-    if (!newArcId) continue;
-    const baseMeta = clonedChapterMeta.get(ch.raw.id);
+  // Re-point supersededByEntryId on every cloned entry whose old superseder
+  // was also cloned: chapters point at their new arc, arcs at their new volume.
+  for (const src of [...chapters, ...arcs]) {
+    const newId = idMap.get(src.raw.id);
+    if (!newId) continue;
+    const oldSuperId = src.meta.supersededByEntryId;
+    if (!oldSuperId) continue;
+    const newSuperId = idMap.get(oldSuperId);
+    if (!newSuperId) continue;
+    const baseMeta = clonedMeta.get(src.raw.id);
     if (!baseMeta) continue;
-    const ext = (ch.raw.extensions || {}) as Record<string, unknown>;
+    const ext = (src.raw.extensions || {}) as Record<string, unknown>;
     try {
       await spindle.world_books.entries.update(
-        newChId,
-        { extensions: { ...ext, [EXTENSION_KEY]: { ...baseMeta, supersededByEntryId: newArcId } } },
+        newId,
+        { extensions: { ...ext, [EXTENSION_KEY]: { ...baseMeta, supersededByEntryId: newSuperId } } },
         userId,
       );
     } catch (err) {
-      warn(`copyLmbEntries: failed to re-point chapter ${newChId.slice(0, 8)}: ${describeError(err)}`);
+      warn(`copyLmbEntries: failed to re-point entry ${newId.slice(0, 8)}: ${describeError(err)}`);
     }
   }
 

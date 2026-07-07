@@ -12,7 +12,7 @@ import { listRegexScripts } from "./regex";
 import { getBusy, getLastFailure, getPendingPreviews } from "./pipeline";
 import { ensureForkAdoption } from "./fork";
 import { describeError, warn } from "./runtime";
-import { BUILTIN_ARC_PRESETS, BUILTIN_CHAPTER_PRESETS } from "./presets";
+import { BUILTIN_ARC_PRESETS, BUILTIN_CHAPTER_PRESETS, BUILTIN_VOLUME_PRESETS } from "./presets";
 
 type ChatMessageDTO = ChatMessage;
 
@@ -58,6 +58,7 @@ export async function buildState(userId: string, requestedChatId?: string | null
     activeProfile,
     chapters: [],
     arcs: [],
+    volumes: [],
     bookId: null,
     bookName: null,
     connections,
@@ -75,6 +76,7 @@ export async function buildState(userId: string, requestedChatId?: string | null
     messages: [],
     chapterPresets: BUILTIN_CHAPTER_PRESETS,
     arcPresets: BUILTIN_ARC_PRESETS,
+    volumePresets: BUILTIN_VOLUME_PRESETS,
     customPresets: settings.customPresets,
     regexScripts,
     pendingPreviews: [],
@@ -116,13 +118,14 @@ export async function buildState(userId: string, requestedChatId?: string | null
 
   const supersededIds = new Set<string>();
   for (const e of entries) {
-    if (e.meta.tier === 2 && !e.raw.disabled && Array.isArray(e.meta.sourceChapterEntryIds)) {
+    if (e.meta.tier !== 1 && !e.raw.disabled && Array.isArray(e.meta.sourceChapterEntryIds)) {
       for (const sid of e.meta.sourceChapterEntryIds) supersededIds.add(sid);
     }
   }
 
   const chapters: ChapterView[] = [];
   const arcs: ArcView[] = [];
+  const volumes: ArcView[] = [];
   for (const e of entries) {
     const view: ChapterView = {
       entryId: e.raw.id,
@@ -136,7 +139,9 @@ export async function buildState(userId: string, requestedChatId?: string | null
       sourceTokensInput: e.meta.tokenCountInput || 0,
       isRoot: !!e.meta.isRoot,
     };
-    if (e.meta.tier === 2) {
+    if (e.meta.tier === 3) {
+      volumes.push({ ...view, sourceChapterEntryIds: e.meta.sourceChapterEntryIds ?? [] });
+    } else if (e.meta.tier === 2) {
       arcs.push({ ...view, sourceChapterEntryIds: e.meta.sourceChapterEntryIds ?? [] });
     } else {
       chapters.push(view);
@@ -144,6 +149,7 @@ export async function buildState(userId: string, requestedChatId?: string | null
   }
   chapters.sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
   arcs.sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
+  volumes.sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
 
   const messageStubs: MessageStub[] = messages.map((m) => {
     const covered = coverage.coveredBy.get(m.id) ?? null;
@@ -187,6 +193,7 @@ export async function buildState(userId: string, requestedChatId?: string | null
     activeCharacterName: characterName,
     chapters,
     arcs,
+    volumes,
     bookId,
     bookName,
     coverage: stats,

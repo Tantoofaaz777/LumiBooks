@@ -121,7 +121,9 @@ function renderFailure(host: HTMLElement, state: FrontendState, send: (m: Fronte
   sec.className = "lmb-failure";
   const head = document.createElement("div");
   head.style.fontWeight = "600";
-  head.textContent = f.kind === "arc" ? "Last arc attempt failed" : "Last chapter attempt failed";
+  head.textContent = f.kind === "arc" ? "Last arc attempt failed"
+    : f.kind === "volume" ? "Last volume attempt failed"
+    : "Last chapter attempt failed";
   const detail = document.createElement("div");
   detail.style.opacity = "0.85";
   detail.textContent = `${f.message} (tried ${f.retriedTimes}x)`;
@@ -153,7 +155,7 @@ function renderPreviewCard(preview: PendingPreview, chatId: string, send: (m: Fr
   head.style.alignItems = "center";
   head.style.gap = "8px";
   const tag = document.createElement("span");
-  tag.className = `lmb-entry-tag ${preview.kind === "arc" ? "arc" : ""}`;
+  tag.className = `lmb-entry-tag ${preview.kind !== "chapter" ? preview.kind : ""}`.trim();
   tag.textContent = preview.kind.toUpperCase();
   head.append(tag, span(preview.title, "lmb-entry-title"));
   card.appendChild(head);
@@ -279,10 +281,18 @@ function renderEntries(
   }
   const chapters = state.chapters.filter((c) => !c.isRoot);
   const arcs = state.arcs.filter((a) => !a.isRoot);
-  if (chapters.length + arcs.length === 0) {
+  const volumes = state.volumes.filter((v) => !v.isRoot);
+  if (chapters.length + arcs.length + volumes.length === 0) {
     sec.body.appendChild(textNode("Empty shelf for now. Memoria will start filing once the lag fills.", "lmb-empty"));
     host.appendChild(sec.wrap);
     return;
+  }
+  if (volumes.length) {
+    sec.body.appendChild(buildSubtitle(`Volumes (${volumes.length})`));
+    const list = document.createElement("ul");
+    list.className = "lmb-entry-list";
+    for (const vol of volumes) list.appendChild(renderEntryItem(vol, "volume", state, ctx, send));
+    sec.body.appendChild(list);
   }
   if (arcs.length) {
     sec.body.appendChild(buildSubtitle(`Arcs (${arcs.length})`));
@@ -310,7 +320,7 @@ function buildSubtitle(text: string): HTMLElement {
 
 function renderEntryItem(
   view: ChapterView | ArcView,
-  kind: "chapter" | "arc",
+  kind: "chapter" | "arc" | "volume",
   state: FrontendState,
   ctx: SpindleFrontendContext,
   send: (m: FrontendToBackend) => void,
@@ -336,7 +346,7 @@ function renderEntryItem(
   actions.className = "lmb-entry-actions";
   actions.append(
     makeButton("Edit", () => {
-      openEditModal(ctx, kind === "arc" ? "Edit arc" : "Edit chapter", {
+      openEditModal(ctx, kind === "arc" ? "Edit arc" : kind === "volume" ? "Edit volume" : "Edit chapter", {
         comment: view.comment,
         content: view.content,
       }, (next) => {

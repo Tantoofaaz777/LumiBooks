@@ -42,11 +42,13 @@ import {
   maybeRunArcCheck,
   createChapterAuto,
   createChapterFromRange,
+  createVolumeFromArcs,
   drainArcBacklog,
   drainChapterBacklog,
   dropPendingPreview,
   dryRunArc,
   dryRunChapter,
+  dryRunVolume,
   getBusy,
   clearLastFailure,
   getLastFailure,
@@ -278,6 +280,14 @@ async function collectActiveChapterIds(chatId: string, userId: string): Promise<
     .map((e) => e.raw.id);
 }
 
+async function collectActiveArcIds(chatId: string, userId: string): Promise<string[]> {
+  const entries = await listLmbEntries(chatId, userId);
+  const coverage = await buildCoverage(chatId, userId, entries);
+  return coverage.activeEntries
+    .filter((e) => e.meta.tier === 2 && !e.meta.isRoot)
+    .map((e) => e.raw.id);
+}
+
 async function retryLastFailure(
   chatId: string,
   userId: string,
@@ -285,6 +295,16 @@ async function retryLastFailure(
   settings: Parameters<typeof createChapterAuto>[2],
 ): Promise<void> {
   const last = getLastFailure(userId, chatId);
+  if (last?.kind === "volume") {
+    const ids = await collectActiveArcIds(chatId, userId);
+    if (ids.length === 0) {
+      clearLastFailure(userId, chatId);
+      await notify(userId, "warn", "Memoria has no arcs left to retry the volume");
+      return;
+    }
+    await createVolumeFromArcs(chatId, ids, profile, settings, userId);
+    return;
+  }
   if (last?.kind === "arc") {
     const ids = await collectActiveChapterIds(chatId, userId);
     if (ids.length === 0) {
@@ -524,6 +544,19 @@ spindle.onFrontendMessage(async (raw, userId) => {
         break;
       }
 
+      case "create_volume_from": {
+        const cur = await loadSettings(userId);
+        const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
+        if (!profile) break;
+        if (getBusy(userId).some((b) => b.kind === "volume" && b.chatId === msg.chatId)) {
+          await notify(userId, "warn", "Memoria is already pressing a volume");
+          break;
+        }
+        await createVolumeFromArcs(msg.chatId, msg.arcEntryIds, profile, cur, userId);
+        await pushState(userId, msg.chatId);
+        break;
+      }
+
       case "retry_last_failure": {
         const cur = await loadSettings(userId);
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
@@ -536,16 +569,23 @@ spindle.onFrontendMessage(async (raw, userId) => {
       case "delete_entry": {
         const entries = await listLmbEntries(msg.chatId, userId);
         const entry = entries.find((e) => e.raw.id === msg.entryId);
-        if (entry && entry.meta.tier === 2 && Array.isArray(entry.meta.sourceChapterEntryIds)) {
+        // Free the tier below only when the removed entry was itself active.
+        // Deleting an arc that sits inside a volume must not reactivate its
+        // chapters - the volume still covers them.
+        if (
+          entry
+          && entry.meta.tier !== 1
+          && !entry.meta.supersededByEntryId
+          && Array.isArray(entry.meta.sourceChapterEntryIds)
+        ) {
           const sourceIds = new Set(entry.meta.sourceChapterEntryIds);
-          for (const ch of entries) {
-            if (ch.meta.tier !== 1) continue;
-            if (!sourceIds.has(ch.raw.id)) continue;
-            if (ch.meta.supersededByEntryId !== msg.entryId) continue;
+          for (const src of entries) {
+            if (!sourceIds.has(src.raw.id)) continue;
+            if (src.meta.supersededByEntryId !== msg.entryId) continue;
             try {
-              await patchEntryMeta(ch, { supersededByEntryId: null }, userId);
+              await patchEntryMeta(src, { supersededByEntryId: null }, userId);
             } catch (err) {
-              warn(`failed to clear supersededByEntryId on chapter ${ch.raw.id}: ${describeError(err)}`);
+              warn(`failed to clear supersededByEntryId on entry ${src.raw.id}: ${describeError(err)}`);
             }
           }
         }
@@ -570,16 +610,19 @@ spindle.onFrontendMessage(async (raw, userId) => {
           await notify(userId, "warn", "Memoria can't find that entry to release");
           break;
         }
-        if (entry.meta.tier === 2 && Array.isArray(entry.meta.sourceChapterEntryIds)) {
+        if (
+          entry.meta.tier !== 1
+          && !entry.meta.supersededByEntryId
+          && Array.isArray(entry.meta.sourceChapterEntryIds)
+        ) {
           const sourceIds = new Set(entry.meta.sourceChapterEntryIds);
-          for (const ch of entries) {
-            if (ch.meta.tier !== 1) continue;
-            if (!sourceIds.has(ch.raw.id)) continue;
-            if (ch.meta.supersededByEntryId !== msg.entryId) continue;
+          for (const src of entries) {
+            if (!sourceIds.has(src.raw.id)) continue;
+            if (src.meta.supersededByEntryId !== msg.entryId) continue;
             try {
-              await patchEntryMeta(ch, { supersededByEntryId: null }, userId);
+              await patchEntryMeta(src, { supersededByEntryId: null }, userId);
             } catch (err) {
-              warn(`failed to clear supersededByEntryId on chapter ${ch.raw.id}: ${describeError(err)}`);
+              warn(`failed to clear supersededByEntryId on entry ${src.raw.id}: ${describeError(err)}`);
             }
           }
         }
@@ -606,42 +649,50 @@ spindle.onFrontendMessage(async (raw, userId) => {
           await notify(userId, "warn", "Memoria can't find that entry to regenerate");
           break;
         }
-        const busyKind = entry.meta.tier === 2 ? "arc" : "chapter";
+        const tier = entry.meta.tier;
+        const busyKind = tier === 3 ? "volume" : tier === 2 ? "arc" : "chapter";
         if (getBusy(userId).some((b) => b.kind === busyKind && b.chatId === msg.chatId)) {
           await notify(userId, "warn", `Memoria is already busy with a ${busyKind}`);
           break;
         }
-        if (entry.meta.isRoot && entry.meta.tier === 1) {
+        if (entry.meta.isRoot && tier === 1) {
           await notify(userId, "warn", "Memoria can't regenerate inherited chapters");
           break;
         }
-        const isArc = entry.meta.tier === 2;
+        const isArc = tier === 2;
+        const isVolume = tier === 3;
         const msgIds = entry.meta.msgIds.slice();
-        const chapterIds = Array.isArray(entry.meta.sourceChapterEntryIds)
+        const sourceIds = Array.isArray(entry.meta.sourceChapterEntryIds)
           ? entry.meta.sourceChapterEntryIds.slice()
           : [];
-        if (isArc && chapterIds.length === 0) {
+        if (isVolume && sourceIds.length === 0) {
+          await notify(userId, "warn", "Memoria has no arc sources to regenerate this volume from");
+          break;
+        }
+        if (isArc && sourceIds.length === 0) {
           await notify(userId, "warn", "Memoria has no chapter sources to regenerate this arc from");
           break;
         }
-        if (!isArc && msgIds.length === 0) {
+        if (!isArc && !isVolume && msgIds.length === 0) {
           await notify(userId, "warn", "Memoria has no messages to regenerate this chapter from");
           break;
         }
-        if (!isArc) {
+        if (!isArc && !isVolume) {
           const otherEntries = entries.filter((e) => e.raw.id !== msg.entryId);
           const otherCoverage = await buildCoverage(msg.chatId, userId, otherEntries);
           const blockingIds = entry.meta.msgIds.filter((id) => otherCoverage.coveredBy.has(id));
           if (blockingIds.length > 0) {
             const blockerEntryId = otherCoverage.coveredBy.get(blockingIds[0]!);
             const blocker = otherEntries.find((e) => e.raw.id === blockerEntryId);
-            const blockerLabel = blocker?.meta.tier === 2 ? "an arc" : "another entry";
+            const blockerLabel = blocker?.meta.tier === 3 ? "a volume" : blocker?.meta.tier === 2 ? "an arc" : "another entry";
             await notify(userId, "warn", `These messages are bound into ${blockerLabel}, release or delete it first`);
             break;
           }
         }
-        if (isArc) {
-          await createArcFromChapters(msg.chatId, chapterIds, profile, cur, userId, { replacesEntryId: msg.entryId });
+        if (isVolume) {
+          await createVolumeFromArcs(msg.chatId, sourceIds, profile, cur, userId, { replacesEntryId: msg.entryId });
+        } else if (isArc) {
+          await createArcFromChapters(msg.chatId, sourceIds, profile, cur, userId, { replacesEntryId: msg.entryId });
         } else {
           await createChapterFromRange(msg.chatId, msgIds, profile, cur, userId, { replacesEntryId: msg.entryId });
         }
@@ -689,6 +740,21 @@ spindle.onFrontendMessage(async (raw, userId) => {
         } catch (err) {
           const text = describeError(err);
           warn(`dry_run_arc failed: ${text}`);
+          await notify(userId, "error", `Dry run failed: ${text}`);
+        }
+        break;
+      }
+
+      case "dry_run_volume": {
+        const cur = await loadSettings(userId);
+        const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
+        if (!profile) break;
+        try {
+          const result = await dryRunVolume(msg.chatId, profile, cur, userId);
+          send({ type: "dry_run_result", kind: "volume", messages: result.messages, diagnostics: result.diagnostics }, userId);
+        } catch (err) {
+          const text = describeError(err);
+          warn(`dry_run_volume failed: ${text}`);
           await notify(userId, "error", `Dry run failed: ${text}`);
         }
         break;
@@ -776,6 +842,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
       case "delete_custom_preset": {
         const fallbackChapter = "summary";
         const fallbackArc = "arc_default";
+        const fallbackVolume = "volume_default";
         await mutateSettings(userId, (cur) => {
           const list = cur.customPresets.filter((p) => !(p.key === msg.key && p.category === msg.category));
           const profiles = cur.profiles.map((p) => {
@@ -784,6 +851,9 @@ spindle.onFrontendMessage(async (raw, userId) => {
             }
             if (msg.category === "arc" && p.arcPresetKey === msg.key) {
               return { ...p, arcPresetKey: fallbackArc };
+            }
+            if (msg.category === "volume" && p.volumePresetKey === msg.key) {
+              return { ...p, volumePresetKey: fallbackVolume };
             }
             return p;
           });

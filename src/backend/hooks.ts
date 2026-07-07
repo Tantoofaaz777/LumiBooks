@@ -26,8 +26,21 @@ export interface ArcCreatedEvent {
   createdAt: number;
 }
 
+export interface VolumeCreatedEvent {
+  chatId: string;
+  volumeEntryId: string;
+  bookId: string;
+  sourceArcEntryIds: string[];
+  sourceMessageIds: string[];
+  summaryText: string;
+  model: string;
+  title?: string | undefined;
+  createdAt: number;
+}
+
 const CHAPTER_KEY = `${EXTENSION_ID}.latest_chapter`;
 const ARC_KEY = `${EXTENSION_ID}.latest_arc`;
+const VOLUME_KEY = `${EXTENSION_ID}.latest_volume`;
 
 let registered = false;
 
@@ -37,6 +50,7 @@ export function registerHookEndpoints(): void {
   try {
     spindle.rpcPool?.sync?.(CHAPTER_KEY, null, { requires: [] });
     spindle.rpcPool?.sync?.(ARC_KEY, null, { requires: [] });
+    spindle.rpcPool?.sync?.(VOLUME_KEY, null, { requires: [] });
   } catch (err) {
     warn(`rpcPool unavailable: ${describeError(err)}`);
   }
@@ -65,5 +79,18 @@ export function publishArcCreated(userId: string, event: Omit<ArcCreatedEvent, "
     spindle.rpcPool?.sync?.(ARC_KEY, payload, { requires: [] });
   } catch (err) {
     warn(`failed to publish arc_created: ${describeError(err)}`);
+  }
+}
+
+export function publishVolumeCreated(userId: string, event: Omit<VolumeCreatedEvent, "createdAt">): void {
+  const payload: VolumeCreatedEvent & { userId: string } = {
+    ...event,
+    createdAt: Date.now(),
+    userId,
+  };
+  try {
+    spindle.rpcPool?.sync?.(VOLUME_KEY, payload, { requires: [] });
+  } catch (err) {
+    warn(`failed to publish volume_created: ${describeError(err)}`);
   }
 }

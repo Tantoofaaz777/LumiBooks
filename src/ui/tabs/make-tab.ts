@@ -16,6 +16,7 @@ interface MakeTabContext {
   state: FrontendState;
   selectedMessages: Set<string>;
   selectedChapters: Set<string>;
+  selectedArcs: Set<string>;
   messageFilter: "all" | "uncovered" | "covered";
   messageQuery: string;
   rerender: () => void;
@@ -24,6 +25,7 @@ interface MakeTabContext {
 const localState = {
   selectedMessages: new Set<string>(),
   selectedChapters: new Set<string>(),
+  selectedArcs: new Set<string>(),
   messageFilter: "uncovered" as "all" | "uncovered" | "covered",
   messageQuery: "",
   lastChatId: null as string | null,
@@ -44,6 +46,7 @@ export function renderMakeTab(
   if (localState.lastChatId !== state.activeChatId) {
     localState.selectedMessages.clear();
     localState.selectedChapters.clear();
+    localState.selectedArcs.clear();
     localState.anchorMessageId = null;
     localState.rebaseSourceId = "";
     localState.lastChatId = state.activeChatId;
@@ -55,6 +58,7 @@ export function renderMakeTab(
         state,
         selectedMessages: localState.selectedMessages,
         selectedChapters: localState.selectedChapters,
+        selectedArcs: localState.selectedArcs,
         messageFilter: localState.messageFilter,
         messageQuery: localState.messageQuery,
         rerender: draw,
@@ -65,6 +69,7 @@ export function renderMakeTab(
       }
       renderChapterPicker(host, c, send);
       renderArcPicker(host, c, send);
+      renderVolumePicker(host, c, send);
       renderContinuity(host, c, ctx, send);
     });
   };
@@ -416,6 +421,92 @@ function renderArcPicker(
   host.appendChild(sec.wrap);
 }
 
+function renderVolumePicker(
+  host: HTMLElement,
+  c: MakeTabContext,
+  send: (msg: FrontendToBackend) => void,
+): void {
+  const sec = section("Press arcs into a volume");
+  const activeArcs = c.state.arcs.filter((a) => a.active && !a.isRoot);
+  if (activeArcs.length === 0) {
+    sec.body.appendChild(textNode("Memoria has no unbound arcs to press yet", "lmb-empty"));
+    host.appendChild(sec.wrap);
+    return;
+  }
+  const help = document.createElement("div");
+  help.className = "lmb-help";
+  help.textContent = "A volume replaces its source arcs in the prompt, the highest compression tier. Volumes are manual only.";
+  sec.body.appendChild(help);
+
+  const list = document.createElement("div");
+  list.className = "lmb-multiselect";
+
+  const counts = document.createElement("div");
+  counts.className = "lmb-help";
+  const updateCounts = () => {
+    let before = 0;
+    for (const a of activeArcs) {
+      if (!c.selectedArcs.has(a.entryId)) continue;
+      before += a.sourceTokensInput > 0 ? a.sourceTokensInput : a.contentTokens;
+    }
+    counts.textContent = `${c.selectedArcs.size} selected (~${formatTokens(before)} tokens before)`;
+  };
+
+  for (const arc of activeArcs) {
+    const row = document.createElement("label");
+    row.className = "lmb-multiselect-row";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = c.selectedArcs.has(arc.entryId);
+    cb.addEventListener("change", () => {
+      if (cb.checked) c.selectedArcs.add(arc.entryId);
+      else c.selectedArcs.delete(arc.entryId);
+      updateCounts();
+    });
+    const text = document.createElement("span");
+    const range =
+      arc.meta.firstMsgIdx !== undefined && arc.meta.lastMsgIdx !== undefined
+        ? ` (msgs ${arc.meta.firstMsgIdx + 1}-${arc.meta.lastMsgIdx + 1})`
+        : "";
+    const tokenStr = arc.sourceTokensInput > 0
+      ? `${formatTokens(arc.sourceTokensInput)}t→${formatTokens(arc.contentTokens)}t`
+      : `${formatTokens(arc.contentTokens)}t`;
+    text.textContent = `${arc.comment || arc.meta.title || arc.entryId.slice(0, 6)}${range} - ${tokenStr}`;
+    row.append(cb, text);
+    list.appendChild(row);
+  }
+  sec.body.appendChild(list);
+  updateCounts();
+  sec.body.appendChild(counts);
+
+  const chatId = c.state.activeChatId!;
+  const actions = document.createElement("div");
+  actions.className = "lmb-actions";
+  actions.append(
+    makeButton("Press selected", () => {
+      const ids = Array.from(c.selectedArcs);
+      if (ids.length === 0) return;
+      send({ type: "create_volume_from", chatId, arcEntryIds: ids });
+      localState.selectedArcs.clear();
+      c.selectedArcs.clear();
+      c.rerender();
+    }, { primary: true }),
+    makeButton("Select all active", () => {
+      const next = new Set(activeArcs.map((a) => a.entryId));
+      localState.selectedArcs = next;
+      c.selectedArcs = next;
+      c.rerender();
+    }),
+    makeButton("Clear", () => {
+      localState.selectedArcs.clear();
+      c.selectedArcs.clear();
+      c.rerender();
+    }),
+  );
+  sec.body.appendChild(actions);
+  host.appendChild(sec.wrap);
+}
+
 function renderContinuity(
   host: HTMLElement,
   c: MakeTabContext,
@@ -424,7 +515,9 @@ function renderContinuity(
 ): void {
   const state = c.state;
   const chatId = state.activeChatId!;
-  const hasOwn = state.chapters.some((ch) => !ch.isRoot) || state.arcs.some((a) => !a.isRoot);
+  const hasOwn = state.chapters.some((ch) => !ch.isRoot)
+    || state.arcs.some((a) => !a.isRoot)
+    || state.volumes.some((v) => !v.isRoot);
   const hasRoot = state.rootEntryCount > 0;
   const candidates = state.availableRoots;
   if (!hasRoot && candidates.length === 0) return;
@@ -438,7 +531,11 @@ function renderContinuity(
     status.textContent = `Inherited from ${originName}: ${state.rootEntryCount} memor${state.rootEntryCount === 1 ? "y" : "ies"}, injected before the greeting.`;
     sec.body.appendChild(status);
 
-    const rootEntries = [...state.arcs.filter((a) => a.isRoot), ...state.chapters.filter((ch) => ch.isRoot)];
+    const rootEntries = [
+      ...state.volumes.filter((v) => v.isRoot),
+      ...state.arcs.filter((a) => a.isRoot),
+      ...state.chapters.filter((ch) => ch.isRoot),
+    ];
     if (rootEntries.length) {
       const list = document.createElement("div");
       list.className = "lmb-multiselect";
@@ -446,7 +543,7 @@ function renderContinuity(
         const rowEl = document.createElement("div");
         rowEl.className = "lmb-multiselect-row";
         rowEl.style.opacity = "0.75";
-        const tag = e.meta.tier === 2 ? "ARC" : "CH";
+        const tag = e.meta.tier === 3 ? "VOL" : e.meta.tier === 2 ? "ARC" : "CH";
         rowEl.textContent = `[${tag}] ${e.comment || e.meta.title || e.entryId.slice(0, 6)} (${formatTokens(e.contentTokens)}t)`;
         list.appendChild(rowEl);
       }

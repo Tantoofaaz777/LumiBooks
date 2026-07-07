@@ -33,6 +33,7 @@ export function renderAboutTab(
     "Tail messages stay uncompressed until they pass the lag.",
     "Once the window fills, Memoria writes a chapter, hides those messages in the chat, and slices the chapter into the prompt at the same spot.",
     "Several chapters can be bound into a single arc that replaces them.",
+    "Arcs can be pressed into a volume the same way, manually from the Make tab.",
     "Storage lives in a per-chat world book named LumiBooks. Renaming or deleting entries there releases the messages back.",
   ];
   for (const l of lines) {
@@ -45,7 +46,7 @@ export function renderAboutTab(
   a.className = "lmb-about-line";
   a.textContent =
     "Built on Lumiverse Spindle, with prompts and UX inspired by SillyTavern Memory Books. " +
-    "Memoria thanks the original Memory Books authors for the trail.";
+    "Memoria thanks the original Memory Books authors for the inspiration.";
   ack.body.appendChild(a);
   host.appendChild(ack.wrap);
 }

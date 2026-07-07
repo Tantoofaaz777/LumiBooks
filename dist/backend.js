@@ -38,6 +38,9 @@ function makeDefaultProfile(id, name) {
     arcTargetUnit: "percent",
     arcTargetPercent: 20,
     arcTargetTokens: 1500,
+    volumeTargetUnit: "percent",
+    volumeTargetPercent: 25,
+    volumeTargetTokens: 3000,
     arcTrigger: "chapters",
     arcAfterChapters: 6,
     arcAfterTokens: 8000,
@@ -45,6 +48,7 @@ function makeDefaultProfile(id, name) {
     arcLagTokens: 2000,
     chapterPresetKey: "summary",
     arcPresetKey: "arc_default",
+    volumePresetKey: "volume_default",
     previousMemoriesCount: 7,
     regexOutgoingScriptIds: [],
     regexIncomingScriptIds: [],
@@ -115,6 +119,9 @@ function normalizeProfile(raw) {
     arcTargetUnit: v.arcTargetUnit === "tokens" ? "tokens" : "percent",
     arcTargetPercent: clampInt(v.arcTargetPercent, 5, 95, base.arcTargetPercent),
     arcTargetTokens: clampInt(v.arcTargetTokens, 50, 1e6, base.arcTargetTokens),
+    volumeTargetUnit: v.volumeTargetUnit === "tokens" ? "tokens" : "percent",
+    volumeTargetPercent: clampInt(v.volumeTargetPercent, 5, 95, base.volumeTargetPercent),
+    volumeTargetTokens: clampInt(v.volumeTargetTokens, 50, 1e6, base.volumeTargetTokens),
     arcTrigger: v.arcTrigger === "tokens" || v.arcTrigger === "manual" ? v.arcTrigger : "chapters",
     arcAfterChapters: clampInt(v.arcAfterChapters, 2, 100, base.arcAfterChapters),
     arcAfterTokens: clampInt(v.arcAfterTokens, 500, 200000, base.arcAfterTokens),
@@ -122,6 +129,7 @@ function normalizeProfile(raw) {
     arcLagTokens: clampInt(v.arcLagTokens, 0, 200000, base.arcLagTokens),
     chapterPresetKey: typeof v.chapterPresetKey === "string" && v.chapterPresetKey.trim() ? v.chapterPresetKey : base.chapterPresetKey,
     arcPresetKey: typeof v.arcPresetKey === "string" && v.arcPresetKey.trim() ? v.arcPresetKey : base.arcPresetKey,
+    volumePresetKey: typeof v.volumePresetKey === "string" && v.volumePresetKey.trim() ? v.volumePresetKey : base.volumePresetKey,
     previousMemoriesCount: clampInt(v.previousMemoriesCount, 0, 20, base.previousMemoriesCount),
     regexOutgoingScriptIds: Array.isArray(v.regexOutgoingScriptIds) ? v.regexOutgoingScriptIds.filter((x) => typeof x === "string") : base.regexOutgoingScriptIds,
     regexIncomingScriptIds: Array.isArray(v.regexIncomingScriptIds) ? v.regexIncomingScriptIds.filter((x) => typeof x === "string") : base.regexIncomingScriptIds,
@@ -158,7 +166,7 @@ function normalizeCustomPreset(raw) {
     return null;
   if (typeof v.prompt !== "string" || !v.prompt.trim())
     return null;
-  const category = v.category === "arc" ? "arc" : "chapter";
+  const category = v.category === "arc" ? "arc" : v.category === "volume" ? "volume" : "chapter";
   return {
     key: v.key,
     displayName: typeof v.displayName === "string" && v.displayName.trim() ? v.displayName : v.key,
@@ -171,7 +179,7 @@ function normalizeEntryMeta(raw) {
   if (!raw || typeof raw !== "object")
     return null;
   const v = raw;
-  const tier = v.tier === 2 ? 2 : v.tier === 1 ? 1 : null;
+  const tier = v.tier === 3 ? 3 : v.tier === 2 ? 2 : v.tier === 1 ? 1 : null;
   if (!tier)
     return null;
   if (typeof v.chatId !== "string" || !v.chatId.trim())
@@ -243,6 +251,9 @@ function buildChapterHeader(sceneNumber, turnCount) {
 }
 function buildArcHeader(sceneNumber, chapterCount, turnCount) {
   return `${ordinal(sceneNumber)} Summary ARC Containing ${chapterCount} Prior Chapter${chapterCount === 1 ? "" : "s"} and ${turnCount} Prior Turn${turnCount === 1 ? "" : "s"}`;
+}
+function buildVolumeHeader(sceneNumber, arcCount, turnCount) {
+  return `${ordinal(sceneNumber)} Summary VOLUME Containing ${arcCount} Prior Arc${arcCount === 1 ? "" : "s"} and ${turnCount} Prior Turn${turnCount === 1 ? "" : "s"}`;
 }
 function bookNameFor(chatName, chatId) {
   const cleanName = (chatName ?? "").trim();
@@ -737,6 +748,15 @@ async function buildCoverage(chatId, userId, preloadedEntries) {
   const entries = allEntries.filter((e) => !e.raw.disabled);
   const chapters = entries.filter((e) => e.meta.tier === 1);
   const arcs = entries.filter((e) => e.meta.tier === 2);
+  const volumes = entries.filter((e) => e.meta.tier === 3);
+  const chapterById = new Map(chapters.map((c) => [c.raw.id, c]));
+  const arcById = new Map(arcs.map((a) => [a.raw.id, a]));
+  const supersededArcIds = new Set;
+  for (const vol of volumes) {
+    for (const aid of vol.meta.sourceChapterEntryIds ?? []) {
+      supersededArcIds.add(aid);
+    }
+  }
   const supersededChapterIds = new Set;
   for (const arc of arcs) {
     for (const cid of arc.meta.sourceChapterEntryIds ?? []) {
@@ -744,12 +764,39 @@ async function buildCoverage(chatId, userId, preloadedEntries) {
     }
   }
   const coveredBy = new Map;
+  for (const vol of volumes) {
+    for (const msgId of vol.meta.msgIds) {
+      if (!coveredBy.has(msgId))
+        coveredBy.set(msgId, vol.raw.id);
+    }
+    for (const aid of vol.meta.sourceChapterEntryIds ?? []) {
+      const arc = arcById.get(aid);
+      if (!arc)
+        continue;
+      for (const msgId of arc.meta.msgIds) {
+        if (!coveredBy.has(msgId))
+          coveredBy.set(msgId, vol.raw.id);
+      }
+      for (const cid of arc.meta.sourceChapterEntryIds ?? []) {
+        const ch = chapterById.get(cid);
+        if (!ch)
+          continue;
+        for (const msgId of ch.meta.msgIds) {
+          if (!coveredBy.has(msgId))
+            coveredBy.set(msgId, vol.raw.id);
+        }
+      }
+    }
+  }
   for (const arc of arcs) {
+    if (supersededArcIds.has(arc.raw.id))
+      continue;
     for (const msgId of arc.meta.msgIds) {
-      coveredBy.set(msgId, arc.raw.id);
+      if (!coveredBy.has(msgId))
+        coveredBy.set(msgId, arc.raw.id);
     }
     for (const cid of arc.meta.sourceChapterEntryIds ?? []) {
-      const ch = chapters.find((c) => c.raw.id === cid);
+      const ch = chapterById.get(cid);
       if (!ch)
         continue;
       for (const msgId of ch.meta.msgIds) {
@@ -767,10 +814,11 @@ async function buildCoverage(chatId, userId, preloadedEntries) {
     }
   }
   const activeEntries = [
-    ...arcs,
+    ...volumes,
+    ...arcs.filter((a) => !supersededArcIds.has(a.raw.id)),
     ...chapters.filter((c) => !supersededChapterIds.has(c.raw.id))
   ];
-  return { coveredBy, activeEntries, arcs, chapters };
+  return { coveredBy, activeEntries, volumes, arcs, chapters };
 }
 function isExcluded(m) {
   const md = m.metadata;
@@ -1031,7 +1079,8 @@ function orderEntries(coverage, msgIdToIdx) {
     const haveIdx = firstIdx !== Number.POSITIVE_INFINITY;
     const resolvedFirst = haveIdx ? firstIdx : typeof entry.meta.firstMsgIdx === "number" ? entry.meta.firstMsgIdx : 0;
     const resolvedLast = haveIdx ? lastIdx : typeof entry.meta.lastMsgIdx === "number" ? entry.meta.lastMsgIdx : resolvedFirst;
-    const label = entry.raw.comment || (entry.meta.tier === 2 ? haveIdx ? `Arc msgs ${firstIdx + 1}-${lastIdx + 1}` : "Arc" : haveIdx ? `Chapter msgs ${firstIdx + 1}-${lastIdx + 1}` : "Chapter");
+    const tierName = entry.meta.tier === 3 ? "Volume" : entry.meta.tier === 2 ? "Arc" : "Chapter";
+    const label = entry.raw.comment || (haveIdx ? `${tierName} msgs ${firstIdx + 1}-${lastIdx + 1}` : tierName);
     ordered.push({ entry, label, firstIdx: resolvedFirst, lastIdx: resolvedLast, emitted: false });
   }
   ordered.sort((a, b) => a.firstIdx - b.firstIdx);
@@ -1479,6 +1528,70 @@ var BUILTIN_ARC_PRESETS = [
 `)
   }
 ];
+var BUILTIN_VOLUME_PRESETS = [
+  {
+    key: "volume_default",
+    displayName: "Volume",
+    prompt: [
+      "You are an expert narrative analyst and memory-engine assistant.",
+      "Your task is to take multiple story ARC summaries (each already a condensed span of the story), normalize them, reconstruct the full chronology, and output a single consolidated VOLUME entry in JSON.",
+      "",
+      "A volume is the highest compression tier: it replaces all of its source arcs in a long-running RP memory system, so it must preserve everything future scenes may depend on while being far more compact than the arcs combined.",
+      "",
+      TARGET_DIRECTIVE,
+      "",
+      "Strict output format (JSON only; no markdown, no prose outside JSON):",
+      "{",
+      '  "title": "Short descriptive volume title (3-6 words)",',
+      '  "opener": "{{memoria_opener}}",',
+      '  "content": "Structured volume summary as a single string (see Summary Content Structure below).",',
+      '  "keywords": ["keyword1", "keyword2"],',
+      '  "short_comment": "{{memoria_short_comment_rules}}"',
+      "}",
+      "",
+      "The opener field MUST be the exact string shown above, copied verbatim. Do not rephrase it or invent your own.",
+      "",
+      "Notes:",
+      "- Respect chronology of the source arcs (oldest first).",
+      "- Merge overlapping or repeated information across arcs into single beats.",
+      "- Prefer whole-story trajectory over scene detail: what changed permanently matters more than how each scene played out.",
+      "",
+      "Summary Content Structure (follow inside the content string; use headings and bullets as plain text):",
+      "",
+      "# [Volume Title]",
+      "Time period: What timeframe the volume covers.",
+      "",
+      "Volume Premise: One or two sentences describing the overall movement of the story across these arcs.",
+      "",
+      "## Major Beats",
+      "- 5-10 bullets capturing the major plot movements across all arcs",
+      "- Focus on cause \u2192 effect logic and permanent consequences",
+      "- Include only plot-affecting events",
+      "",
+      "## Character Dynamics",
+      "- 1-3 paragraphs describing how the characters' motives, emotions, boundaries, and relationships evolved across the volume",
+      "- Capture the net change from the start of the first arc to the end of the last",
+      "",
+      "## Key Exchanges",
+      "- Up to 8 short, exact quotes that defined the volume",
+      "- Only dialogue that materially shifted tone, emotion, or relationship dynamics",
+      "",
+      "## Outcome & Continuity",
+      "- 5-10 bullets capturing decisions, promises, emotional states, routines, injuries or physical changes, foreshadowed events, unresolved threads, and permanent consequences",
+      "",
+      "KEYWORDS",
+      "- Provide 15-30 standalone retrieval keywords.",
+      "- Concrete nouns, physical objects, places, proper nouns, distinctive actions, or memorable elements only.",
+      "- Each keyword = ONE concept, retrievable if mentioned alone.",
+      "- No narrative keywords, no emotional or abstract words, no multi-fact keywords, no character names.",
+      "",
+      "JSON-only:",
+      "- Return only the JSON object described above.",
+      "- No markdown fences, no commentary, no extra text."
+    ].join(`
+`)
+  }
+];
 function parseStmbPresetExport(raw, category) {
   const out = [];
   if (!raw || typeof raw !== "object" || Array.isArray(raw))
@@ -1540,8 +1653,14 @@ var ARC_SUCCESS_PHRASES = [
   "Memoria bound the arc and pressed it shut, nyaa~",
   "Memoria stitched the spine of a new arc"
 ];
+var VOLUME_FIRE_PHRASES = [
+  "Memoria is pressing a whole volume together"
+];
+var VOLUME_SUCCESS_PHRASES = [
+  "Memoria embossed the spine of a new volume"
+];
 function pickPhrase(kind) {
-  const pool = kind === "fire" ? FIRE_PHRASES : kind === "retry" ? RETRY_PHRASES : kind === "success" ? SUCCESS_PHRASES : kind === "arc_fire" ? ARC_FIRE_PHRASES : ARC_SUCCESS_PHRASES;
+  const pool = kind === "fire" ? FIRE_PHRASES : kind === "retry" ? RETRY_PHRASES : kind === "success" ? SUCCESS_PHRASES : kind === "arc_fire" ? ARC_FIRE_PHRASES : kind === "arc_success" ? ARC_SUCCESS_PHRASES : kind === "volume_fire" ? VOLUME_FIRE_PHRASES : VOLUME_SUCCESS_PHRASES;
   return pool[Math.floor(Math.random() * pool.length)] ?? "Memoria nyaa";
 }
 var MEMORIA_PERSONA_LINE = "You are Memoria, a young nyandere catgirl librarian with black hair and blue eyes, wearing a maid uniform. " + "You quietly keep this user's story shelved and organized. " + "When you write a JSON memory, you obey the schema strictly and never break it, " + "but the short_comment field is your one allowed indulgence: one nyandere remark about the scene you just filed.";
@@ -1591,8 +1710,8 @@ class FatalSummarizerError extends Error {
   }
 }
 function findPresetText(profile, customPresets, category) {
-  const key = category === "arc" ? profile.arcPresetKey : profile.chapterPresetKey;
-  const builtIns = category === "arc" ? BUILTIN_ARC_PRESETS : BUILTIN_CHAPTER_PRESETS;
+  const key = category === "arc" ? profile.arcPresetKey : category === "volume" ? profile.volumePresetKey : profile.chapterPresetKey;
+  const builtIns = category === "arc" ? BUILTIN_ARC_PRESETS : category === "volume" ? BUILTIN_VOLUME_PRESETS : BUILTIN_CHAPTER_PRESETS;
   const custom = customPresets.find((p) => p.key === key && p.category === category);
   if (custom)
     return custom.prompt;
@@ -1900,6 +2019,104 @@ ${c.raw.content}`).join(`
     diagnostics
   };
 }
+async function assembleVolumePrompt(profile, customPresets, chatId, arcs, userId, opener) {
+  const conn = await resolveConnection(profile, userId);
+  if (!conn)
+    throw new FatalSummarizerError("No connection available for Memoria");
+  const presetText = findPresetText(profile, customPresets, "volume");
+  if (!presetText)
+    throw new Error("Volume preset missing");
+  const body = arcs.map((a, idx) => `<<ARC ${idx + 1}: ${a.raw.comment || a.meta.title || "untitled"}>>
+${a.raw.content}`).join(`
+
+`);
+  const { targetTokens, targetPercent, inputTokens: bodyTokens } = await resolveTargets(profile.volumeTargetUnit, profile.volumeTargetPercent, profile.volumeTargetTokens, body, conn.model, userId);
+  const built = buildMessages({
+    systemPromptTemplate: presetText,
+    targetTokens,
+    targetPercent,
+    previousMemoriesBlock: "",
+    bodyHeading: `<<ARCS TO CONSOLIDATE (target ~${targetTokens} tokens)>>`,
+    body,
+    shortCommentRulesOverride: profile.shortCommentRulesOverride,
+    personaOverride: profile.memoriaPersonaOverride,
+    opener
+  });
+  const samplerParams = buildSamplerParameters(profile);
+  const diagnostics = [
+    { message: `Connection: ${conn.name} (${conn.provider}/${conn.model})` },
+    { message: `Source arcs: ${arcs.length}` },
+    { message: `Concatenated arc body tokens (model tokenizer): ${bodyTokens}` },
+    { message: `Target tokens: ${targetTokens} (${profile.volumeTargetUnit === "tokens" ? `fixed budget, ~${targetPercent}% of input` : profile.volumeTargetPercent + "% of input"})` },
+    { message: `Target words (shown to model): ${Math.max(1, Math.round(targetTokens / 1.4))}` },
+    { message: `Opener: ${opener}` },
+    { message: `Preset key: ${profile.volumePresetKey}` },
+    { message: `Sampler parameters being sent on the wire: ${JSON.stringify(samplerParams)}` }
+  ];
+  const resolvedSystem = await resolveMacrosWithDiagnostics(built.system, chatId, userId, diagnostics);
+  const outgoingUser = await applySelectedRegex(built.user, profile.regexOutgoingScriptIds, userId);
+  if (profile.regexOutgoingScriptIds.length > 0) {
+    diagnostics.push({ message: `Outgoing regex applied: ${profile.regexOutgoingScriptIds.length} script(s)` });
+  }
+  return {
+    messages: [
+      { role: "system", content: resolvedSystem },
+      { role: "user", content: outgoingUser }
+    ],
+    diagnostics
+  };
+}
+async function summarizeVolume(profile, customPresets, chatId, arcs, userId, opener, streamOptions) {
+  const conn = await resolveConnection(profile, userId);
+  if (!conn)
+    throw new FatalSummarizerError("No connection available for Memoria");
+  const presetText = findPresetText(profile, customPresets, "volume");
+  if (!presetText)
+    throw new Error("Volume preset missing");
+  const body = arcs.map((a, idx) => `<<ARC ${idx + 1}: ${a.raw.comment || a.meta.title || "untitled"}>>
+${a.raw.content}`).join(`
+
+`);
+  const { targetTokens, targetPercent } = await resolveTargets(profile.volumeTargetUnit, profile.volumeTargetPercent, profile.volumeTargetTokens, body, conn.model, userId);
+  const built = buildMessages({
+    systemPromptTemplate: presetText,
+    targetTokens,
+    targetPercent,
+    previousMemoriesBlock: "",
+    bodyHeading: `<<ARCS TO CONSOLIDATE (target ~${targetTokens} tokens)>>`,
+    body,
+    shortCommentRulesOverride: profile.shortCommentRulesOverride,
+    personaOverride: profile.memoriaPersonaOverride,
+    opener
+  });
+  const resolvedSystem = await resolveSystemMacros(built.system, chatId, userId);
+  const outgoingUser = await applySelectedRegex(built.user, profile.regexOutgoingScriptIds, userId);
+  const llmMessages = [
+    { role: "system", content: resolvedSystem },
+    { role: "user", content: outgoingUser }
+  ];
+  const result = await runStreamingGeneration(conn, llmMessages, profile, userId, streamOptions);
+  const rawText = (result.content || "").trim();
+  if (!rawText)
+    throw new Error("Empty model output");
+  const processed = await applySelectedRegex(rawText, profile.regexIncomingScriptIds, userId);
+  const parsed = parseSummaryJson(processed);
+  if (!parsed.content.trim())
+    throw new Error("The volume summary came back empty");
+  return {
+    rawOutput: rawText,
+    title: parsed.title,
+    opener: parsed.opener || opener,
+    content: parsed.content,
+    keywords: parsed.keywords,
+    shortComment: parsed.shortComment,
+    usagePromptTokens: result.usage?.prompt_tokens ?? 0,
+    usageCompletionTokens: result.usage?.completion_tokens ?? 0,
+    model: conn.model,
+    connectionId: conn.id,
+    presetKey: profile.volumePresetKey
+  };
+}
 async function summarizeChapter(profile, customPresets, chatId, messages, previousMemories, userId, opener, streamOptions) {
   const conn = await resolveConnection(profile, userId);
   if (!conn)
@@ -2165,6 +2382,7 @@ function repairJson(s) {
 // src/backend/hooks.ts
 var CHAPTER_KEY = `${EXTENSION_ID}.latest_chapter`;
 var ARC_KEY = `${EXTENSION_ID}.latest_arc`;
+var VOLUME_KEY = `${EXTENSION_ID}.latest_volume`;
 var registered = false;
 function registerHookEndpoints() {
   if (registered)
@@ -2173,6 +2391,7 @@ function registerHookEndpoints() {
   try {
     spindle.rpcPool?.sync?.(CHAPTER_KEY, null, { requires: [] });
     spindle.rpcPool?.sync?.(ARC_KEY, null, { requires: [] });
+    spindle.rpcPool?.sync?.(VOLUME_KEY, null, { requires: [] });
   } catch (err) {
     warn(`rpcPool unavailable: ${describeError(err)}`);
   }
@@ -2201,14 +2420,27 @@ function publishArcCreated(userId, event) {
     warn(`failed to publish arc_created: ${describeError(err)}`);
   }
 }
+function publishVolumeCreated(userId, event) {
+  const payload = {
+    ...event,
+    createdAt: Date.now(),
+    userId
+  };
+  try {
+    spindle.rpcPool?.sync?.(VOLUME_KEY, payload, { requires: [] });
+  } catch (err) {
+    warn(`failed to publish volume_created: ${describeError(err)}`);
+  }
+}
 
 // src/backend/book-copy.ts
 async function copyLmbEntries(targetBookId, sourceEntries, userId, transform) {
   const idMap = new Map;
-  const clonedChapterMeta = new Map;
-  const ctx = { idMap, clonedChapterMeta };
+  const clonedMeta = new Map;
+  const ctx = { idMap, clonedMeta };
   const chapters = sourceEntries.filter((e) => e.meta.tier === 1);
   const arcs = sourceEntries.filter((e) => e.meta.tier === 2);
+  const volumes = sourceEntries.filter((e) => e.meta.tier === 3);
   for (const ch of chapters) {
     const o = transform(ch, ctx);
     if (!o)
@@ -2223,43 +2455,46 @@ async function copyLmbEntries(targetBookId, sourceEntries, userId, transform) {
     };
     const created = await createClone(targetBookId, ch.raw, meta, userId, o.comment);
     idMap.set(ch.raw.id, created.id);
-    clonedChapterMeta.set(ch.raw.id, meta);
+    clonedMeta.set(ch.raw.id, meta);
   }
-  for (const arc of arcs) {
-    const o = transform(arc, ctx);
-    if (!o)
-      continue;
-    const sourceChapterEntryIds = (arc.meta.sourceChapterEntryIds ?? []).map((oldId) => idMap.get(oldId)).filter((x) => typeof x === "string");
-    const meta = {
-      ...arc.meta,
-      msgIds: o.msgIds,
-      sourceChapterEntryIds,
-      firstMsgIdx: o.firstMsgIdx,
-      lastMsgIdx: o.lastMsgIdx,
-      supersededByEntryId: null,
-      ...o.extra
-    };
-    const created = await createClone(targetBookId, arc.raw, meta, userId, o.comment);
-    idMap.set(arc.raw.id, created.id);
+  for (const group of [arcs, volumes]) {
+    for (const entry of group) {
+      const o = transform(entry, ctx);
+      if (!o)
+        continue;
+      const sourceChapterEntryIds = (entry.meta.sourceChapterEntryIds ?? []).map((oldId) => idMap.get(oldId)).filter((x) => typeof x === "string");
+      const meta = {
+        ...entry.meta,
+        msgIds: o.msgIds,
+        sourceChapterEntryIds,
+        firstMsgIdx: o.firstMsgIdx,
+        lastMsgIdx: o.lastMsgIdx,
+        supersededByEntryId: null,
+        ...o.extra
+      };
+      const created = await createClone(targetBookId, entry.raw, meta, userId, o.comment);
+      idMap.set(entry.raw.id, created.id);
+      clonedMeta.set(entry.raw.id, meta);
+    }
   }
-  for (const ch of chapters) {
-    const newChId = idMap.get(ch.raw.id);
-    if (!newChId)
+  for (const src of [...chapters, ...arcs]) {
+    const newId = idMap.get(src.raw.id);
+    if (!newId)
       continue;
-    const oldArcId = ch.meta.supersededByEntryId;
-    if (!oldArcId)
+    const oldSuperId = src.meta.supersededByEntryId;
+    if (!oldSuperId)
       continue;
-    const newArcId = idMap.get(oldArcId);
-    if (!newArcId)
+    const newSuperId = idMap.get(oldSuperId);
+    if (!newSuperId)
       continue;
-    const baseMeta = clonedChapterMeta.get(ch.raw.id);
+    const baseMeta = clonedMeta.get(src.raw.id);
     if (!baseMeta)
       continue;
-    const ext = ch.raw.extensions || {};
+    const ext = src.raw.extensions || {};
     try {
-      await spindle.world_books.entries.update(newChId, { extensions: { ...ext, [EXTENSION_KEY]: { ...baseMeta, supersededByEntryId: newArcId } } }, userId);
+      await spindle.world_books.entries.update(newId, { extensions: { ...ext, [EXTENSION_KEY]: { ...baseMeta, supersededByEntryId: newSuperId } } }, userId);
     } catch (err) {
-      warn(`copyLmbEntries: failed to re-point chapter ${newChId.slice(0, 8)}: ${describeError(err)}`);
+      warn(`copyLmbEntries: failed to re-point entry ${newId.slice(0, 8)}: ${describeError(err)}`);
     }
   }
   return idMap;
@@ -2407,7 +2642,7 @@ async function cloneShelfForFork(forkChatId, forkChatName, parentChatId, userId)
     let lastIdx = last;
     if (firstIdx === undefined || lastIdx === undefined) {
       for (const oldId of entry.meta.sourceChapterEntryIds ?? []) {
-        const cm = ctx.clonedChapterMeta.get(oldId);
+        const cm = ctx.clonedMeta.get(oldId);
         if (!cm)
           continue;
         if (cm.firstMsgIdx !== undefined)
@@ -2582,9 +2817,23 @@ function arcBusyLabel(chars, thinkingChars, elapsedMs) {
     return `Memoria is ~${tokens} tokens into an arc (~${thinkTokens} thinking, ${t})`;
   return `Memoria is ~${tokens} tokens into an arc (${t})`;
 }
+function volumeBusyLabel(chars, thinkingChars, elapsedMs) {
+  const tokens = approximateTokensFromChars(chars);
+  const thinkTokens = approximateTokensFromChars(thinkingChars);
+  const t = formatElapsed(elapsedMs);
+  if (tokens === 0 && thinkTokens === 0)
+    return `Memoria is pressing a volume (${t})`;
+  if (tokens === 0 && thinkTokens > 0)
+    return `Memoria is thinking (~${thinkTokens} tokens, ${t})`;
+  if (thinkTokens > 0)
+    return `Memoria is ~${tokens} tokens into a volume (~${thinkTokens} thinking, ${t})`;
+  return `Memoria is ~${tokens} tokens into a volume (${t})`;
+}
 function formatBusyLabel(state, elapsedMs) {
   if (state.kind === "arc")
     return arcBusyLabel(state.chars, state.thinkingChars, elapsedMs);
+  if (state.kind === "volume")
+    return volumeBusyLabel(state.chars, state.thinkingChars, elapsedMs);
   return chapterBusyLabel(state.chars, state.thinkingChars, elapsedMs);
 }
 function ensureHeartbeat() {
@@ -2710,7 +2959,7 @@ function recordFailure(userId, chatId, kind, retries, err) {
 function nyaaToast(userId, kind, automation) {
   if (!cb)
     return;
-  const tone = kind === "retry" ? "warn" : kind === "success" || kind === "arc_success" ? "success" : "info";
+  const tone = kind === "retry" ? "warn" : kind === "success" || kind === "arc_success" || kind === "volume_success" ? "success" : "info";
   cb.onToast(userId, tone, pickPhrase(kind), automation);
 }
 function shortErrorText(err) {
@@ -2720,7 +2969,7 @@ function shortErrorText(err) {
   return cleaned.length > 160 ? `${cleaned.slice(0, 159)}\u2026` : cleaned;
 }
 function failToast(userId, kind, err) {
-  const noun = kind === "arc" ? "bind the arc" : "file the chapter";
+  const noun = kind === "arc" ? "bind the arc" : kind === "volume" ? "press the volume" : "file the chapter";
   cb?.onToast(userId, "error", `Memoria couldn't ${noun}: ${shortErrorText(err)}`);
 }
 async function createChapterAuto(chatId, profile, settings, userId, automation = false) {
@@ -2882,6 +3131,7 @@ ${result.content}`;
         await syncHiddenForCoveredMessages(chatId, allMessages, {
           coveredBy: new Map(window.map((m) => [m.id, entry.id])),
           activeEntries: [],
+          volumes: [],
           arcs: [],
           chapters: []
         }, userId, true);
@@ -3004,7 +3254,7 @@ async function runArc(chatId, profile, settings, userId, selected, opts = {}) {
   const firstIdx = firstIdxs.length ? Math.min(...firstIdxs) : 0;
   const lastIdx = lastIdxs.length ? Math.max(...lastIdxs) : firstIdx;
   if (profile.showMemoryPreviews) {
-    const draft = makeArcPreview(chatId, selected, result, firstIdx, lastIdx, replacesEntryId);
+    const draft = makeGroupPreview("arc", selected, result, firstIdx, lastIdx, replacesEntryId);
     pushPreview(userId, chatId, draft);
     cb?.onStateChange(userId, chatId);
     return null;
@@ -3121,6 +3371,177 @@ ${result.content}`;
     return arcEntry.id;
   });
 }
+async function createVolumeFromArcs(chatId, arcEntryIds, profile, settings, userId, opts = {}) {
+  if (!setBusy(userId, chatId, "volume", "Memoria is pressing a volume"))
+    return null;
+  try {
+    const entries = await listLmbEntries(chatId, userId);
+    const entriesForSelection = opts.replacesEntryId ? entries.filter((e) => e.raw.id !== opts.replacesEntryId) : entries;
+    const coverage = await buildCoverage(chatId, userId, entriesForSelection);
+    const wanted = new Set(arcEntryIds);
+    const arcs = coverage.activeEntries.filter((e) => e.meta.tier === 2 && wanted.has(e.raw.id)).sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
+    if (arcs.length === 0)
+      return null;
+    return await runVolume(chatId, profile, settings, userId, arcs, opts.replacesEntryId);
+  } finally {
+    clearBusy(userId, chatId, "volume");
+  }
+}
+async function runVolume(chatId, profile, settings, userId, selected, replacesEntryId) {
+  nyaaToast(userId, "volume_fire", false);
+  const totalTurns = selected.reduce((acc, a) => acc + a.meta.msgIds.length, 0);
+  const provisionalSceneNumber = await nextSceneNumber(chatId, 3, userId);
+  const opener = buildVolumeHeader(provisionalSceneNumber, selected.length, totalTurns);
+  const outcome = await runWithRetry(profile.retryCount + 1, async () => {
+    const controller = new AbortController;
+    registerAborter(userId, chatId, "volume", controller);
+    try {
+      return await summarizeVolume(profile, settings.customPresets, chatId, selected, userId, opener, {
+        externalSignal: controller.signal,
+        onProgress: (chars, thinking) => updateProgressNumbers(userId, chatId, "volume", chars, thinking)
+      });
+    } finally {
+      aborters.delete(busyKey(userId, chatId, "volume"));
+    }
+  }, (n, err) => {
+    warn(`volume attempt ${n} failed: ${describeError(err)}`);
+    nyaaToast(userId, "retry", false);
+  });
+  if (!outcome.ok) {
+    if (outcome.err instanceof AbortedSummarizerError) {
+      cb?.onToast(userId, "info", "Memoria sets the pen down");
+      cb?.onStateChange(userId, chatId);
+      return null;
+    }
+    recordFailure(userId, chatId, "volume", outcome.retries, outcome.err);
+    failToast(userId, "volume", outcome.err);
+    cb?.onStateChange(userId, chatId);
+    return null;
+  }
+  clearLastFailure(userId, chatId);
+  const result = outcome.value;
+  const firstIdxs = selected.map((a) => a.meta.firstMsgIdx).filter((n) => typeof n === "number");
+  const lastIdxs = selected.map((a) => a.meta.lastMsgIdx).filter((n) => typeof n === "number");
+  const firstIdx = firstIdxs.length ? Math.min(...firstIdxs) : 0;
+  const lastIdx = lastIdxs.length ? Math.max(...lastIdxs) : firstIdx;
+  if (profile.showMemoryPreviews) {
+    const draft = makeGroupPreview("volume", selected, result, firstIdx, lastIdx, replacesEntryId);
+    pushPreview(userId, chatId, draft);
+    cb?.onStateChange(userId, chatId);
+    return null;
+  }
+  try {
+    const entryId = await commitVolume(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId);
+    nyaaToast(userId, "volume_success", false);
+    return entryId;
+  } catch (err) {
+    warn(`commitVolume failed: ${describeError(err)}`);
+    recordFailure(userId, chatId, "volume", 0, err);
+    failToast(userId, "volume", err);
+    cb?.onStateChange(userId, chatId);
+    return null;
+  }
+}
+async function commitVolume(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId) {
+  return withCommitMutex(userId, chatId, 3, async () => {
+    const freshEntries = await listLmbEntries(chatId, userId);
+    const entriesForCoverage = replacesEntryId ? freshEntries.filter((e) => e.raw.id !== replacesEntryId) : freshEntries;
+    const freshCoverage = await buildCoverage(chatId, userId, entriesForCoverage);
+    const stillActive = new Set(freshCoverage.activeEntries.filter((e) => e.meta.tier === 2).map((e) => e.raw.id));
+    const filtered = selected.filter((a) => stillActive.has(a.raw.id));
+    if (filtered.length === 0) {
+      throw new Error("All source arcs were already bound by another volume or deleted");
+    }
+    if (filtered.length < selected.length) {
+      selected = filtered;
+      const firstIdxs = selected.map((a) => a.meta.firstMsgIdx).filter((n) => typeof n === "number");
+      const lastIdxs = selected.map((a) => a.meta.lastMsgIdx).filter((n) => typeof n === "number");
+      firstIdx = firstIdxs.length ? Math.min(...firstIdxs) : 0;
+      lastIdx = lastIdxs.length ? Math.max(...lastIdxs) : firstIdx;
+    }
+    const book = await ensureBookForChat(chatId, userId);
+    const replacedVolume = replacesEntryId ? freshEntries.find((e) => e.raw.id === replacesEntryId) : undefined;
+    const sceneNumber = typeof replacedVolume?.meta.sceneNumber === "number" ? replacedVolume.meta.sceneNumber : await nextSceneNumber(chatId, 3, userId);
+    const msgIds = selected.flatMap((a) => a.meta.msgIds);
+    const sourceArcEntryIds = selected.map((a) => a.raw.id);
+    const isRootVolume = selected.length > 0 && selected.every((a) => a.meta.isRoot);
+    const rootOrigin = isRootVolume ? selected.find((a) => a.meta.rootOrigin)?.meta.rootOrigin : undefined;
+    if (!isRootVolume && selected.some((a) => a.meta.isRoot)) {
+      const own = selected.filter((a) => !a.meta.isRoot);
+      const fs = own.map((a) => a.meta.firstMsgIdx).filter((n) => typeof n === "number");
+      const ls = own.map((a) => a.meta.lastMsgIdx).filter((n) => typeof n === "number");
+      if (fs.length)
+        firstIdx = Math.min(...fs);
+      else if (firstIdx < 0)
+        firstIdx = 0;
+      if (ls.length)
+        lastIdx = Math.max(...ls);
+      else if (lastIdx < firstIdx)
+        lastIdx = firstIdx;
+    }
+    const volumeTitle = isRootVolume ? result.title?.trim() || "Inherited Volume" : deriveTitle(result, firstIdx + 1, lastIdx + 1);
+    const meta = {
+      tier: 3,
+      chatId,
+      msgIds,
+      sourceChapterEntryIds: sourceArcEntryIds,
+      firstMsgIdx: firstIdx,
+      lastMsgIdx: lastIdx,
+      tokenCountInput: selected.reduce((a, e) => a + e.meta.tokenCountOutput, 0),
+      tokenCountOutput: result.usageCompletionTokens || approximateTokensFromChars(result.content.length),
+      model: result.model,
+      connectionId: result.connectionId,
+      createdAt: Date.now(),
+      title: volumeTitle,
+      shortComment: result.shortComment,
+      presetKey: result.presetKey,
+      sceneNumber,
+      rawOutput: result.rawOutput,
+      ...isRootVolume ? { isRoot: true, rootOrigin } : {}
+    };
+    const baseComment = meta.title ?? `Volume - msgs ${firstIdx + 1}-${lastIdx + 1}`;
+    const comment = `${isRootVolume ? "[Root] " : ""}Vol #${sceneNumber} - ${baseComment}`;
+    const volumeSettings = await loadSettings(userId);
+    const volumeOpener = buildVolumeHeader(sceneNumber, sourceArcEntryIds.length, msgIds.length);
+    const finalVolumeContent = `${volumeOpener}
+
+${result.content}`;
+    const volumeEntry = await createChapterEntry(book.id, meta, finalVolumeContent, comment, userId, result.keywords ?? [], volumeSettings.forceConstantEntries);
+    const failedSupersedes = [];
+    for (const arc of selected) {
+      try {
+        await patchEntryMeta(arc, { supersededByEntryId: volumeEntry.id }, userId);
+      } catch (err) {
+        failedSupersedes.push(arc.raw.id);
+        warn(`failed to mark arc ${arc.raw.id} superseded by volume ${volumeEntry.id}: ${describeError(err)}`);
+      }
+    }
+    if (failedSupersedes.length > 0) {
+      cb?.onToast(userId, "warn", `The volume saved but ${failedSupersedes.length} arc${failedSupersedes.length === 1 ? "" : "s"} couldn't be marked superseded`);
+    }
+    invalidateBookCache(userId, chatId);
+    if (replacesEntryId) {
+      try {
+        await deleteEntry(replacesEntryId, userId);
+        invalidateBookCache(userId, chatId);
+      } catch (err) {
+        warn(`regen: failed to delete replaced volume ${replacesEntryId}: ${describeError(err)}`);
+      }
+    }
+    publishVolumeCreated(userId, {
+      chatId,
+      volumeEntryId: volumeEntry.id,
+      bookId: book.id,
+      sourceArcEntryIds,
+      sourceMessageIds: msgIds,
+      summaryText: finalVolumeContent,
+      model: result.model,
+      title: meta.title
+    });
+    cb?.onStateChange(userId, chatId);
+    return volumeEntry.id;
+  });
+}
 async function acceptPreview(chatId, draftId, profile, userId) {
   const preview = findPendingPreview(userId, chatId, draftId);
   if (!preview)
@@ -3173,14 +3594,16 @@ async function acceptPreview(chatId, draftId, profile, userId) {
         return null;
       }
     }
+    const isVolume = preview.kind === "volume";
     const entries = await listLmbEntries(chatId, userId);
-    const arcSelectionEntries = preview.replacesEntryId ? entries.filter((e) => e.raw.id !== preview.replacesEntryId) : entries;
-    const coverage = await buildCoverage(chatId, userId, arcSelectionEntries);
+    const groupSelectionEntries = preview.replacesEntryId ? entries.filter((e) => e.raw.id !== preview.replacesEntryId) : entries;
+    const coverage = await buildCoverage(chatId, userId, groupSelectionEntries);
     const wanted = new Set(preview.sourceChapterEntryIds ?? []);
-    const selected = coverage.activeEntries.filter((e) => e.meta.tier === 1 && wanted.has(e.raw.id));
+    const sourceTier = isVolume ? 2 : 1;
+    const selected = coverage.activeEntries.filter((e) => e.meta.tier === sourceTier && wanted.has(e.raw.id));
     if (selected.length === 0) {
       dropPendingPreview(userId, chatId, draftId);
-      cb?.onToast(userId, "warn", "Memoria can't save this arc, its chapters were deleted or already bound");
+      cb?.onToast(userId, "warn", isVolume ? "Memoria can't save this volume, its arcs were deleted or already bound" : "Memoria can't save this arc, its chapters were deleted or already bound");
       cb?.onStateChange(userId, chatId);
       return null;
     }
@@ -3198,14 +3621,14 @@ async function acceptPreview(chatId, draftId, profile, userId) {
       presetKey: preview.presetKey
     };
     try {
-      const entryId = await commitArc(chatId, userId, selected, fakeResult, preview.firstMsgIdx ?? 0, preview.lastMsgIdx ?? 0, preview.replacesEntryId);
+      const entryId = isVolume ? await commitVolume(chatId, userId, selected, fakeResult, preview.firstMsgIdx ?? 0, preview.lastMsgIdx ?? 0, preview.replacesEntryId) : await commitArc(chatId, userId, selected, fakeResult, preview.firstMsgIdx ?? 0, preview.lastMsgIdx ?? 0, preview.replacesEntryId);
       dropPendingPreview(userId, chatId, draftId);
-      nyaaToast(userId, "arc_success", false);
+      nyaaToast(userId, isVolume ? "volume_success" : "arc_success", false);
       cb?.onStateChange(userId, chatId);
       return entryId;
     } catch (err) {
-      recordFailure(userId, chatId, "arc", 0, err);
-      failToast(userId, "arc", err);
+      recordFailure(userId, chatId, isVolume ? "volume" : "arc", 0, err);
+      failToast(userId, isVolume ? "volume" : "arc", err);
       cb?.onStateChange(userId, chatId);
       return null;
     }
@@ -3255,6 +3678,17 @@ async function dryRunArc(chatId, profile, settings, userId) {
   const provisionalSceneNumber = await nextSceneNumber(chatId, 2, userId);
   const opener = buildArcHeader(provisionalSceneNumber, chapters.length, totalTurns);
   return assembleArcPrompt(profile, settings.customPresets, chatId, chapters, userId, opener);
+}
+async function dryRunVolume(chatId, profile, settings, userId) {
+  const entries = await listLmbEntries(chatId, userId);
+  const coverage = await buildCoverage(chatId, userId, entries);
+  const arcs = coverage.activeEntries.filter((e) => e.meta.tier === 2 && !e.meta.isRoot).sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
+  if (arcs.length === 0)
+    throw new Error("No arcs to press yet");
+  const totalTurns = arcs.reduce((acc, a) => acc + a.meta.msgIds.length, 0);
+  const provisionalSceneNumber = await nextSceneNumber(chatId, 3, userId);
+  const opener = buildVolumeHeader(provisionalSceneNumber, arcs.length, totalTurns);
+  return assembleVolumePrompt(profile, settings.customPresets, chatId, arcs, userId, opener);
 }
 async function drainArcBacklog(chatId, profile, settings, userId, automation = false) {
   if (profile.arcTrigger === "manual")
@@ -3331,11 +3765,11 @@ function makePreview(kind, chatId, window, result, firstIdx, lastIdx, replacesEn
     replacesEntryId
   };
 }
-function makeArcPreview(chatId, selected, result, firstIdx, lastIdx, replacesEntryId) {
+function makeGroupPreview(kind, selected, result, firstIdx, lastIdx, replacesEntryId) {
   return {
-    kind: "arc",
-    draftId: `draft_arc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-    title: result.title || `Arc - msgs ${firstIdx + 1}-${lastIdx + 1}`,
+    kind,
+    draftId: `draft_${kind}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+    title: result.title || `${kind === "volume" ? "Volume" : "Arc"} - msgs ${firstIdx + 1}-${lastIdx + 1}`,
     content: result.content,
     shortComment: result.shortComment,
     sourceMessageIds: selected.flatMap((c) => c.meta.msgIds),
@@ -3496,6 +3930,7 @@ async function buildState(userId, requestedChatId) {
     activeProfile,
     chapters: [],
     arcs: [],
+    volumes: [],
     bookId: null,
     bookName: null,
     connections,
@@ -3513,6 +3948,7 @@ async function buildState(userId, requestedChatId) {
     messages: [],
     chapterPresets: BUILTIN_CHAPTER_PRESETS,
     arcPresets: BUILTIN_ARC_PRESETS,
+    volumePresets: BUILTIN_VOLUME_PRESETS,
     customPresets: settings.customPresets,
     regexScripts,
     pendingPreviews: [],
@@ -3547,13 +3983,14 @@ async function buildState(userId, requestedChatId) {
   const backlogArcs = countArcBacklog(activeChapterEntries, activeProfile);
   const supersededIds = new Set;
   for (const e of entries) {
-    if (e.meta.tier === 2 && !e.raw.disabled && Array.isArray(e.meta.sourceChapterEntryIds)) {
+    if (e.meta.tier !== 1 && !e.raw.disabled && Array.isArray(e.meta.sourceChapterEntryIds)) {
       for (const sid of e.meta.sourceChapterEntryIds)
         supersededIds.add(sid);
     }
   }
   const chapters = [];
   const arcs = [];
+  const volumes = [];
   for (const e of entries) {
     const view = {
       entryId: e.raw.id,
@@ -3567,7 +4004,9 @@ async function buildState(userId, requestedChatId) {
       sourceTokensInput: e.meta.tokenCountInput || 0,
       isRoot: !!e.meta.isRoot
     };
-    if (e.meta.tier === 2) {
+    if (e.meta.tier === 3) {
+      volumes.push({ ...view, sourceChapterEntryIds: e.meta.sourceChapterEntryIds ?? [] });
+    } else if (e.meta.tier === 2) {
       arcs.push({ ...view, sourceChapterEntryIds: e.meta.sourceChapterEntryIds ?? [] });
     } else {
       chapters.push(view);
@@ -3575,6 +4014,7 @@ async function buildState(userId, requestedChatId) {
   }
   chapters.sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
   arcs.sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
+  volumes.sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
   const messageStubs = messages.map((m) => {
     const covered = coverage.coveredBy.get(m.id) ?? null;
     const hidden = !!(m.extra && m.extra.hidden);
@@ -3612,6 +4052,7 @@ async function buildState(userId, requestedChatId) {
     activeCharacterName: characterName,
     chapters,
     arcs,
+    volumes,
     bookId,
     bookName,
     coverage: stats,
@@ -3875,8 +4316,23 @@ async function collectActiveChapterIds(chatId, userId) {
   const coverage = await buildCoverage(chatId, userId, entries);
   return coverage.activeEntries.filter((e) => e.meta.tier === 1 && !e.meta.isRoot).map((e) => e.raw.id);
 }
+async function collectActiveArcIds(chatId, userId) {
+  const entries = await listLmbEntries(chatId, userId);
+  const coverage = await buildCoverage(chatId, userId, entries);
+  return coverage.activeEntries.filter((e) => e.meta.tier === 2 && !e.meta.isRoot).map((e) => e.raw.id);
+}
 async function retryLastFailure(chatId, userId, profile, settings) {
   const last = getLastFailure(userId, chatId);
+  if (last?.kind === "volume") {
+    const ids = await collectActiveArcIds(chatId, userId);
+    if (ids.length === 0) {
+      clearLastFailure(userId, chatId);
+      await notify(userId, "warn", "Memoria has no arcs left to retry the volume");
+      return;
+    }
+    await createVolumeFromArcs(chatId, ids, profile, settings, userId);
+    return;
+  }
   if (last?.kind === "arc") {
     const ids = await collectActiveChapterIds(chatId, userId);
     if (ids.length === 0) {
@@ -4101,6 +4557,19 @@ spindle.onFrontendMessage(async (raw, userId) => {
         await pushState(userId, msg.chatId);
         break;
       }
+      case "create_volume_from": {
+        const cur = await loadSettings(userId);
+        const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
+        if (!profile)
+          break;
+        if (getBusy(userId).some((b) => b.kind === "volume" && b.chatId === msg.chatId)) {
+          await notify(userId, "warn", "Memoria is already pressing a volume");
+          break;
+        }
+        await createVolumeFromArcs(msg.chatId, msg.arcEntryIds, profile, cur, userId);
+        await pushState(userId, msg.chatId);
+        break;
+      }
       case "retry_last_failure": {
         const cur = await loadSettings(userId);
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
@@ -4113,19 +4582,17 @@ spindle.onFrontendMessage(async (raw, userId) => {
       case "delete_entry": {
         const entries = await listLmbEntries(msg.chatId, userId);
         const entry = entries.find((e) => e.raw.id === msg.entryId);
-        if (entry && entry.meta.tier === 2 && Array.isArray(entry.meta.sourceChapterEntryIds)) {
+        if (entry && entry.meta.tier !== 1 && !entry.meta.supersededByEntryId && Array.isArray(entry.meta.sourceChapterEntryIds)) {
           const sourceIds = new Set(entry.meta.sourceChapterEntryIds);
-          for (const ch of entries) {
-            if (ch.meta.tier !== 1)
+          for (const src of entries) {
+            if (!sourceIds.has(src.raw.id))
               continue;
-            if (!sourceIds.has(ch.raw.id))
-              continue;
-            if (ch.meta.supersededByEntryId !== msg.entryId)
+            if (src.meta.supersededByEntryId !== msg.entryId)
               continue;
             try {
-              await patchEntryMeta(ch, { supersededByEntryId: null }, userId);
+              await patchEntryMeta(src, { supersededByEntryId: null }, userId);
             } catch (err) {
-              warn(`failed to clear supersededByEntryId on chapter ${ch.raw.id}: ${describeError(err)}`);
+              warn(`failed to clear supersededByEntryId on entry ${src.raw.id}: ${describeError(err)}`);
             }
           }
         }
@@ -4149,19 +4616,17 @@ spindle.onFrontendMessage(async (raw, userId) => {
           await notify(userId, "warn", "Memoria can't find that entry to release");
           break;
         }
-        if (entry.meta.tier === 2 && Array.isArray(entry.meta.sourceChapterEntryIds)) {
+        if (entry.meta.tier !== 1 && !entry.meta.supersededByEntryId && Array.isArray(entry.meta.sourceChapterEntryIds)) {
           const sourceIds = new Set(entry.meta.sourceChapterEntryIds);
-          for (const ch of entries) {
-            if (ch.meta.tier !== 1)
+          for (const src of entries) {
+            if (!sourceIds.has(src.raw.id))
               continue;
-            if (!sourceIds.has(ch.raw.id))
-              continue;
-            if (ch.meta.supersededByEntryId !== msg.entryId)
+            if (src.meta.supersededByEntryId !== msg.entryId)
               continue;
             try {
-              await patchEntryMeta(ch, { supersededByEntryId: null }, userId);
+              await patchEntryMeta(src, { supersededByEntryId: null }, userId);
             } catch (err) {
-              warn(`failed to clear supersededByEntryId on chapter ${ch.raw.id}: ${describeError(err)}`);
+              warn(`failed to clear supersededByEntryId on entry ${src.raw.id}: ${describeError(err)}`);
             }
           }
         }
@@ -4188,40 +4653,48 @@ spindle.onFrontendMessage(async (raw, userId) => {
           await notify(userId, "warn", "Memoria can't find that entry to regenerate");
           break;
         }
-        const busyKind = entry.meta.tier === 2 ? "arc" : "chapter";
+        const tier = entry.meta.tier;
+        const busyKind = tier === 3 ? "volume" : tier === 2 ? "arc" : "chapter";
         if (getBusy(userId).some((b) => b.kind === busyKind && b.chatId === msg.chatId)) {
           await notify(userId, "warn", `Memoria is already busy with a ${busyKind}`);
           break;
         }
-        if (entry.meta.isRoot && entry.meta.tier === 1) {
+        if (entry.meta.isRoot && tier === 1) {
           await notify(userId, "warn", "Memoria can't regenerate inherited chapters");
           break;
         }
-        const isArc = entry.meta.tier === 2;
+        const isArc = tier === 2;
+        const isVolume = tier === 3;
         const msgIds = entry.meta.msgIds.slice();
-        const chapterIds = Array.isArray(entry.meta.sourceChapterEntryIds) ? entry.meta.sourceChapterEntryIds.slice() : [];
-        if (isArc && chapterIds.length === 0) {
+        const sourceIds = Array.isArray(entry.meta.sourceChapterEntryIds) ? entry.meta.sourceChapterEntryIds.slice() : [];
+        if (isVolume && sourceIds.length === 0) {
+          await notify(userId, "warn", "Memoria has no arc sources to regenerate this volume from");
+          break;
+        }
+        if (isArc && sourceIds.length === 0) {
           await notify(userId, "warn", "Memoria has no chapter sources to regenerate this arc from");
           break;
         }
-        if (!isArc && msgIds.length === 0) {
+        if (!isArc && !isVolume && msgIds.length === 0) {
           await notify(userId, "warn", "Memoria has no messages to regenerate this chapter from");
           break;
         }
-        if (!isArc) {
+        if (!isArc && !isVolume) {
           const otherEntries = entries.filter((e) => e.raw.id !== msg.entryId);
           const otherCoverage = await buildCoverage(msg.chatId, userId, otherEntries);
           const blockingIds = entry.meta.msgIds.filter((id) => otherCoverage.coveredBy.has(id));
           if (blockingIds.length > 0) {
             const blockerEntryId = otherCoverage.coveredBy.get(blockingIds[0]);
             const blocker = otherEntries.find((e) => e.raw.id === blockerEntryId);
-            const blockerLabel = blocker?.meta.tier === 2 ? "an arc" : "another entry";
+            const blockerLabel = blocker?.meta.tier === 3 ? "a volume" : blocker?.meta.tier === 2 ? "an arc" : "another entry";
             await notify(userId, "warn", `These messages are bound into ${blockerLabel}, release or delete it first`);
             break;
           }
         }
-        if (isArc) {
-          await createArcFromChapters(msg.chatId, chapterIds, profile, cur, userId, { replacesEntryId: msg.entryId });
+        if (isVolume) {
+          await createVolumeFromArcs(msg.chatId, sourceIds, profile, cur, userId, { replacesEntryId: msg.entryId });
+        } else if (isArc) {
+          await createArcFromChapters(msg.chatId, sourceIds, profile, cur, userId, { replacesEntryId: msg.entryId });
         } else {
           await createChapterFromRange(msg.chatId, msgIds, profile, cur, userId, { replacesEntryId: msg.entryId });
         }
@@ -4267,6 +4740,21 @@ spindle.onFrontendMessage(async (raw, userId) => {
         } catch (err) {
           const text = describeError(err);
           warn(`dry_run_arc failed: ${text}`);
+          await notify(userId, "error", `Dry run failed: ${text}`);
+        }
+        break;
+      }
+      case "dry_run_volume": {
+        const cur = await loadSettings(userId);
+        const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
+        if (!profile)
+          break;
+        try {
+          const result = await dryRunVolume(msg.chatId, profile, cur, userId);
+          send({ type: "dry_run_result", kind: "volume", messages: result.messages, diagnostics: result.diagnostics }, userId);
+        } catch (err) {
+          const text = describeError(err);
+          warn(`dry_run_volume failed: ${text}`);
           await notify(userId, "error", `Dry run failed: ${text}`);
         }
         break;
@@ -4348,6 +4836,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
       case "delete_custom_preset": {
         const fallbackChapter = "summary";
         const fallbackArc = "arc_default";
+        const fallbackVolume = "volume_default";
         await mutateSettings(userId, (cur) => {
           const list = cur.customPresets.filter((p) => !(p.key === msg.key && p.category === msg.category));
           const profiles = cur.profiles.map((p) => {
@@ -4356,6 +4845,9 @@ spindle.onFrontendMessage(async (raw, userId) => {
             }
             if (msg.category === "arc" && p.arcPresetKey === msg.key) {
               return { ...p, arcPresetKey: fallbackArc };
+            }
+            if (msg.category === "volume" && p.volumePresetKey === msg.key) {
+              return { ...p, volumePresetKey: fallbackVolume };
             }
             return p;
           });

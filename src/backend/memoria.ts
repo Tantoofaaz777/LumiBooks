@@ -40,13 +40,25 @@ const ARC_SUCCESS_PHRASES: string[] = [
   "Memoria stitched the spine of a new arc",
 ];
 
-export function pickPhrase(kind: "fire" | "retry" | "success" | "arc_fire" | "arc_success"): string {
+const VOLUME_FIRE_PHRASES: string[] = [
+  "Memoria is pressing a whole volume together",
+];
+
+const VOLUME_SUCCESS_PHRASES: string[] = [
+  "Memoria embossed the spine of a new volume",
+];
+
+export type PhraseKind = "fire" | "retry" | "success" | "arc_fire" | "arc_success" | "volume_fire" | "volume_success";
+
+export function pickPhrase(kind: PhraseKind): string {
   const pool =
     kind === "fire" ? FIRE_PHRASES
       : kind === "retry" ? RETRY_PHRASES
       : kind === "success" ? SUCCESS_PHRASES
       : kind === "arc_fire" ? ARC_FIRE_PHRASES
-      : ARC_SUCCESS_PHRASES;
+      : kind === "arc_success" ? ARC_SUCCESS_PHRASES
+      : kind === "volume_fire" ? VOLUME_FIRE_PHRASES
+      : VOLUME_SUCCESS_PHRASES;
   return pool[Math.floor(Math.random() * pool.length)] ?? "Memoria nyaa";
 }
 

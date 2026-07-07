@@ -7,7 +7,7 @@ import type { ChatMessage } from "./coverage";
 import type { LMBEntry } from "./world-book";
 import { applySelectedRegex } from "./regex";
 import { describeError, warn } from "./runtime";
-import { BUILTIN_ARC_PRESETS, BUILTIN_CHAPTER_PRESETS } from "./presets";
+import { BUILTIN_ARC_PRESETS, BUILTIN_CHAPTER_PRESETS, BUILTIN_VOLUME_PRESETS } from "./presets";
 import { DEFAULT_SHORT_COMMENT_RULES_TEMPLATE, MEMORIA_PERSONA_LINE } from "./memoria";
 
 type ChatMessageDTO = ChatMessage;
@@ -59,9 +59,9 @@ export class FatalSummarizerError extends Error {
   }
 }
 
-export function findPresetText(profile: LMBProfile, customPresets: CustomPreset[], category: "chapter" | "arc"): string {
-  const key = category === "arc" ? profile.arcPresetKey : profile.chapterPresetKey;
-  const builtIns = category === "arc" ? BUILTIN_ARC_PRESETS : BUILTIN_CHAPTER_PRESETS;
+export function findPresetText(profile: LMBProfile, customPresets: CustomPreset[], category: "chapter" | "arc" | "volume"): string {
+  const key = category === "arc" ? profile.arcPresetKey : category === "volume" ? profile.volumePresetKey : profile.chapterPresetKey;
+  const builtIns = category === "arc" ? BUILTIN_ARC_PRESETS : category === "volume" ? BUILTIN_VOLUME_PRESETS : BUILTIN_CHAPTER_PRESETS;
   const custom = customPresets.find((p) => p.key === key && p.category === category);
   if (custom) return custom.prompt;
   const builtIn = builtIns.find((p) => p.key === key);
@@ -469,6 +469,142 @@ export async function assembleArcPrompt(
       { role: "user", content: outgoingUser },
     ],
     diagnostics,
+  };
+}
+
+export async function assembleVolumePrompt(
+  profile: LMBProfile,
+  customPresets: CustomPreset[],
+  chatId: string,
+  arcs: LMBEntry[],
+  userId: string,
+  opener: string,
+): Promise<DryRunAssembly> {
+  const conn = await resolveConnection(profile, userId);
+  if (!conn) throw new FatalSummarizerError("No connection available for Memoria");
+
+  const presetText = findPresetText(profile, customPresets, "volume");
+  if (!presetText) throw new Error("Volume preset missing");
+
+  const body = arcs
+    .map((a, idx) => `<<ARC ${idx + 1}: ${a.raw.comment || a.meta.title || "untitled"}>>\n${a.raw.content}`)
+    .join("\n\n");
+
+  const { targetTokens, targetPercent, inputTokens: bodyTokens } = await resolveTargets(
+    profile.volumeTargetUnit,
+    profile.volumeTargetPercent,
+    profile.volumeTargetTokens,
+    body,
+    conn.model,
+    userId,
+  );
+
+  const built = buildMessages({
+    systemPromptTemplate: presetText,
+    targetTokens,
+    targetPercent,
+    previousMemoriesBlock: "",
+    bodyHeading: `<<ARCS TO CONSOLIDATE (target ~${targetTokens} tokens)>>`,
+    body,
+    shortCommentRulesOverride: profile.shortCommentRulesOverride,
+    personaOverride: profile.memoriaPersonaOverride,
+    opener,
+  });
+
+  const samplerParams = buildSamplerParameters(profile);
+  const diagnostics: Array<{ message: string }> = [
+    { message: `Connection: ${conn.name} (${conn.provider}/${conn.model})` },
+    { message: `Source arcs: ${arcs.length}` },
+    { message: `Concatenated arc body tokens (model tokenizer): ${bodyTokens}` },
+    { message: `Target tokens: ${targetTokens} (${profile.volumeTargetUnit === "tokens" ? `fixed budget, ~${targetPercent}% of input` : profile.volumeTargetPercent + "% of input"})` },
+    { message: `Target words (shown to model): ${Math.max(1, Math.round(targetTokens / 1.4))}` },
+    { message: `Opener: ${opener}` },
+    { message: `Preset key: ${profile.volumePresetKey}` },
+    { message: `Sampler parameters being sent on the wire: ${JSON.stringify(samplerParams)}` },
+  ];
+
+  const resolvedSystem = await resolveMacrosWithDiagnostics(built.system, chatId, userId, diagnostics);
+  const outgoingUser = await applySelectedRegex(built.user, profile.regexOutgoingScriptIds, userId);
+  if (profile.regexOutgoingScriptIds.length > 0) {
+    diagnostics.push({ message: `Outgoing regex applied: ${profile.regexOutgoingScriptIds.length} script(s)` });
+  }
+
+  return {
+    messages: [
+      { role: "system", content: resolvedSystem },
+      { role: "user", content: outgoingUser },
+    ],
+    diagnostics,
+  };
+}
+
+export async function summarizeVolume(
+  profile: LMBProfile,
+  customPresets: CustomPreset[],
+  chatId: string,
+  arcs: LMBEntry[],
+  userId: string,
+  opener: string,
+  streamOptions: StreamOptions,
+): Promise<SummarizationResult> {
+  const conn = await resolveConnection(profile, userId);
+  if (!conn) throw new FatalSummarizerError("No connection available for Memoria");
+
+  const presetText = findPresetText(profile, customPresets, "volume");
+  if (!presetText) throw new Error("Volume preset missing");
+
+  const body = arcs
+    .map((a, idx) => `<<ARC ${idx + 1}: ${a.raw.comment || a.meta.title || "untitled"}>>\n${a.raw.content}`)
+    .join("\n\n");
+
+  const { targetTokens, targetPercent } = await resolveTargets(
+    profile.volumeTargetUnit,
+    profile.volumeTargetPercent,
+    profile.volumeTargetTokens,
+    body,
+    conn.model,
+    userId,
+  );
+
+  const built = buildMessages({
+    systemPromptTemplate: presetText,
+    targetTokens,
+    targetPercent,
+    previousMemoriesBlock: "",
+    bodyHeading: `<<ARCS TO CONSOLIDATE (target ~${targetTokens} tokens)>>`,
+    body,
+    shortCommentRulesOverride: profile.shortCommentRulesOverride,
+    personaOverride: profile.memoriaPersonaOverride,
+    opener,
+  });
+
+  const resolvedSystem = await resolveSystemMacros(built.system, chatId, userId);
+  const outgoingUser = await applySelectedRegex(built.user, profile.regexOutgoingScriptIds, userId);
+
+  const llmMessages: LlmMessageDTO[] = [
+    { role: "system", content: resolvedSystem },
+    { role: "user", content: outgoingUser },
+  ];
+
+  const result = await runStreamingGeneration(conn, llmMessages, profile, userId, streamOptions);
+
+  const rawText = (result.content || "").trim();
+  if (!rawText) throw new Error("Empty model output");
+  const processed = await applySelectedRegex(rawText, profile.regexIncomingScriptIds, userId);
+  const parsed = parseSummaryJson(processed);
+  if (!parsed.content.trim()) throw new Error("The volume summary came back empty");
+  return {
+    rawOutput: rawText,
+    title: parsed.title,
+    opener: parsed.opener || opener,
+    content: parsed.content,
+    keywords: parsed.keywords,
+    shortComment: parsed.shortComment,
+    usagePromptTokens: result.usage?.prompt_tokens ?? 0,
+    usageCompletionTokens: result.usage?.completion_tokens ?? 0,
+    model: conn.model,
+    connectionId: conn.id,
+    presetKey: profile.volumePresetKey,
   };
 }
 

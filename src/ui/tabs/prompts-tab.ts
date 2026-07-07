@@ -20,8 +20,12 @@ export function renderPromptsTab(
 ): void {
   host.replaceChildren();
   const profile = state.activeProfile;
-  const setKey = (category: "chapter" | "arc", key: string) => {
-    const p: Partial<LMBProfile> = category === "arc" ? { arcPresetKey: key } : { chapterPresetKey: key };
+  const setKey = (category: PresetCategory, key: string) => {
+    const p: Partial<LMBProfile> = category === "arc"
+      ? { arcPresetKey: key }
+      : category === "volume"
+        ? { volumePresetKey: key }
+        : { chapterPresetKey: key };
     send({ type: "save_profile", profile: { id: profile.id, ...p }, chatId: state.activeChatId });
   };
 
@@ -29,8 +33,11 @@ export function renderPromptsTab(
   renderMemoriaOverrides(host, state, send);
   renderCategory(host, state, ctx, send, "chapter", profile.chapterPresetKey, setKey);
   renderCategory(host, state, ctx, send, "arc", profile.arcPresetKey, setKey);
+  renderCategory(host, state, ctx, send, "volume", profile.volumePresetKey, setKey);
   renderImport(host, state, ctx, send);
 }
+
+type PresetCategory = "chapter" | "arc" | "volume";
 
 const ALPHABET_PICK =
   "{{pick::A::B::C::D::E::F::G::H::I::J::K::L::M::N::O::P::Q::R::S::T::U::V::W::X::Y::Z}}";
@@ -149,13 +156,13 @@ function renderCategory(
   state: FrontendState,
   ctx: SpindleFrontendContext,
   send: (msg: FrontendToBackend) => void,
-  category: "chapter" | "arc",
+  category: PresetCategory,
   selectedKey: string,
-  setKey: (cat: "chapter" | "arc", key: string) => void,
+  setKey: (cat: PresetCategory, key: string) => void,
 ): void {
-  const sec = section(category === "arc" ? "Arc prompt" : "Chapter prompt");
+  const sec = section(category === "arc" ? "Arc prompt" : category === "volume" ? "Volume prompt" : "Chapter prompt");
 
-  const builtIns = category === "arc" ? state.arcPresets : state.chapterPresets;
+  const builtIns = category === "arc" ? state.arcPresets : category === "volume" ? state.volumePresets : state.chapterPresets;
   const customs = state.customPresets.filter((p) => p.category === category);
   const opts = [
     ...builtIns.map((b) => ({ value: b.key, label: `Built-in: ${b.displayName}` })),
@@ -223,7 +230,9 @@ function renderCategory(
       if (!state.activeChatId) return;
       send(category === "arc"
         ? { type: "dry_run_arc", chatId: state.activeChatId }
-        : { type: "dry_run_chapter", chatId: state.activeChatId });
+        : category === "volume"
+          ? { type: "dry_run_volume", chatId: state.activeChatId }
+          : { type: "dry_run_chapter", chatId: state.activeChatId });
     }, {
       small: true,
       disabled: !state.activeChatId || !state.settings.enabled,
@@ -278,8 +287,8 @@ function renderCategory(
   host.appendChild(sec.wrap);
 }
 
-function blankPromptTemplate(category: "chapter" | "arc"): string {
-  const noun = category === "arc" ? "arc" : "chapter";
+function blankPromptTemplate(category: PresetCategory): string {
+  const noun = category === "arc" ? "arc" : category === "volume" ? "volume" : "chapter";
   return [
     `Summarize the following ${noun} into a JSON memory.`,
     "",
@@ -295,10 +304,10 @@ function blankPromptTemplate(category: "chapter" | "arc"): string {
   ].join("\n");
 }
 
-function findPresetText(state: FrontendState, category: "chapter" | "arc", key: string): string {
+function findPresetText(state: FrontendState, category: PresetCategory, key: string): string {
   const c = state.customPresets.find((p) => p.key === key && p.category === category);
   if (c) return c.prompt;
-  const builtIns = category === "arc" ? state.arcPresets : state.chapterPresets;
+  const builtIns = category === "arc" ? state.arcPresets : category === "volume" ? state.volumePresets : state.chapterPresets;
   const b = builtIns.find((p) => p.key === key);
   return b?.prompt ?? "";
 }

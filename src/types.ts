@@ -42,14 +42,14 @@ export interface CoverageStats {
 }
 
 export interface BusyEntry {
-  kind: "chapter" | "arc";
+  kind: "chapter" | "arc" | "volume";
   chatId: string;
   label: string;
   startedAt: number;
 }
 
 export interface FailureRecord {
-  kind: "chapter" | "arc";
+  kind: "chapter" | "arc" | "volume";
   message: string;
   retriedTimes: number;
   at: number;
@@ -80,12 +80,13 @@ export interface RegexScriptOption {
 }
 
 export interface PendingPreview {
-  kind: "chapter" | "arc";
+  kind: "chapter" | "arc" | "volume";
   draftId: string;
   title: string;
   content: string;
   shortComment: string;
   sourceMessageIds: string[];
+  /** Ids of the tier below: chapter ids for an arc preview, arc ids for a volume preview. */
   sourceChapterEntryIds?: string[];
   model: string;
   connectionId: string;
@@ -106,6 +107,7 @@ export interface FrontendState {
   activeProfile: LMBProfile;
   chapters: ChapterView[];
   arcs: ArcView[];
+  volumes: ArcView[];
   bookId: string | null;
   bookName: string | null;
   connections: ConnectionOption[];
@@ -116,6 +118,7 @@ export interface FrontendState {
   messages: MessageStub[];
   chapterPresets: BuiltInPreset[];
   arcPresets: BuiltInPreset[];
+  volumePresets: BuiltInPreset[];
   customPresets: CustomPreset[];
   regexScripts: RegexScriptOption[];
   pendingPreviews: PendingPreview[];
@@ -142,6 +145,7 @@ export type FrontendToBackend =
   | { type: "create_arc"; chatId: string }
   | { type: "create_arc_from"; chatId: string; chapterEntryIds: string[] }
   | { type: "create_all_arcs"; chatId: string }
+  | { type: "create_volume_from"; chatId: string; arcEntryIds: string[] }
   | { type: "retry_last_failure"; chatId: string }
   | { type: "delete_entry"; chatId: string; entryId: string }
   | { type: "release_entry"; chatId: string; entryId: string }
@@ -150,13 +154,14 @@ export type FrontendToBackend =
   | { type: "resync_hidden"; chatId: string }
   | { type: "resync_visibility"; chatId: string }
   | { type: "set_force_constant"; value: boolean; chatId?: string | null }
-  | { type: "abort_busy"; chatId: string; kind: "chapter" | "arc" }
+  | { type: "abort_busy"; chatId: string; kind: "chapter" | "arc" | "volume" }
   | { type: "dry_run_chapter"; chatId: string }
   | { type: "dry_run_arc"; chatId: string }
+  | { type: "dry_run_volume"; chatId: string }
   | { type: "ensure_book"; chatId: string }
   | { type: "import_preset"; raw: unknown; category: "chapter" | "arc"; chatId?: string | null }
   | { type: "save_custom_preset"; preset: CustomPreset; chatId?: string | null }
-  | { type: "delete_custom_preset"; key: string; category: "chapter" | "arc"; chatId?: string | null }
+  | { type: "delete_custom_preset"; key: string; category: "chapter" | "arc" | "volume"; chatId?: string | null }
   | { type: "accept_preview"; draftId: string; chatId: string }
   | { type: "discard_preview"; draftId: string; chatId: string }
   | { type: "edit_preview"; draftId: string; chatId: string; patch: { title?: string; content?: string } }
@@ -179,4 +184,4 @@ export type BackendToFrontend =
   | { type: "toast"; tone: "success" | "info" | "warn" | "error"; text: string }
   | { type: "busy"; entries: BusyEntry[] }
   | { type: "error"; text: string }
-  | { type: "dry_run_result"; kind: "chapter" | "arc"; messages: DryRunMessage[]; diagnostics: DryRunDiagnostic[] };
+  | { type: "dry_run_result"; kind: "chapter" | "arc" | "volume"; messages: DryRunMessage[]; diagnostics: DryRunDiagnostic[] };

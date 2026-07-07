@@ -11,6 +11,7 @@ type ChatMessageDTO = ChatMessage;
 export interface CoverageMap {
   coveredBy: Map<string, string>;
   activeEntries: LMBEntry[];
+  volumes: LMBEntry[];
   arcs: LMBEntry[];
   chapters: LMBEntry[];
 }
@@ -20,7 +21,19 @@ export async function buildCoverage(chatId: string, userId: string, preloadedEnt
   const entries = allEntries.filter((e) => !e.raw.disabled);
   const chapters = entries.filter((e) => e.meta.tier === 1);
   const arcs = entries.filter((e) => e.meta.tier === 2);
+  const volumes = entries.filter((e) => e.meta.tier === 3);
+  const chapterById = new Map(chapters.map((c) => [c.raw.id, c] as const));
+  const arcById = new Map(arcs.map((a) => [a.raw.id, a] as const));
 
+  const supersededArcIds = new Set<string>();
+  for (const vol of volumes) {
+    for (const aid of vol.meta.sourceChapterEntryIds ?? []) {
+      supersededArcIds.add(aid);
+    }
+  }
+
+  // All arcs supersede their chapters, including arcs that are themselves
+  // superseded by a volume - those chapters stay covered by the volume.
   const supersededChapterIds = new Set<string>();
   for (const arc of arcs) {
     for (const cid of arc.meta.sourceChapterEntryIds ?? []) {
@@ -30,12 +43,33 @@ export async function buildCoverage(chatId: string, userId: string, preloadedEnt
 
   const coveredBy = new Map<string, string>();
 
+  for (const vol of volumes) {
+    for (const msgId of vol.meta.msgIds) {
+      if (!coveredBy.has(msgId)) coveredBy.set(msgId, vol.raw.id);
+    }
+    for (const aid of vol.meta.sourceChapterEntryIds ?? []) {
+      const arc = arcById.get(aid);
+      if (!arc) continue;
+      for (const msgId of arc.meta.msgIds) {
+        if (!coveredBy.has(msgId)) coveredBy.set(msgId, vol.raw.id);
+      }
+      for (const cid of arc.meta.sourceChapterEntryIds ?? []) {
+        const ch = chapterById.get(cid);
+        if (!ch) continue;
+        for (const msgId of ch.meta.msgIds) {
+          if (!coveredBy.has(msgId)) coveredBy.set(msgId, vol.raw.id);
+        }
+      }
+    }
+  }
+
   for (const arc of arcs) {
+    if (supersededArcIds.has(arc.raw.id)) continue;
     for (const msgId of arc.meta.msgIds) {
-      coveredBy.set(msgId, arc.raw.id);
+      if (!coveredBy.has(msgId)) coveredBy.set(msgId, arc.raw.id);
     }
     for (const cid of arc.meta.sourceChapterEntryIds ?? []) {
-      const ch = chapters.find((c) => c.raw.id === cid);
+      const ch = chapterById.get(cid);
       if (!ch) continue;
       for (const msgId of ch.meta.msgIds) {
         if (!coveredBy.has(msgId)) coveredBy.set(msgId, arc.raw.id);
@@ -51,11 +85,12 @@ export async function buildCoverage(chatId: string, userId: string, preloadedEnt
   }
 
   const activeEntries: LMBEntry[] = [
-    ...arcs,
+    ...volumes,
+    ...arcs.filter((a) => !supersededArcIds.has(a.raw.id)),
     ...chapters.filter((c) => !supersededChapterIds.has(c.raw.id)),
   ];
 
-  return { coveredBy, activeEntries, arcs, chapters };
+  return { coveredBy, activeEntries, volumes, arcs, chapters };
 }
 
 export function isExcluded(m: ChatMessageDTO): boolean {

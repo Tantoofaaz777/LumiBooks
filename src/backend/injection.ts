@@ -50,11 +50,10 @@ function orderEntries(coverage: CoverageMap, msgIdToIdx: Map<string, number>): O
       : typeof entry.meta.lastMsgIdx === "number"
         ? entry.meta.lastMsgIdx
         : resolvedFirst;
+    const tierName = entry.meta.tier === 3 ? "Volume" : entry.meta.tier === 2 ? "Arc" : "Chapter";
     const label =
       entry.raw.comment ||
-      (entry.meta.tier === 2
-        ? haveIdx ? `Arc msgs ${firstIdx + 1}-${lastIdx + 1}` : "Arc"
-        : haveIdx ? `Chapter msgs ${firstIdx + 1}-${lastIdx + 1}` : "Chapter");
+      (haveIdx ? `${tierName} msgs ${firstIdx + 1}-${lastIdx + 1}` : tierName);
     ordered.push({ entry, label, firstIdx: resolvedFirst, lastIdx: resolvedLast, emitted: false });
   }
   ordered.sort((a, b) => a.firstIdx - b.firstIdx);

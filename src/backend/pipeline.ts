@@ -3,7 +3,7 @@ declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 import type { LMBProfile, LMBSettings, LMBEntryMeta } from "../shared";
 import type { BusyEntry, FailureRecord, PendingPreview } from "../types";
 import type { ChatMessage } from "./coverage";
-import { approximateTokensFromChars, buildArcHeader, buildChapterHeader } from "../shared";
+import { approximateTokensFromChars, buildArcHeader, buildChapterHeader, buildVolumeHeader } from "../shared";
 import {
   buildCoverage,
   computeCoverageStats,
@@ -19,14 +19,16 @@ import {
   FatalSummarizerError,
   assembleArcPrompt,
   assembleChapterPrompt,
+  assembleVolumePrompt,
   summarizeArc,
   summarizeChapter,
+  summarizeVolume,
   type DryRunAssembly,
   type SummarizationResult,
 } from "./summarizer";
 import { describeError, info, warn } from "./runtime";
-import { publishChapterCreated, publishArcCreated } from "./hooks";
-import { pickPhrase } from "./memoria";
+import { publishChapterCreated, publishArcCreated, publishVolumeCreated } from "./hooks";
+import { pickPhrase, type PhraseKind } from "./memoria";
 import { ensureForkAdoption } from "./fork";
 
 type ChatMessageDTO = ChatMessage;
@@ -46,7 +48,7 @@ const committingDrafts = new Set<string>();
 const PROGRESS_PUSH_INTERVAL_MS = 250;
 
 const commitChain = new Map<string, Promise<unknown>>();
-function withCommitMutex<T>(userId: string, chatId: string, tier: 1 | 2, fn: () => Promise<T>): Promise<T> {
+function withCommitMutex<T>(userId: string, chatId: string, tier: 1 | 2 | 3, fn: () => Promise<T>): Promise<T> {
   const key = `${userId}::${chatId}::t${tier}`;
   const prev = commitChain.get(key) ?? Promise.resolve();
   const tail = prev.then(fn, fn);
@@ -157,8 +159,19 @@ function arcBusyLabel(chars: number, thinkingChars: number, elapsedMs: number): 
   return `Memoria is ~${tokens} tokens into an arc (${t})`;
 }
 
+function volumeBusyLabel(chars: number, thinkingChars: number, elapsedMs: number): string {
+  const tokens = approximateTokensFromChars(chars);
+  const thinkTokens = approximateTokensFromChars(thinkingChars);
+  const t = formatElapsed(elapsedMs);
+  if (tokens === 0 && thinkTokens === 0) return `Memoria is pressing a volume (${t})`;
+  if (tokens === 0 && thinkTokens > 0) return `Memoria is thinking (~${thinkTokens} tokens, ${t})`;
+  if (thinkTokens > 0) return `Memoria is ~${tokens} tokens into a volume (~${thinkTokens} thinking, ${t})`;
+  return `Memoria is ~${tokens} tokens into a volume (${t})`;
+}
+
 function formatBusyLabel(state: ProgressState, elapsedMs: number): string {
   if (state.kind === "arc") return arcBusyLabel(state.chars, state.thinkingChars, elapsedMs);
+  if (state.kind === "volume") return volumeBusyLabel(state.chars, state.thinkingChars, elapsedMs);
   return chapterBusyLabel(state.chars, state.thinkingChars, elapsedMs);
 }
 
@@ -305,9 +318,11 @@ function recordFailure(userId: string, chatId: string, kind: BusyKind, retries: 
   capMap(failureByChat, FAILURE_MAP_CAP);
 }
 
-function nyaaToast(userId: string, kind: "fire" | "retry" | "success" | "arc_fire" | "arc_success", automation: boolean): void {
+function nyaaToast(userId: string, kind: PhraseKind, automation: boolean): void {
   if (!cb) return;
-  const tone = kind === "retry" ? "warn" : kind === "success" || kind === "arc_success" ? "success" : "info";
+  const tone = kind === "retry" ? "warn"
+    : kind === "success" || kind === "arc_success" || kind === "volume_success" ? "success"
+    : "info";
   cb.onToast(userId, tone, pickPhrase(kind), automation);
 }
 
@@ -319,7 +334,7 @@ function shortErrorText(err: unknown): string {
 }
 
 function failToast(userId: string, kind: BusyKind, err: unknown): void {
-  const noun = kind === "arc" ? "bind the arc" : "file the chapter";
+  const noun = kind === "arc" ? "bind the arc" : kind === "volume" ? "press the volume" : "file the chapter";
   cb?.onToast(userId, "error", `Memoria couldn't ${noun}: ${shortErrorText(err)}`);
 }
 
@@ -530,6 +545,7 @@ async function commitChapter(
         {
           coveredBy: new Map(window.map((m) => [m.id, entry.id])),
           activeEntries: [],
+          volumes: [],
           arcs: [],
           chapters: [],
         },
@@ -682,7 +698,7 @@ async function runArc(
   const lastIdx = lastIdxs.length ? Math.max(...lastIdxs) : firstIdx;
 
   if (profile.showMemoryPreviews) {
-    const draft = makeArcPreview(chatId, selected, result, firstIdx, lastIdx, replacesEntryId);
+    const draft = makeGroupPreview("arc", selected, result, firstIdx, lastIdx, replacesEntryId);
     pushPreview(userId, chatId, draft);
     cb?.onStateChange(userId, chatId);
     return null;
@@ -816,6 +832,215 @@ async function commitArc(
   });
 }
 
+export async function createVolumeFromArcs(
+  chatId: string,
+  arcEntryIds: string[],
+  profile: LMBProfile,
+  settings: LMBSettings,
+  userId: string,
+  opts: { replacesEntryId?: string } = {},
+): Promise<string | null> {
+  if (!setBusy(userId, chatId, "volume", "Memoria is pressing a volume")) return null;
+  try {
+    const entries = await listLmbEntries(chatId, userId);
+    const entriesForSelection = opts.replacesEntryId
+      ? entries.filter((e) => e.raw.id !== opts.replacesEntryId)
+      : entries;
+    const coverage = await buildCoverage(chatId, userId, entriesForSelection);
+    const wanted = new Set(arcEntryIds);
+    const arcs = coverage.activeEntries
+      .filter((e) => e.meta.tier === 2 && wanted.has(e.raw.id))
+      .sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
+    if (arcs.length === 0) return null;
+    return await runVolume(chatId, profile, settings, userId, arcs, opts.replacesEntryId);
+  } finally {
+    clearBusy(userId, chatId, "volume");
+  }
+}
+
+async function runVolume(
+  chatId: string,
+  profile: LMBProfile,
+  settings: LMBSettings,
+  userId: string,
+  selected: LMBEntry[],
+  replacesEntryId?: string,
+): Promise<string | null> {
+  nyaaToast(userId, "volume_fire", false);
+  const totalTurns = selected.reduce((acc, a) => acc + a.meta.msgIds.length, 0);
+  const provisionalSceneNumber = await nextSceneNumber(chatId, 3, userId);
+  const opener = buildVolumeHeader(provisionalSceneNumber, selected.length, totalTurns);
+  const outcome = await runWithRetry(profile.retryCount + 1, async () => {
+    const controller = new AbortController();
+    registerAborter(userId, chatId, "volume", controller);
+    try {
+      return await summarizeVolume(
+        profile, settings.customPresets, chatId, selected, userId, opener,
+        {
+          externalSignal: controller.signal,
+          onProgress: (chars, thinking) => updateProgressNumbers(userId, chatId, "volume", chars, thinking),
+        },
+      );
+    } finally {
+      aborters.delete(busyKey(userId, chatId, "volume"));
+    }
+  }, (n, err) => {
+    warn(`volume attempt ${n} failed: ${describeError(err)}`);
+    nyaaToast(userId, "retry", false);
+  });
+
+  if (!outcome.ok) {
+    if (outcome.err instanceof AbortedSummarizerError) {
+      cb?.onToast(userId, "info", "Memoria sets the pen down");
+      cb?.onStateChange(userId, chatId);
+      return null;
+    }
+    recordFailure(userId, chatId, "volume", outcome.retries, outcome.err);
+    failToast(userId, "volume", outcome.err);
+    cb?.onStateChange(userId, chatId);
+    return null;
+  }
+  clearLastFailure(userId, chatId);
+
+  const result = outcome.value;
+  const firstIdxs = selected.map((a) => a.meta.firstMsgIdx).filter((n): n is number => typeof n === "number");
+  const lastIdxs = selected.map((a) => a.meta.lastMsgIdx).filter((n): n is number => typeof n === "number");
+  const firstIdx = firstIdxs.length ? Math.min(...firstIdxs) : 0;
+  const lastIdx = lastIdxs.length ? Math.max(...lastIdxs) : firstIdx;
+
+  if (profile.showMemoryPreviews) {
+    const draft = makeGroupPreview("volume", selected, result, firstIdx, lastIdx, replacesEntryId);
+    pushPreview(userId, chatId, draft);
+    cb?.onStateChange(userId, chatId);
+    return null;
+  }
+  try {
+    const entryId = await commitVolume(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId);
+    nyaaToast(userId, "volume_success", false);
+    return entryId;
+  } catch (err) {
+    warn(`commitVolume failed: ${describeError(err)}`);
+    recordFailure(userId, chatId, "volume", 0, err);
+    failToast(userId, "volume", err);
+    cb?.onStateChange(userId, chatId);
+    return null;
+  }
+}
+
+async function commitVolume(
+  chatId: string,
+  userId: string,
+  selected: LMBEntry[],
+  result: SummarizationResult,
+  firstIdx: number,
+  lastIdx: number,
+  replacesEntryId?: string,
+): Promise<string> {
+  return withCommitMutex(userId, chatId, 3, async () => {
+  const freshEntries = await listLmbEntries(chatId, userId);
+  const entriesForCoverage = replacesEntryId
+    ? freshEntries.filter((e) => e.raw.id !== replacesEntryId)
+    : freshEntries;
+  const freshCoverage = await buildCoverage(chatId, userId, entriesForCoverage);
+  const stillActive = new Set(freshCoverage.activeEntries.filter((e) => e.meta.tier === 2).map((e) => e.raw.id));
+  const filtered = selected.filter((a) => stillActive.has(a.raw.id));
+  if (filtered.length === 0) {
+    throw new Error("All source arcs were already bound by another volume or deleted");
+  }
+  if (filtered.length < selected.length) {
+    selected = filtered;
+    const firstIdxs = selected.map((a) => a.meta.firstMsgIdx).filter((n): n is number => typeof n === "number");
+    const lastIdxs = selected.map((a) => a.meta.lastMsgIdx).filter((n): n is number => typeof n === "number");
+    firstIdx = firstIdxs.length ? Math.min(...firstIdxs) : 0;
+    lastIdx = lastIdxs.length ? Math.max(...lastIdxs) : firstIdx;
+  }
+  const book = await ensureBookForChat(chatId, userId);
+  // On regenerate, keep the replaced volume's scene number (see commitChapter).
+  const replacedVolume = replacesEntryId ? freshEntries.find((e) => e.raw.id === replacesEntryId) : undefined;
+  const sceneNumber = typeof replacedVolume?.meta.sceneNumber === "number"
+    ? replacedVolume.meta.sceneNumber
+    : await nextSceneNumber(chatId, 3, userId);
+  const msgIds = selected.flatMap((a) => a.meta.msgIds);
+  const sourceArcEntryIds = selected.map((a) => a.raw.id);
+  const isRootVolume = selected.length > 0 && selected.every((a) => a.meta.isRoot);
+  const rootOrigin = isRootVolume ? selected.find((a) => a.meta.rootOrigin)?.meta.rootOrigin : undefined;
+  if (!isRootVolume && selected.some((a) => a.meta.isRoot)) {
+    const own = selected.filter((a) => !a.meta.isRoot);
+    const fs = own.map((a) => a.meta.firstMsgIdx).filter((n): n is number => typeof n === "number");
+    const ls = own.map((a) => a.meta.lastMsgIdx).filter((n): n is number => typeof n === "number");
+    if (fs.length) firstIdx = Math.min(...fs);
+    else if (firstIdx < 0) firstIdx = 0;
+    if (ls.length) lastIdx = Math.max(...ls);
+    else if (lastIdx < firstIdx) lastIdx = firstIdx;
+  }
+  const volumeTitle = isRootVolume
+    ? (result.title?.trim() || "Inherited Volume")
+    : deriveTitle(result, firstIdx + 1, lastIdx + 1);
+  const meta: LMBEntryMeta = {
+    tier: 3,
+    chatId,
+    msgIds,
+    sourceChapterEntryIds: sourceArcEntryIds,
+    firstMsgIdx: firstIdx,
+    lastMsgIdx: lastIdx,
+    tokenCountInput: selected.reduce((a, e) => a + e.meta.tokenCountOutput, 0),
+    tokenCountOutput: result.usageCompletionTokens || approximateTokensFromChars(result.content.length),
+    model: result.model,
+    connectionId: result.connectionId,
+    createdAt: Date.now(),
+    title: volumeTitle,
+    shortComment: result.shortComment,
+    presetKey: result.presetKey,
+    sceneNumber,
+    rawOutput: result.rawOutput,
+    ...(isRootVolume ? { isRoot: true, rootOrigin } : {}),
+  };
+  const baseComment = meta.title ?? `Volume - msgs ${(firstIdx + 1)}-${(lastIdx + 1)}`;
+  const comment = `${isRootVolume ? "[Root] " : ""}Vol #${sceneNumber} - ${baseComment}`;
+  const volumeSettings = await loadSettings(userId);
+  const volumeOpener = buildVolumeHeader(sceneNumber, sourceArcEntryIds.length, msgIds.length);
+  const finalVolumeContent = `${volumeOpener}\n\n${result.content}`;
+  const volumeEntry = await createChapterEntry(book.id, meta, finalVolumeContent, comment, userId, result.keywords ?? [], volumeSettings.forceConstantEntries);
+  const failedSupersedes: string[] = [];
+  for (const arc of selected) {
+    try {
+      await patchEntryMeta(arc, { supersededByEntryId: volumeEntry.id }, userId);
+    } catch (err) {
+      failedSupersedes.push(arc.raw.id);
+      warn(`failed to mark arc ${arc.raw.id} superseded by volume ${volumeEntry.id}: ${describeError(err)}`);
+    }
+  }
+  if (failedSupersedes.length > 0) {
+    cb?.onToast(
+      userId,
+      "warn",
+      `The volume saved but ${failedSupersedes.length} arc${failedSupersedes.length === 1 ? "" : "s"} couldn't be marked superseded`,
+    );
+  }
+  invalidateBookCache(userId, chatId);
+  if (replacesEntryId) {
+    try {
+      await deleteEntry(replacesEntryId, userId);
+      invalidateBookCache(userId, chatId);
+    } catch (err) {
+      warn(`regen: failed to delete replaced volume ${replacesEntryId}: ${describeError(err)}`);
+    }
+  }
+  publishVolumeCreated(userId, {
+    chatId,
+    volumeEntryId: volumeEntry.id,
+    bookId: book.id,
+    sourceArcEntryIds,
+    sourceMessageIds: msgIds,
+    summaryText: finalVolumeContent,
+    model: result.model,
+    title: meta.title,
+  });
+  cb?.onStateChange(userId, chatId);
+  return volumeEntry.id;
+  });
+}
+
 export async function acceptPreview(
   chatId: string,
   draftId: string,
@@ -876,16 +1101,20 @@ export async function acceptPreview(
         return null;
       }
     }
+    const isVolume = preview.kind === "volume";
     const entries = await listLmbEntries(chatId, userId);
-    const arcSelectionEntries = preview.replacesEntryId
+    const groupSelectionEntries = preview.replacesEntryId
       ? entries.filter((e) => e.raw.id !== preview.replacesEntryId)
       : entries;
-    const coverage = await buildCoverage(chatId, userId, arcSelectionEntries);
+    const coverage = await buildCoverage(chatId, userId, groupSelectionEntries);
     const wanted = new Set(preview.sourceChapterEntryIds ?? []);
-    const selected = coverage.activeEntries.filter((e) => e.meta.tier === 1 && wanted.has(e.raw.id));
+    const sourceTier = isVolume ? 2 : 1;
+    const selected = coverage.activeEntries.filter((e) => e.meta.tier === sourceTier && wanted.has(e.raw.id));
     if (selected.length === 0) {
       dropPendingPreview(userId, chatId, draftId);
-      cb?.onToast(userId, "warn", "Memoria can't save this arc, its chapters were deleted or already bound");
+      cb?.onToast(userId, "warn", isVolume
+        ? "Memoria can't save this volume, its arcs were deleted or already bound"
+        : "Memoria can't save this arc, its chapters were deleted or already bound");
       cb?.onStateChange(userId, chatId);
       return null;
     }
@@ -903,17 +1132,22 @@ export async function acceptPreview(
       presetKey: preview.presetKey,
     };
     try {
-      const entryId = await commitArc(
-        chatId, userId, selected, fakeResult,
-        preview.firstMsgIdx ?? 0, preview.lastMsgIdx ?? 0, preview.replacesEntryId,
-      );
+      const entryId = isVolume
+        ? await commitVolume(
+            chatId, userId, selected, fakeResult,
+            preview.firstMsgIdx ?? 0, preview.lastMsgIdx ?? 0, preview.replacesEntryId,
+          )
+        : await commitArc(
+            chatId, userId, selected, fakeResult,
+            preview.firstMsgIdx ?? 0, preview.lastMsgIdx ?? 0, preview.replacesEntryId,
+          );
       dropPendingPreview(userId, chatId, draftId);
-      nyaaToast(userId, "arc_success", false);
+      nyaaToast(userId, isVolume ? "volume_success" : "arc_success", false);
       cb?.onStateChange(userId, chatId);
       return entryId;
     } catch (err) {
-      recordFailure(userId, chatId, "arc", 0, err);
-      failToast(userId, "arc", err);
+      recordFailure(userId, chatId, isVolume ? "volume" : "arc", 0, err);
+      failToast(userId, isVolume ? "volume" : "arc", err);
       cb?.onStateChange(userId, chatId);
       return null;
     }
@@ -988,6 +1222,24 @@ export async function dryRunArc(
   return assembleArcPrompt(profile, settings.customPresets, chatId, chapters, userId, opener);
 }
 
+export async function dryRunVolume(
+  chatId: string,
+  profile: LMBProfile,
+  settings: LMBSettings,
+  userId: string,
+): Promise<DryRunAssembly> {
+  const entries = await listLmbEntries(chatId, userId);
+  const coverage = await buildCoverage(chatId, userId, entries);
+  const arcs = coverage.activeEntries
+    .filter((e) => e.meta.tier === 2 && !e.meta.isRoot)
+    .sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
+  if (arcs.length === 0) throw new Error("No arcs to press yet");
+  const totalTurns = arcs.reduce((acc, a) => acc + a.meta.msgIds.length, 0);
+  const provisionalSceneNumber = await nextSceneNumber(chatId, 3, userId);
+  const opener = buildVolumeHeader(provisionalSceneNumber, arcs.length, totalTurns);
+  return assembleVolumePrompt(profile, settings.customPresets, chatId, arcs, userId, opener);
+}
+
 export async function drainArcBacklog(
   chatId: string,
   profile: LMBProfile,
@@ -1035,7 +1287,7 @@ export async function maybeRunArcCheck(
   await drainArcBacklog(chatId, profile, settings, userId, automation);
 }
 
-async function nextSceneNumber(chatId: string, tier: 1 | 2, userId: string): Promise<number> {
+async function nextSceneNumber(chatId: string, tier: 1 | 2 | 3, userId: string): Promise<number> {
   const entries = await listLmbEntries(chatId, userId).catch(() => [] as LMBEntry[]);
   let max = 0;
   for (const e of entries) {
@@ -1084,19 +1336,18 @@ function makePreview(
   };
 }
 
-function makeArcPreview(
-  chatId: string,
+function makeGroupPreview(
+  kind: "arc" | "volume",
   selected: LMBEntry[],
   result: SummarizationResult,
   firstIdx: number,
   lastIdx: number,
   replacesEntryId?: string,
 ): PendingPreview {
-  void chatId;
   return {
-    kind: "arc",
-    draftId: `draft_arc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-    title: result.title || `Arc - msgs ${firstIdx + 1}-${lastIdx + 1}`,
+    kind,
+    draftId: `draft_${kind}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+    title: result.title || `${kind === "volume" ? "Volume" : "Arc"} - msgs ${firstIdx + 1}-${lastIdx + 1}`,
     content: result.content,
     shortComment: result.shortComment,
     sourceMessageIds: selected.flatMap((c) => c.meta.msgIds),
