@@ -368,7 +368,7 @@ function renderArcPicker(
 ): void {
   const sec = section("Bind chapters into an arc");
   if (c.state.chapters.length === 0) {
-    sec.body.appendChild(textNode("Memoria has not filed any chapters yet", "lmb-empty"));
+    sec.body.appendChild(textNode("LumiBooks has not filed any chapters yet", "lmb-empty"));
     host.appendChild(sec.wrap);
     return;
   }
@@ -446,7 +446,7 @@ function renderVolumePicker(
   const sec = section("Press arcs into a volume");
   const activeArcs = c.state.arcs.filter((a) => a.active && !a.isRoot);
   if (activeArcs.length === 0) {
-    sec.body.appendChild(textNode("Memoria has no unbound arcs to press yet", "lmb-empty"));
+    sec.body.appendChild(textNode("LumiBooks has no unbound arcs to press yet", "lmb-empty"));
     host.appendChild(sec.wrap);
     return;
   }
@@ -571,7 +571,7 @@ function renderContinuity(
     detachRow.className = "lmb-actions";
     detachRow.appendChild(
       makeButton("Detach root", async () => {
-        const ok = await confirmDelete(ctx, "Detach inherited memories?", "Memoria will remove the inherited memories from this chat. Your own chapters and arcs stay.");
+        const ok = await confirmDelete(ctx, "Detach inherited memories?", "LumiBooks will remove the inherited memories from this chat. Your own chapters and arcs stay.");
         if (ok) send({ type: "detach_root", chatId });
       }, { small: true, danger: true, title: "Remove the inherited root memories from this chat" }),
     );
@@ -604,7 +604,7 @@ function renderContinuity(
         makeButton("Rebuild from...", async () => {
           const sourceChatId = picker.value;
           if (!sourceChatId) return;
-          const ok = await confirmDelete(ctx, "Rebuild from root?", "Memoria will DELETE this chat's existing chapters and arcs, seed the chosen root, then re-summarize this chat from scratch. This cannot be undone.");
+          const ok = await confirmDelete(ctx, "Rebuild from root?", "LumiBooks will DELETE this chat's existing chapters and arcs, seed the chosen root, then re-summarize this chat from scratch. This cannot be undone.");
           if (ok) send({ type: "rebuild_root", chatId, sourceChatId });
         }, { danger: true, title: "Destructive: wipe this chat's memories and reseed from the chosen root" }),
       );

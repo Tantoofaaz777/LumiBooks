@@ -48,7 +48,7 @@ export function renderBooksTab(
 
 function renderStatus(host: HTMLElement, state: FrontendState, send: (m: FrontendToBackend) => void): void {
   if (!state.activeChatId) {
-    host.appendChild(textNode("Open a chat to see Memoria's notes", "lmb-empty"));
+    host.appendChild(textNode("Open a chat to see LumiBooks entries", "lmb-empty"));
     return;
   }
   const sec = section("Status");
@@ -85,9 +85,9 @@ function renderStatus(host: HTMLElement, state: FrontendState, send: (m: Fronten
   }
 
   if (!state.connections.length) {
-    sec.body.appendChild(textNode("Memoria has no connection to write with. Set one up in Lumiverse.", "lmb-empty"));
+    sec.body.appendChild(textNode("LumiBooks has no connection to write with. Set one up in Lumiverse.", "lmb-empty"));
   } else if (!state.resolvedSidecarConnectionId) {
-    sec.body.appendChild(textNode("Pick a connection in the Profile tab so Memoria can write.", "lmb-empty"));
+    sec.body.appendChild(textNode("Pick a connection in the Profile tab so LumiBooks can write.", "lmb-empty"));
   }
 
   host.appendChild(sec.wrap);
@@ -166,7 +166,7 @@ function renderPreviewCard(preview: PendingPreview, chatId: string, send: (m: Fr
   if (preview.shortComment) {
     const cm = document.createElement("div");
     cm.className = "lmb-entry-comment";
-    cm.textContent = `Memoria: ${preview.shortComment}`;
+    cm.textContent = preview.shortComment;
     card.appendChild(cm);
   }
 
@@ -213,7 +213,7 @@ function renderEntries(
   const arcs = state.arcs.filter((a) => !a.isRoot);
   const volumes = state.volumes.filter((v) => !v.isRoot);
   if (chapters.length + arcs.length + volumes.length === 0) {
-    sec.body.appendChild(textNode("Empty shelf for now. File or adopt a chapter to begin.", "lmb-empty"));
+    sec.body.appendChild(textNode("No entries yet. File or adopt a chapter to begin.", "lmb-empty"));
     host.appendChild(sec.wrap);
     return;
   }
@@ -302,17 +302,17 @@ function renderEntryItem(
       });
     }, { small: true, title: "Edit this entry's label and content" }),
     makeButton("Regenerate", async () => {
-      const ok = await confirmDelete(ctx, "Regenerate?", "Memoria will delete this entry and resummarize the same range. The old summary text will be lost.");
+      const ok = await confirmDelete(ctx, "Regenerate?", "LumiBooks will delete this entry and resummarize the same range. The old summary text will be lost.");
       if (!ok || !chatId) return;
       send({ type: "regenerate_entry", chatId, entryId: view.entryId });
     }, { small: true, title: "Delete and resummarize the same range" }),
     makeButton("Release", async () => {
-      const ok = await confirmDelete(ctx, "Release to lorebook?", "Memoria will hand this entry to your regular lorebook (prefixed with [orphaned]) and stop managing it. Those messages will become uncovered.");
+      const ok = await confirmDelete(ctx, "Release to lorebook?", "LumiBooks will hand this entry to your regular lorebook (prefixed with [orphaned]) and stop managing it. Those messages will become uncovered.");
       if (!ok || !chatId) return;
       send({ type: "release_entry", chatId, entryId: view.entryId });
     }, { small: true, title: "Strip the LumiBooks marker so the entry becomes a regular lorebook entry" }),
     makeButton("Delete", async () => {
-      const ok = await confirmDelete(ctx, "Delete?", "Memoria will let those messages back into the prompt.");
+      const ok = await confirmDelete(ctx, "Delete?", "LumiBooks will let those messages back into the prompt.");
       if (!ok || !chatId) return;
       send({ type: "delete_entry", chatId, entryId: view.entryId });
     }, { small: true, danger: true }),
@@ -343,7 +343,7 @@ function renderEntryItem(
   if (view.meta.shortComment) {
     const cm = document.createElement("div");
     cm.className = "lmb-entry-comment";
-    cm.textContent = `Memoria: ${view.meta.shortComment}`;
+    cm.textContent = view.meta.shortComment;
     li.appendChild(cm);
   }
 

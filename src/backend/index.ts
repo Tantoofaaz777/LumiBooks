@@ -245,7 +245,7 @@ async function handleExternalEntryDeletion(userId: string, bookId: string, isBoo
     const desiredHidden = profile ? profile.hideCoveredMessages : true;
     const { unhidden } = await resyncVisibility(chatId, userId, desiredHidden);
     if (unhidden > 0) {
-      await notify(userId, "info", `Memoria unhid ${unhidden} message${unhidden === 1 ? "" : "s"} after an external lorebook change`);
+      await notify(userId, "info", `LumiBooks unhid ${unhidden} message${unhidden === 1 ? "" : "s"} after an external lorebook change`);
     }
   } catch (err) {
     warn(`external deletion resync failed: ${describeError(err)}`);
@@ -280,7 +280,7 @@ async function retryLastFailure(
     const ids = await collectActiveArcIds(chatId, userId);
     if (ids.length === 0) {
       clearLastFailure(userId, chatId);
-      await notify(userId, "warn", "Memoria has no arcs left to retry the volume");
+      await notify(userId, "warn", "LumiBooks has no arcs left to retry the volume");
       return;
     }
     await createVolumeFromArcs(chatId, ids, profile, settings, userId);
@@ -290,7 +290,7 @@ async function retryLastFailure(
     const ids = await collectActiveChapterIds(chatId, userId);
     if (ids.length === 0) {
       clearLastFailure(userId, chatId);
-      const msg = "Memoria has no chapters left to retry the arc";
+      const msg = "LumiBooks has no chapters left to retry the arc";
       await notify(userId, "warn", msg);
       return;
     }
@@ -405,7 +405,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
           return { ...cur, profiles, activeProfileId };
         });
         if (warned) {
-          await notify(userId, "warn", "Memoria keeps at least one profile");
+          await notify(userId, "warn", "LumiBooks keeps at least one profile");
         }
         await pushState(userId, msg.chatId);
         break;
@@ -425,7 +425,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
         if (!profile) break;
         if (getBusy(userId).some((b) => b.kind === "chapter" && b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "Memoria is already filing a chapter");
+          await notify(userId, "warn", "LumiBooks is already filing a chapter");
           break;
         }
         const rangeMessages = await spindle.chat.getMessages(msg.chatId);
@@ -454,7 +454,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
         if (!profile) break;
         if (getBusy(userId).some((b) => b.kind === "arc" && b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "Memoria is already binding an arc");
+          await notify(userId, "warn", "LumiBooks is already binding an arc");
           break;
         }
         await createArcFromChapters(msg.chatId, msg.chapterEntryIds, profile, cur, userId);
@@ -467,7 +467,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
         if (!profile) break;
         if (getBusy(userId).some((b) => b.kind === "volume" && b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "Memoria is already pressing a volume");
+          await notify(userId, "warn", "LumiBooks is already pressing a volume");
           break;
         }
         await createVolumeFromArcs(msg.chatId, msg.arcEntryIds, profile, cur, userId);
@@ -525,7 +525,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const entries = await listLmbEntries(msg.chatId, userId);
         const entry = entries.find((e) => e.raw.id === msg.entryId);
         if (!entry) {
-          await notify(userId, "warn", "Memoria can't find that entry to release");
+          await notify(userId, "warn", "LumiBooks can't find that entry to release");
           break;
         }
         if (
@@ -552,7 +552,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         if (toUnhide.length > 0) {
           await unhideCoveredMessages(msg.chatId, toUnhide, userId).catch(() => {});
         }
-        await notify(userId, "success", "Memoria released the entry to your lorebook");
+        await notify(userId, "success", "LumiBooks released the entry to your lorebook");
         await pushState(userId, msg.chatId);
         break;
       }
@@ -564,17 +564,17 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const entries = await listLmbEntries(msg.chatId, userId);
         const entry = entries.find((e) => e.raw.id === msg.entryId);
         if (!entry) {
-          await notify(userId, "warn", "Memoria can't find that entry to regenerate");
+          await notify(userId, "warn", "LumiBooks can't find that entry to regenerate");
           break;
         }
         const tier = entry.meta.tier;
         const busyKind = tier === 3 ? "volume" : tier === 2 ? "arc" : "chapter";
         if (getBusy(userId).some((b) => b.kind === busyKind && b.chatId === msg.chatId)) {
-          await notify(userId, "warn", `Memoria is already busy with a ${busyKind}`);
+          await notify(userId, "warn", `LumiBooks is already busy with a ${busyKind}`);
           break;
         }
         if (entry.meta.isRoot && tier === 1) {
-          await notify(userId, "warn", "Memoria can't regenerate inherited chapters");
+          await notify(userId, "warn", "LumiBooks can't regenerate inherited chapters");
           break;
         }
         const isArc = tier === 2;
@@ -584,15 +584,15 @@ spindle.onFrontendMessage(async (raw, userId) => {
           ? entry.meta.sourceChapterEntryIds.slice()
           : [];
         if (isVolume && sourceIds.length === 0) {
-          await notify(userId, "warn", "Memoria has no arc sources to regenerate this volume from");
+          await notify(userId, "warn", "LumiBooks has no arc sources to regenerate this volume from");
           break;
         }
         if (isArc && sourceIds.length === 0) {
-          await notify(userId, "warn", "Memoria has no chapter sources to regenerate this arc from");
+          await notify(userId, "warn", "LumiBooks has no chapter sources to regenerate this arc from");
           break;
         }
         if (!isArc && !isVolume && msgIds.length === 0) {
-          await notify(userId, "warn", "Memoria has no messages to regenerate this chapter from");
+          await notify(userId, "warn", "LumiBooks has no messages to regenerate this chapter from");
           break;
         }
         if (!isArc && !isVolume) {
@@ -638,7 +638,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const entries = await listLmbEntries(msg.chatId, userId);
         const entry = entries.find((candidate) => candidate.raw.id === msg.entryId);
         if (!entry) {
-          await notify(userId, "warn", "Memoria can't find that chapter anymore");
+          await notify(userId, "warn", "LumiBooks can't find that chapter anymore");
           break;
         }
         if (entry.meta.tier !== 1 || entry.meta.isRoot) {
@@ -712,7 +712,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
       case "abort_busy": {
         const aborted = abortBusy(userId, msg.chatId, msg.kind);
         if (!aborted) {
-          await notify(userId, "warn", "Memoria is not in the middle of anything to abort");
+          await notify(userId, "warn", "LumiBooks is not in the middle of anything to abort");
         }
         break;
       }
@@ -725,7 +725,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         });
         const text = updated === 0
           ? `Future entries will be ${msg.value ? "constant" : "keyword-triggered"}`
-          : `Memoria flipped ${updated} entr${updated === 1 ? "y" : "ies"} to ${msg.value ? "constant" : "keyword-triggered"}`;
+          : `LumiBooks flipped ${updated} entr${updated === 1 ? "y" : "ies"} to ${msg.value ? "constant" : "keyword-triggered"}`;
         await notify(userId, "info", text);
         await pushState(userId, msg.chatId);
         break;
@@ -799,7 +799,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
 
       case "rebase_root": {
         if (getBusy(userId).some((b) => b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "Memoria is busy, wait for her to finish");
+          await notify(userId, "warn", "LumiBooks is busy, wait for it to finish");
           break;
         }
         const result = await rebaseRoot(msg.chatId, msg.sourceChatId, userId);
@@ -809,11 +809,11 @@ spindle.onFrontendMessage(async (raw, userId) => {
             : result.reason === "empty_source"
               ? "That chat has no memories to inherit"
               : result.reason === "busy"
-                ? "Memoria is already rebasing this chat"
-                : "Memoria can't rebase a chat onto itself";
+                ? "LumiBooks is already rebasing this chat"
+                : "LumiBooks can't rebase a chat onto itself";
           await notify(userId, "warn", text);
         } else {
-          await notify(userId, "success", `Memoria seeded ${result.count} inherited memor${result.count === 1 ? "y" : "ies"} before the greeting`);
+          await notify(userId, "success", `LumiBooks seeded ${result.count} inherited memor${result.count === 1 ? "y" : "ies"} before the greeting`);
         }
         await pushState(userId, msg.chatId);
         break;
@@ -821,7 +821,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
 
       case "rebuild_root": {
         if (getBusy(userId).some((b) => b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "Memoria is busy, wait for her to finish");
+          await notify(userId, "warn", "LumiBooks is busy, wait for it to finish");
           break;
         }
         const result = await rebuildRoot(msg.chatId, msg.sourceChatId, userId);
@@ -829,13 +829,13 @@ spindle.onFrontendMessage(async (raw, userId) => {
           const text = result.reason === "empty_source"
             ? "That chat has no memories to inherit"
             : result.reason === "busy"
-              ? "Memoria is already rebuilding this chat"
-              : "Memoria can't rebuild a chat onto itself";
+              ? "LumiBooks is already rebuilding this chat"
+              : "LumiBooks can't rebuild a chat onto itself";
           await notify(userId, "warn", text);
           await pushState(userId, msg.chatId);
           break;
         }
-        await notify(userId, "success", `Memoria rebuilt onto ${result.count} inherited memor${result.count === 1 ? "y" : "ies"}`);
+        await notify(userId, "success", `LumiBooks rebuilt onto ${result.count} inherited memor${result.count === 1 ? "y" : "ies"}`);
         await pushState(userId, msg.chatId);
         const cur = await loadSettings(userId);
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
@@ -886,8 +886,8 @@ spindle.onFrontendMessage(async (raw, userId) => {
           }
         }
         await notify(userId, "info", msg.excluded
-          ? `Memoria will leave ${ids.length} message${ids.length === 1 ? "" : "s"} untouched`
-          : `Memoria will compress ${ids.length} message${ids.length === 1 ? "" : "s"} again`);
+          ? `LumiBooks will leave ${ids.length} message${ids.length === 1 ? "" : "s"} untouched`
+          : `LumiBooks will compress ${ids.length} message${ids.length === 1 ? "" : "s"} again`);
         await pushState(userId, msg.chatId);
         break;
       }
@@ -896,7 +896,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const removed = await detachRoot(msg.chatId, userId);
         const text = removed === 0
           ? "This chat has no inherited memories to detach"
-          : `Memoria detached ${removed} inherited memor${removed === 1 ? "y" : "ies"}`;
+          : `LumiBooks detached ${removed} inherited memor${removed === 1 ? "y" : "ies"}`;
         await notify(userId, "info", text);
         await pushState(userId, msg.chatId);
         break;

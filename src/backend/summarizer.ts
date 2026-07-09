@@ -280,7 +280,7 @@ export async function assembleChapterPrompt(
   userId: string,
 ): Promise<DryRunAssembly> {
   const conn = await resolveConnection(profile, userId);
-  if (!conn) throw new FatalSummarizerError("No connection available for Memoria");
+  if (!conn) throw new FatalSummarizerError("No connection available for LumiBooks");
 
   const presetText = findPresetText(profile, customPresets, "chapter");
   if (!presetText) throw new Error("Chapter preset missing");
@@ -327,7 +327,7 @@ export async function assembleArcPrompt(
   userId: string,
 ): Promise<DryRunAssembly> {
   const conn = await resolveConnection(profile, userId);
-  if (!conn) throw new FatalSummarizerError("No connection available for Memoria");
+  if (!conn) throw new FatalSummarizerError("No connection available for LumiBooks");
 
   const presetText = findPresetText(profile, customPresets, "arc");
   if (!presetText) throw new Error("Arc preset missing");
@@ -374,7 +374,7 @@ export async function assembleVolumePrompt(
   userId: string,
 ): Promise<DryRunAssembly> {
   const conn = await resolveConnection(profile, userId);
-  if (!conn) throw new FatalSummarizerError("No connection available for Memoria");
+  if (!conn) throw new FatalSummarizerError("No connection available for LumiBooks");
 
   const presetText = findPresetText(profile, customPresets, "volume");
   if (!presetText) throw new Error("Volume preset missing");
@@ -422,7 +422,7 @@ export async function summarizeVolume(
   streamOptions: StreamOptions,
 ): Promise<SummarizationResult> {
   const conn = await resolveConnection(profile, userId);
-  if (!conn) throw new FatalSummarizerError("No connection available for Memoria");
+  if (!conn) throw new FatalSummarizerError("No connection available for LumiBooks");
 
   const presetText = findPresetText(profile, customPresets, "volume");
   if (!presetText) throw new Error("Volume preset missing");
@@ -477,7 +477,7 @@ export async function summarizeChapter(
   streamOptions: StreamOptions,
 ): Promise<SummarizationResult> {
   const conn = await resolveConnection(profile, userId);
-  if (!conn) throw new FatalSummarizerError("No connection available for Memoria");
+  if (!conn) throw new FatalSummarizerError("No connection available for LumiBooks");
 
   const presetText = findPresetText(profile, customPresets, "chapter");
   if (!presetText) throw new Error("Chapter preset missing");
@@ -531,7 +531,7 @@ export async function summarizeArc(
   streamOptions: StreamOptions,
 ): Promise<SummarizationResult> {
   const conn = await resolveConnection(profile, userId);
-  if (!conn) throw new FatalSummarizerError("No connection available for Memoria");
+  if (!conn) throw new FatalSummarizerError("No connection available for LumiBooks");
 
   const presetText = findPresetText(profile, customPresets, "arc");
   if (!presetText) throw new Error("Arc preset missing");

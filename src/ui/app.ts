@@ -26,8 +26,8 @@ export function setup(ctx: SpindleFrontendContext): () => void {
     id: "lumi_books_tab",
     title: "LumiBooks",
     shortName: "Books",
-    description: "Memoria files your chat into chapters and arcs.",
-    keywords: ["lumibooks", "lumi books", "memoria", "memory", "chapters", "arcs", "summary"],
+    description: "LumiBooks files your chat into chapters and arcs.",
+    keywords: ["lumibooks", "lumi books", "memory", "chapters", "arcs", "summary"],
     headerTitle: "LumiBooks",
     iconSvg: ICON_SVG,
   });

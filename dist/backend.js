@@ -560,19 +560,19 @@ async function doEnsureBookForChat(chatId, userId) {
       await bindBookToChat(chatId, existing.id, userId).catch(() => {});
       setBookCache(cacheKey(userId, chatId), { bookId: existing.id, expiresAt: Date.now() + BOOK_INDEX_CACHE_TTL_MS });
       error(`book recovery: re-linked book ${existing.id} for chat ${chatId.slice(0, 8)} ` + `(${recovery.count} LumiBooks entries; normal lookup MISSED it; chat claim=${typeof claim === "string" ? claim : "none"}; ` + `${recovery.candidates} candidate book(s); userId=${userId.slice(0, 6)})`);
-      bookAnomalyCb?.(userId, "warn", recovery.candidates > 1 ? `Memoria re-linked this chat's notebook but found ${recovery.candidates} candidates, you may have duplicate notebooks` : "Memoria re-linked this chat's notebook after its link was lost");
+      bookAnomalyCb?.(userId, "warn", recovery.candidates > 1 ? `LumiBooks re-linked this chat's lorebook but found ${recovery.candidates} candidates, you may have duplicate lorebooks` : "LumiBooks re-linked this chat's lorebook after its link was lost");
       return existing;
     }
   }
   if (typeof claim === "string" && claim.trim()) {
     error(`book mismatch: chat ${chatId.slice(0, 8)} claims book ${claim} but it could not be resolved OR recovered; ` + `creating a NEW book. userId=${userId.slice(0, 6)}`);
-    bookAnomalyCb?.(userId, "error", "Memoria couldn't find this chat's old notebook and started a new one, older chapters may live in a separate notebook");
+    bookAnomalyCb?.(userId, "error", "LumiBooks couldn't find this chat's old lorebook and started a new one, older chapters may live in a separate lorebook");
   }
   const settings = await loadSettings(userId);
   const bookName = await formatBookName(settings, chatId, userId, chat.name);
   const book = await spindle.world_books.create({
     name: bookName,
-    description: "Memoria's shelf for this chat. Chapters and arcs live here.",
+    description: "LumiBooks memory book for this chat. Chapters and arcs live here.",
     metadata: {
       lumibooks_chat_id: chatId,
       lumibooks_created_at: Date.now()
@@ -1464,7 +1464,7 @@ async function resolveMacrosWithDiagnostics(text, chatId, userId, diagnostics) {
 async function assembleArcPrompt(profile, customPresets, chatId, chapters, userId) {
   const conn = await resolveConnection(profile, userId);
   if (!conn)
-    throw new FatalSummarizerError("No connection available for Memoria");
+    throw new FatalSummarizerError("No connection available for LumiBooks");
   const presetText = findPresetText(profile, customPresets, "arc");
   if (!presetText)
     throw new Error("Arc preset missing");
@@ -1501,7 +1501,7 @@ ${c.raw.content}`).join(`
 async function assembleVolumePrompt(profile, customPresets, chatId, arcs, userId) {
   const conn = await resolveConnection(profile, userId);
   if (!conn)
-    throw new FatalSummarizerError("No connection available for Memoria");
+    throw new FatalSummarizerError("No connection available for LumiBooks");
   const presetText = findPresetText(profile, customPresets, "volume");
   if (!presetText)
     throw new Error("Volume preset missing");
@@ -1538,7 +1538,7 @@ ${a.raw.content}`).join(`
 async function summarizeVolume(profile, customPresets, chatId, arcs, userId, streamOptions) {
   const conn = await resolveConnection(profile, userId);
   if (!conn)
-    throw new FatalSummarizerError("No connection available for Memoria");
+    throw new FatalSummarizerError("No connection available for LumiBooks");
   const presetText = findPresetText(profile, customPresets, "volume");
   if (!presetText)
     throw new Error("Volume preset missing");
@@ -1582,7 +1582,7 @@ ${a.raw.content}`).join(`
 async function summarizeChapter(profile, customPresets, chatId, messages, previousMemories, userId, streamOptions) {
   const conn = await resolveConnection(profile, userId);
   if (!conn)
-    throw new FatalSummarizerError("No connection available for Memoria");
+    throw new FatalSummarizerError("No connection available for LumiBooks");
   const presetText = findPresetText(profile, customPresets, "chapter");
   if (!presetText)
     throw new Error("Chapter preset missing");
@@ -1625,7 +1625,7 @@ async function summarizeChapter(profile, customPresets, chatId, messages, previo
 async function summarizeArc(profile, customPresets, chatId, chapters, userId, streamOptions) {
   const conn = await resolveConnection(profile, userId);
   if (!conn)
-    throw new FatalSummarizerError("No connection available for Memoria");
+    throw new FatalSummarizerError("No connection available for LumiBooks");
   const presetText = findPresetText(profile, customPresets, "arc");
   if (!presetText)
     throw new Error("Arc preset missing");
@@ -1880,43 +1880,43 @@ function publishVolumeCreated(userId, event) {
   }
 }
 
-// src/backend/memoria.ts
+// src/backend/phrases.ts
 var FIRE_PHRASES = [
-  "Memoria stirs the inkpot, nyaa~",
-  "Memoria is shelving this scene, hush a moment",
-  "Memoria flicks her tail and starts writing",
-  "Memoria opens a fresh page for you, nya",
-  "Memoria pads off to compress this in the stacks"
+  "LumiBooks is filing this chapter",
+  "LumiBooks is summarizing the selected messages",
+  "LumiBooks is preparing the chapter",
+  "LumiBooks is writing the memory",
+  "LumiBooks is compressing this range"
 ];
 var RETRY_PHRASES = [
-  "Memoria tripped on a quill, trying again",
-  "Memoria's ink smudged, one more try nyaa",
-  "Memoria reshuffles the index cards, retrying"
+  "LumiBooks hit an error, retrying",
+  "LumiBooks is trying again",
+  "LumiBooks is retrying the generation"
 ];
 var SUCCESS_PHRASES = [
-  "Memoria slid the chapter onto your shelf, nyaa~",
-  "Memoria filed it neatly between the others",
-  "Memoria stamped the spine, all yours",
-  "Memoria purrs, the page is done",
-  "Memoria taps the chapter into place"
+  "Chapter saved",
+  "Chapter filed",
+  "Memory saved",
+  "Chapter added to the lorebook",
+  "Chapter is ready"
 ];
 var ARC_FIRE_PHRASES = [
-  "Memoria gathers the chapters for an arc, nya",
-  "Memoria is binding several chapters together"
+  "LumiBooks is binding the selected chapters",
+  "LumiBooks is creating an arc"
 ];
 var ARC_SUCCESS_PHRASES = [
-  "Memoria bound the arc and pressed it shut, nyaa~",
-  "Memoria stitched the spine of a new arc"
+  "Arc saved",
+  "Arc created"
 ];
 var VOLUME_FIRE_PHRASES = [
-  "Memoria is pressing a whole volume together"
+  "LumiBooks is creating a volume"
 ];
 var VOLUME_SUCCESS_PHRASES = [
-  "Memoria embossed the spine of a new volume"
+  "Volume saved"
 ];
 function pickPhrase(kind) {
   const pool = kind === "fire" ? FIRE_PHRASES : kind === "retry" ? RETRY_PHRASES : kind === "success" ? SUCCESS_PHRASES : kind === "arc_fire" ? ARC_FIRE_PHRASES : kind === "arc_success" ? ARC_SUCCESS_PHRASES : kind === "volume_fire" ? VOLUME_FIRE_PHRASES : VOLUME_SUCCESS_PHRASES;
-  return pool[Math.floor(Math.random() * pool.length)] ?? "Memoria nyaa";
+  return pool[Math.floor(Math.random() * pool.length)] ?? "LumiBooks";
 }
 
 // src/backend/pipeline.ts
@@ -2020,36 +2020,36 @@ function chapterBusyLabel(chars, thinkingChars, elapsedMs) {
   const thinkTokens = approximateTokensFromChars(thinkingChars);
   const t = formatElapsed(elapsedMs);
   if (tokens === 0 && thinkTokens === 0)
-    return `Memoria is filing a chapter (${t})`;
+    return `LumiBooks is filing a chapter (${t})`;
   if (tokens === 0 && thinkTokens > 0)
-    return `Memoria is thinking (~${thinkTokens} tokens, ${t})`;
+    return `LumiBooks is thinking (~${thinkTokens} tokens, ${t})`;
   if (thinkTokens > 0)
-    return `Memoria is ~${tokens} tokens into a chapter (~${thinkTokens} thinking, ${t})`;
-  return `Memoria is ~${tokens} tokens into a chapter (${t})`;
+    return `LumiBooks is ~${tokens} tokens into a chapter (~${thinkTokens} thinking, ${t})`;
+  return `LumiBooks is ~${tokens} tokens into a chapter (${t})`;
 }
 function arcBusyLabel(chars, thinkingChars, elapsedMs) {
   const tokens = approximateTokensFromChars(chars);
   const thinkTokens = approximateTokensFromChars(thinkingChars);
   const t = formatElapsed(elapsedMs);
   if (tokens === 0 && thinkTokens === 0)
-    return `Memoria is binding an arc (${t})`;
+    return `LumiBooks is binding an arc (${t})`;
   if (tokens === 0 && thinkTokens > 0)
-    return `Memoria is thinking (~${thinkTokens} tokens, ${t})`;
+    return `LumiBooks is thinking (~${thinkTokens} tokens, ${t})`;
   if (thinkTokens > 0)
-    return `Memoria is ~${tokens} tokens into an arc (~${thinkTokens} thinking, ${t})`;
-  return `Memoria is ~${tokens} tokens into an arc (${t})`;
+    return `LumiBooks is ~${tokens} tokens into an arc (~${thinkTokens} thinking, ${t})`;
+  return `LumiBooks is ~${tokens} tokens into an arc (${t})`;
 }
 function volumeBusyLabel(chars, thinkingChars, elapsedMs) {
   const tokens = approximateTokensFromChars(chars);
   const thinkTokens = approximateTokensFromChars(thinkingChars);
   const t = formatElapsed(elapsedMs);
   if (tokens === 0 && thinkTokens === 0)
-    return `Memoria is pressing a volume (${t})`;
+    return `LumiBooks is pressing a volume (${t})`;
   if (tokens === 0 && thinkTokens > 0)
-    return `Memoria is thinking (~${thinkTokens} tokens, ${t})`;
+    return `LumiBooks is thinking (~${thinkTokens} tokens, ${t})`;
   if (thinkTokens > 0)
-    return `Memoria is ~${tokens} tokens into a volume (~${thinkTokens} thinking, ${t})`;
-  return `Memoria is ~${tokens} tokens into a volume (${t})`;
+    return `LumiBooks is ~${tokens} tokens into a volume (~${thinkTokens} thinking, ${t})`;
+  return `LumiBooks is ~${tokens} tokens into a volume (${t})`;
 }
 function formatBusyLabel(state, elapsedMs) {
   if (state.kind === "arc")
@@ -2178,7 +2178,7 @@ function recordFailure(userId, chatId, kind, retries, err) {
   });
   capMap(failureByChat, FAILURE_MAP_CAP);
 }
-function nyaaToast(userId, kind) {
+function phraseToast(userId, kind) {
   if (!cb)
     return;
   const tone = kind === "retry" ? "warn" : kind === "success" || kind === "arc_success" || kind === "volume_success" ? "success" : "info";
@@ -2192,10 +2192,10 @@ function shortErrorText(err) {
 }
 function failToast(userId, kind, err) {
   const noun = kind === "arc" ? "bind the arc" : kind === "volume" ? "press the volume" : "file the chapter";
-  cb?.onToast(userId, "error", `Memoria couldn't ${noun}: ${shortErrorText(err)}`);
+  cb?.onToast(userId, "error", `LumiBooks couldn't ${noun}: ${shortErrorText(err)}`);
 }
 async function createChapterFromRange(chatId, messageIds, profile, settings, userId, opts = {}) {
-  if (!setBusy(userId, chatId, "chapter", "Memoria is filing a chapter"))
+  if (!setBusy(userId, chatId, "chapter", "LumiBooks is filing a chapter"))
     return null;
   try {
     const messages = await spindle.chat.getMessages(chatId);
@@ -2212,7 +2212,7 @@ async function createChapterFromRange(chatId, messageIds, profile, settings, use
 }
 async function runChapter(chatId, profile, settings, userId, allMessages, window, opts = {}) {
   const { replacesEntryId } = opts;
-  nyaaToast(userId, "fire");
+  phraseToast(userId, "fire");
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
   const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && typeof e.meta.firstMsgIdx === "number").sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
@@ -2230,11 +2230,11 @@ async function runChapter(chatId, profile, settings, userId, allMessages, window
     }
   }, (n, err) => {
     warn(`chapter attempt ${n} failed: ${describeError(err)}`);
-    nyaaToast(userId, "retry");
+    phraseToast(userId, "retry");
   });
   if (!outcome.ok) {
     if (outcome.err instanceof AbortedSummarizerError) {
-      cb?.onToast(userId, "info", "Memoria sets the pen down");
+      cb?.onToast(userId, "info", "LumiBooks stopped the generation");
       cb?.onStateChange(userId, chatId);
       return null;
     }
@@ -2255,7 +2255,7 @@ async function runChapter(chatId, profile, settings, userId, allMessages, window
   }
   try {
     const entryId = await commitChapter(chatId, profile, userId, window, result, firstIdx, lastIdx, allMessages, false, replacesEntryId);
-    nyaaToast(userId, "success");
+    phraseToast(userId, "success");
     return entryId;
   } catch (err) {
     warn(`commitChapter failed: ${describeError(err)}`);
@@ -2361,7 +2361,7 @@ async function commitChapter(chatId, profile, userId, window, result, firstIdx, 
   });
 }
 async function createArcFromChapters(chatId, chapterEntryIds, profile, settings, userId, opts = {}) {
-  if (!setBusy(userId, chatId, "arc", "Memoria is binding an arc"))
+  if (!setBusy(userId, chatId, "arc", "LumiBooks is binding an arc"))
     return null;
   try {
     const entries = await listLmbEntries(chatId, userId);
@@ -2378,7 +2378,7 @@ async function createArcFromChapters(chatId, chapterEntryIds, profile, settings,
 }
 async function runArc(chatId, profile, settings, userId, selected, opts = {}) {
   const { replacesEntryId } = opts;
-  nyaaToast(userId, "arc_fire");
+  phraseToast(userId, "arc_fire");
   const outcome = await runWithRetry(profile.retryCount + 1, async () => {
     const controller = new AbortController;
     registerAborter(userId, chatId, "arc", controller);
@@ -2392,11 +2392,11 @@ async function runArc(chatId, profile, settings, userId, selected, opts = {}) {
     }
   }, (n, err) => {
     warn(`arc attempt ${n} failed: ${describeError(err)}`);
-    nyaaToast(userId, "retry");
+    phraseToast(userId, "retry");
   });
   if (!outcome.ok) {
     if (outcome.err instanceof AbortedSummarizerError) {
-      cb?.onToast(userId, "info", "Memoria sets the pen down");
+      cb?.onToast(userId, "info", "LumiBooks stopped the generation");
       cb?.onStateChange(userId, chatId);
       return null;
     }
@@ -2419,7 +2419,7 @@ async function runArc(chatId, profile, settings, userId, selected, opts = {}) {
   }
   try {
     const entryId = await commitArc(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId);
-    nyaaToast(userId, "arc_success");
+    phraseToast(userId, "arc_success");
     return entryId;
   } catch (err) {
     warn(`commitArc failed: ${describeError(err)}`);
@@ -2540,7 +2540,7 @@ async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, re
   });
 }
 async function createVolumeFromArcs(chatId, arcEntryIds, profile, settings, userId, opts = {}) {
-  if (!setBusy(userId, chatId, "volume", "Memoria is pressing a volume"))
+  if (!setBusy(userId, chatId, "volume", "LumiBooks is pressing a volume"))
     return null;
   try {
     const entries = await listLmbEntries(chatId, userId);
@@ -2556,7 +2556,7 @@ async function createVolumeFromArcs(chatId, arcEntryIds, profile, settings, user
   }
 }
 async function runVolume(chatId, profile, settings, userId, selected, replacesEntryId) {
-  nyaaToast(userId, "volume_fire");
+  phraseToast(userId, "volume_fire");
   const outcome = await runWithRetry(profile.retryCount + 1, async () => {
     const controller = new AbortController;
     registerAborter(userId, chatId, "volume", controller);
@@ -2570,11 +2570,11 @@ async function runVolume(chatId, profile, settings, userId, selected, replacesEn
     }
   }, (n, err) => {
     warn(`volume attempt ${n} failed: ${describeError(err)}`);
-    nyaaToast(userId, "retry");
+    phraseToast(userId, "retry");
   });
   if (!outcome.ok) {
     if (outcome.err instanceof AbortedSummarizerError) {
-      cb?.onToast(userId, "info", "Memoria sets the pen down");
+      cb?.onToast(userId, "info", "LumiBooks stopped the generation");
       cb?.onStateChange(userId, chatId);
       return null;
     }
@@ -2597,7 +2597,7 @@ async function runVolume(chatId, profile, settings, userId, selected, replacesEn
   }
   try {
     const entryId = await commitVolume(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId);
-    nyaaToast(userId, "volume_success");
+    phraseToast(userId, "volume_success");
     return entryId;
   } catch (err) {
     warn(`commitVolume failed: ${describeError(err)}`);
@@ -2734,12 +2734,12 @@ async function acceptPreview(chatId, draftId, profile, userId) {
       const window = messages.filter((m) => intent.has(m.id) && !coverage2.coveredBy.has(m.id) && !isExcluded(m));
       if (window.length === 0) {
         dropPendingPreview(userId, chatId, draftId);
-        cb?.onToast(userId, "warn", "Memoria can't save this chapter, its messages were deleted or already filed");
+        cb?.onToast(userId, "warn", "LumiBooks can't save this chapter, its messages were deleted or already filed");
         cb?.onStateChange(userId, chatId);
         return null;
       }
       if (window.length < preview.sourceMessageIds.length) {
-        cb?.onToast(userId, "warn", "Some messages were missing or already covered, Memoria saved the rest");
+        cb?.onToast(userId, "warn", "Some messages were missing or already covered; LumiBooks saved the rest");
       }
       const firstIdx = messages.findIndex((m) => m.id === window[0].id);
       const lastIdx = messages.findIndex((m) => m.id === window[window.length - 1].id);
@@ -2758,7 +2758,7 @@ async function acceptPreview(chatId, draftId, profile, userId) {
       try {
         const entryId = await commitChapter(chatId, profile, userId, window, fakeResult2, firstIdx, lastIdx, messages, true, preview.replacesEntryId);
         dropPendingPreview(userId, chatId, draftId);
-        nyaaToast(userId, "success");
+        phraseToast(userId, "success");
         cb?.onStateChange(userId, chatId);
         return entryId;
       } catch (err) {
@@ -2777,7 +2777,7 @@ async function acceptPreview(chatId, draftId, profile, userId) {
     const selected = coverage.activeEntries.filter((e) => e.meta.tier === sourceTier && wanted.has(e.raw.id));
     if (selected.length === 0) {
       dropPendingPreview(userId, chatId, draftId);
-      cb?.onToast(userId, "warn", isVolume ? "Memoria can't save this volume, its arcs were deleted or already bound" : "Memoria can't save this arc, its chapters were deleted or already bound");
+      cb?.onToast(userId, "warn", isVolume ? "LumiBooks can't save this volume, its arcs were deleted or already bound" : "LumiBooks can't save this arc, its chapters were deleted or already bound");
       cb?.onStateChange(userId, chatId);
       return null;
     }
@@ -2796,7 +2796,7 @@ async function acceptPreview(chatId, draftId, profile, userId) {
     try {
       const entryId = isVolume ? await commitVolume(chatId, userId, selected, fakeResult, preview.firstMsgIdx ?? 0, preview.lastMsgIdx ?? 0, preview.replacesEntryId) : await commitArc(chatId, userId, selected, fakeResult, preview.firstMsgIdx ?? 0, preview.lastMsgIdx ?? 0, preview.replacesEntryId);
       dropPendingPreview(userId, chatId, draftId);
-      nyaaToast(userId, isVolume ? "volume_success" : "arc_success");
+      phraseToast(userId, isVolume ? "volume_success" : "arc_success");
       cb?.onStateChange(userId, chatId);
       return entryId;
     } catch (err) {
@@ -3221,7 +3221,7 @@ async function cloneShelfForFork(forkChatId, forkChatName, parentChatId, userId)
   const newBookName = await formatBookName(settings, forkChatId, userId, forkChatName);
   const newBook = await spindle.world_books.create({
     name: newBookName,
-    description: "Memoria's shelf for this chat. Chapters and arcs live here.",
+    description: "LumiBooks memory book for this chat. Chapters and arcs live here.",
     metadata: {
       lumibooks_chat_id: forkChatId,
       lumibooks_created_at: Date.now(),
@@ -3847,7 +3847,7 @@ async function handleExternalEntryDeletion(userId, bookId, isBookDeletion) {
     const desiredHidden = profile ? profile.hideCoveredMessages : true;
     const { unhidden } = await resyncVisibility(chatId, userId, desiredHidden);
     if (unhidden > 0) {
-      await notify(userId, "info", `Memoria unhid ${unhidden} message${unhidden === 1 ? "" : "s"} after an external lorebook change`);
+      await notify(userId, "info", `LumiBooks unhid ${unhidden} message${unhidden === 1 ? "" : "s"} after an external lorebook change`);
     }
   } catch (err) {
     warn(`external deletion resync failed: ${describeError(err)}`);
@@ -3870,7 +3870,7 @@ async function retryLastFailure(chatId, userId, profile, settings) {
     const ids = await collectActiveArcIds(chatId, userId);
     if (ids.length === 0) {
       clearLastFailure(userId, chatId);
-      await notify(userId, "warn", "Memoria has no arcs left to retry the volume");
+      await notify(userId, "warn", "LumiBooks has no arcs left to retry the volume");
       return;
     }
     await createVolumeFromArcs(chatId, ids, profile, settings, userId);
@@ -3880,7 +3880,7 @@ async function retryLastFailure(chatId, userId, profile, settings) {
     const ids = await collectActiveChapterIds(chatId, userId);
     if (ids.length === 0) {
       clearLastFailure(userId, chatId);
-      const msg = "Memoria has no chapters left to retry the arc";
+      const msg = "LumiBooks has no chapters left to retry the arc";
       await notify(userId, "warn", msg);
       return;
     }
@@ -3983,7 +3983,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
           return { ...cur, profiles, activeProfileId };
         });
         if (warned) {
-          await notify(userId, "warn", "Memoria keeps at least one profile");
+          await notify(userId, "warn", "LumiBooks keeps at least one profile");
         }
         await pushState(userId, msg.chatId);
         break;
@@ -4003,7 +4003,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         if (!profile)
           break;
         if (getBusy(userId).some((b) => b.kind === "chapter" && b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "Memoria is already filing a chapter");
+          await notify(userId, "warn", "LumiBooks is already filing a chapter");
           break;
         }
         const rangeMessages = await spindle.chat.getMessages(msg.chatId);
@@ -4030,7 +4030,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         if (!profile)
           break;
         if (getBusy(userId).some((b) => b.kind === "arc" && b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "Memoria is already binding an arc");
+          await notify(userId, "warn", "LumiBooks is already binding an arc");
           break;
         }
         await createArcFromChapters(msg.chatId, msg.chapterEntryIds, profile, cur, userId);
@@ -4043,7 +4043,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         if (!profile)
           break;
         if (getBusy(userId).some((b) => b.kind === "volume" && b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "Memoria is already pressing a volume");
+          await notify(userId, "warn", "LumiBooks is already pressing a volume");
           break;
         }
         await createVolumeFromArcs(msg.chatId, msg.arcEntryIds, profile, cur, userId);
@@ -4093,7 +4093,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const entries = await listLmbEntries(msg.chatId, userId);
         const entry = entries.find((e) => e.raw.id === msg.entryId);
         if (!entry) {
-          await notify(userId, "warn", "Memoria can't find that entry to release");
+          await notify(userId, "warn", "LumiBooks can't find that entry to release");
           break;
         }
         if (entry.meta.tier !== 1 && !entry.meta.supersededByEntryId && Array.isArray(entry.meta.sourceChapterEntryIds)) {
@@ -4118,7 +4118,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         if (toUnhide.length > 0) {
           await unhideCoveredMessages(msg.chatId, toUnhide, userId).catch(() => {});
         }
-        await notify(userId, "success", "Memoria released the entry to your lorebook");
+        await notify(userId, "success", "LumiBooks released the entry to your lorebook");
         await pushState(userId, msg.chatId);
         break;
       }
@@ -4130,17 +4130,17 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const entries = await listLmbEntries(msg.chatId, userId);
         const entry = entries.find((e) => e.raw.id === msg.entryId);
         if (!entry) {
-          await notify(userId, "warn", "Memoria can't find that entry to regenerate");
+          await notify(userId, "warn", "LumiBooks can't find that entry to regenerate");
           break;
         }
         const tier = entry.meta.tier;
         const busyKind = tier === 3 ? "volume" : tier === 2 ? "arc" : "chapter";
         if (getBusy(userId).some((b) => b.kind === busyKind && b.chatId === msg.chatId)) {
-          await notify(userId, "warn", `Memoria is already busy with a ${busyKind}`);
+          await notify(userId, "warn", `LumiBooks is already busy with a ${busyKind}`);
           break;
         }
         if (entry.meta.isRoot && tier === 1) {
-          await notify(userId, "warn", "Memoria can't regenerate inherited chapters");
+          await notify(userId, "warn", "LumiBooks can't regenerate inherited chapters");
           break;
         }
         const isArc = tier === 2;
@@ -4148,15 +4148,15 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const msgIds = entry.meta.msgIds.slice();
         const sourceIds = Array.isArray(entry.meta.sourceChapterEntryIds) ? entry.meta.sourceChapterEntryIds.slice() : [];
         if (isVolume && sourceIds.length === 0) {
-          await notify(userId, "warn", "Memoria has no arc sources to regenerate this volume from");
+          await notify(userId, "warn", "LumiBooks has no arc sources to regenerate this volume from");
           break;
         }
         if (isArc && sourceIds.length === 0) {
-          await notify(userId, "warn", "Memoria has no chapter sources to regenerate this arc from");
+          await notify(userId, "warn", "LumiBooks has no chapter sources to regenerate this arc from");
           break;
         }
         if (!isArc && !isVolume && msgIds.length === 0) {
-          await notify(userId, "warn", "Memoria has no messages to regenerate this chapter from");
+          await notify(userId, "warn", "LumiBooks has no messages to regenerate this chapter from");
           break;
         }
         if (!isArc && !isVolume) {
@@ -4198,7 +4198,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const entries = await listLmbEntries(msg.chatId, userId);
         const entry = entries.find((candidate) => candidate.raw.id === msg.entryId);
         if (!entry) {
-          await notify(userId, "warn", "Memoria can't find that chapter anymore");
+          await notify(userId, "warn", "LumiBooks can't find that chapter anymore");
           break;
         }
         if (entry.meta.tier !== 1 || entry.meta.isRoot) {
@@ -4264,7 +4264,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
       case "abort_busy": {
         const aborted = abortBusy(userId, msg.chatId, msg.kind);
         if (!aborted) {
-          await notify(userId, "warn", "Memoria is not in the middle of anything to abort");
+          await notify(userId, "warn", "LumiBooks is not in the middle of anything to abort");
         }
         break;
       }
@@ -4274,7 +4274,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
           warn(`applyConstantToAllLmbEntries failed: ${describeError(err)}`);
           return 0;
         });
-        const text = updated === 0 ? `Future entries will be ${msg.value ? "constant" : "keyword-triggered"}` : `Memoria flipped ${updated} entr${updated === 1 ? "y" : "ies"} to ${msg.value ? "constant" : "keyword-triggered"}`;
+        const text = updated === 0 ? `Future entries will be ${msg.value ? "constant" : "keyword-triggered"}` : `LumiBooks flipped ${updated} entr${updated === 1 ? "y" : "ies"} to ${msg.value ? "constant" : "keyword-triggered"}`;
         await notify(userId, "info", text);
         await pushState(userId, msg.chatId);
         break;
@@ -4345,32 +4345,32 @@ spindle.onFrontendMessage(async (raw, userId) => {
       }
       case "rebase_root": {
         if (getBusy(userId).some((b) => b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "Memoria is busy, wait for her to finish");
+          await notify(userId, "warn", "LumiBooks is busy, wait for it to finish");
           break;
         }
         const result = await rebaseRoot(msg.chatId, msg.sourceChatId, userId);
         if (!result.ok) {
-          const text = result.reason === "has_own" ? "This chat already has memories, use Rebuild instead" : result.reason === "empty_source" ? "That chat has no memories to inherit" : result.reason === "busy" ? "Memoria is already rebasing this chat" : "Memoria can't rebase a chat onto itself";
+          const text = result.reason === "has_own" ? "This chat already has memories, use Rebuild instead" : result.reason === "empty_source" ? "That chat has no memories to inherit" : result.reason === "busy" ? "LumiBooks is already rebasing this chat" : "LumiBooks can't rebase a chat onto itself";
           await notify(userId, "warn", text);
         } else {
-          await notify(userId, "success", `Memoria seeded ${result.count} inherited memor${result.count === 1 ? "y" : "ies"} before the greeting`);
+          await notify(userId, "success", `LumiBooks seeded ${result.count} inherited memor${result.count === 1 ? "y" : "ies"} before the greeting`);
         }
         await pushState(userId, msg.chatId);
         break;
       }
       case "rebuild_root": {
         if (getBusy(userId).some((b) => b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "Memoria is busy, wait for her to finish");
+          await notify(userId, "warn", "LumiBooks is busy, wait for it to finish");
           break;
         }
         const result = await rebuildRoot(msg.chatId, msg.sourceChatId, userId);
         if (!result.ok) {
-          const text = result.reason === "empty_source" ? "That chat has no memories to inherit" : result.reason === "busy" ? "Memoria is already rebuilding this chat" : "Memoria can't rebuild a chat onto itself";
+          const text = result.reason === "empty_source" ? "That chat has no memories to inherit" : result.reason === "busy" ? "LumiBooks is already rebuilding this chat" : "LumiBooks can't rebuild a chat onto itself";
           await notify(userId, "warn", text);
           await pushState(userId, msg.chatId);
           break;
         }
-        await notify(userId, "success", `Memoria rebuilt onto ${result.count} inherited memor${result.count === 1 ? "y" : "ies"}`);
+        await notify(userId, "success", `LumiBooks rebuilt onto ${result.count} inherited memor${result.count === 1 ? "y" : "ies"}`);
         await pushState(userId, msg.chatId);
         const cur = await loadSettings(userId);
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
@@ -4422,13 +4422,13 @@ spindle.onFrontendMessage(async (raw, userId) => {
             }
           }
         }
-        await notify(userId, "info", msg.excluded ? `Memoria will leave ${ids.length} message${ids.length === 1 ? "" : "s"} untouched` : `Memoria will compress ${ids.length} message${ids.length === 1 ? "" : "s"} again`);
+        await notify(userId, "info", msg.excluded ? `LumiBooks will leave ${ids.length} message${ids.length === 1 ? "" : "s"} untouched` : `LumiBooks will compress ${ids.length} message${ids.length === 1 ? "" : "s"} again`);
         await pushState(userId, msg.chatId);
         break;
       }
       case "detach_root": {
         const removed = await detachRoot(msg.chatId, userId);
-        const text = removed === 0 ? "This chat has no inherited memories to detach" : `Memoria detached ${removed} inherited memor${removed === 1 ? "y" : "ies"}`;
+        const text = removed === 0 ? "This chat has no inherited memories to detach" : `LumiBooks detached ${removed} inherited memor${removed === 1 ? "y" : "ies"}`;
         await notify(userId, "info", text);
         await pushState(userId, msg.chatId);
         break;

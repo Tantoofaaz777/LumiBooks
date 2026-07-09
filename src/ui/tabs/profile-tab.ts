@@ -138,7 +138,7 @@ function renderProfilePicker(
     checkbox({
       checked: state.settings.enabled,
       label: "Enabled",
-      hint: "Master switch. When off, Memoria does nothing on this account.",
+      hint: "Master switch. When off, LumiBooks does nothing on this account.",
       onChange: (v) => send({ type: "save_settings", patch: { enabled: v }, chatId: state.activeChatId }),
     }),
   );
@@ -173,7 +173,7 @@ function renderConnection(
     if (resolved) {
       const hint = document.createElement("div");
       hint.className = "lmb-field-hint";
-      hint.textContent = `Memoria writes with ${resolved.name}`;
+      hint.textContent = `LumiBooks writes with ${resolved.name}`;
       sec.body.appendChild(hint);
     }
   }
@@ -262,7 +262,7 @@ function renderRegex(
   const help = document.createElement("div");
   help.className = "lmb-help";
   help.textContent =
-    "Outgoing runs on the prompt before Memoria reads it. Incoming runs on the result after Memoria writes.";
+    "Outgoing runs on the prompt before LumiBooks sends it. Incoming runs on the result after LumiBooks receives it.";
   sec.body.appendChild(help);
 
   const outgoing = field("Outgoing");
@@ -302,7 +302,7 @@ function renderContext(host: HTMLElement, profile: LMBProfile, patch: (p: Partia
   );
   const hint = document.createElement("div");
   hint.className = "lmb-field-hint";
-  hint.textContent = "How many recent chapters to feed Memoria as continuity context.";
+  hint.textContent = "How many recent chapters to include as continuity context.";
   f.body.appendChild(hint);
   sec.body.appendChild(f.wrap);
 
@@ -318,7 +318,7 @@ function renderContext(host: HTMLElement, profile: LMBProfile, patch: (p: Partia
   );
   const retryHint = document.createElement("div");
   retryHint.className = "lmb-field-hint";
-  retryHint.textContent = "Tries per attempt. After the last try, Memoria will pick the same messages again next turn.";
+  retryHint.textContent = "Tries per attempt. After the last try, LumiBooks will pick the same messages again next turn.";
   retry.body.appendChild(retryHint);
   sec.body.appendChild(retry.wrap);
 
@@ -335,7 +335,7 @@ function renderContext(host: HTMLElement, profile: LMBProfile, patch: (p: Partia
   );
   const ttftHint = document.createElement("div");
   ttftHint.className = "lmb-field-hint";
-  ttftHint.textContent = "How long Memoria waits for the first streamed token before giving up. After the first token she lets the stream run.";
+  ttftHint.textContent = "How long LumiBooks waits for the first streamed token before giving up. After the first token, the stream can continue.";
   ttft.body.appendChild(ttftHint);
   sec.body.appendChild(ttft.wrap);
 
@@ -347,7 +347,7 @@ function renderBehavior(host: HTMLElement, profile: LMBProfile, patch: (p: Parti
   sec.body.appendChild(checkbox({
     checked: profile.showMemoryPreviews,
     label: "Preview before saving",
-    hint: "Memoria stages new chapters and arcs in the Books tab for your approval.",
+    hint: "LumiBooks stages new chapters and arcs in the Books tab for your approval.",
     onChange: (v) => patch({ showMemoryPreviews: v }),
   }));
   host.appendChild(sec.wrap);

@@ -149,8 +149,8 @@ async function doEnsureBookForChat(chatId: string, userId: string): Promise<Worl
         userId,
         "warn",
         recovery.candidates > 1
-          ? `Memoria re-linked this chat's notebook but found ${recovery.candidates} candidates, you may have duplicate notebooks`
-          : "Memoria re-linked this chat's notebook after its link was lost",
+          ? `LumiBooks re-linked this chat's lorebook but found ${recovery.candidates} candidates, you may have duplicate lorebooks`
+          : "LumiBooks re-linked this chat's lorebook after its link was lost",
       );
       return existing;
     }
@@ -164,7 +164,7 @@ async function doEnsureBookForChat(chatId: string, userId: string): Promise<Worl
     bookAnomalyCb?.(
       userId,
       "error",
-      "Memoria couldn't find this chat's old notebook and started a new one, older chapters may live in a separate notebook",
+      "LumiBooks couldn't find this chat's old lorebook and started a new one, older chapters may live in a separate lorebook",
     );
   }
 
@@ -173,7 +173,7 @@ async function doEnsureBookForChat(chatId: string, userId: string): Promise<Worl
   const book = await spindle.world_books.create(
     {
       name: bookName,
-      description: "Memoria's shelf for this chat. Chapters and arcs live here.",
+      description: "LumiBooks memory book for this chat. Chapters and arcs live here.",
       metadata: {
         lumibooks_chat_id: chatId,
         lumibooks_created_at: Date.now(),

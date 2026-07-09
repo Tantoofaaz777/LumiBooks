@@ -1192,7 +1192,7 @@ function renderBooksTab(host, state, ctx, send) {
 }
 function renderStatus(host, state, send) {
   if (!state.activeChatId) {
-    host.appendChild(textNode("Open a chat to see Memoria's notes", "lmb-empty"));
+    host.appendChild(textNode("Open a chat to see LumiBooks entries", "lmb-empty"));
     return;
   }
   const sec = section("Status");
@@ -1224,9 +1224,9 @@ function renderStatus(host, state, send) {
     inflightBusyLabels.set(busyTrackKey(b.kind, b.chatId), labelSpan);
   }
   if (!state.connections.length) {
-    sec.body.appendChild(textNode("Memoria has no connection to write with. Set one up in Lumiverse.", "lmb-empty"));
+    sec.body.appendChild(textNode("LumiBooks has no connection to write with. Set one up in Lumiverse.", "lmb-empty"));
   } else if (!state.resolvedSidecarConnectionId) {
-    sec.body.appendChild(textNode("Pick a connection in the Profile tab so Memoria can write.", "lmb-empty"));
+    sec.body.appendChild(textNode("Pick a connection in the Profile tab so LumiBooks can write.", "lmb-empty"));
   }
   host.appendChild(sec.wrap);
 }
@@ -1297,7 +1297,7 @@ function renderPreviewCard(preview, chatId, send) {
   if (preview.shortComment) {
     const cm = document.createElement("div");
     cm.className = "lmb-entry-comment";
-    cm.textContent = `Memoria: ${preview.shortComment}`;
+    cm.textContent = preview.shortComment;
     card.appendChild(cm);
   }
   const meta = document.createElement("div");
@@ -1329,7 +1329,7 @@ function renderEntries(host, state, ctx, send) {
   const arcs = state.arcs.filter((a) => !a.isRoot);
   const volumes = state.volumes.filter((v) => !v.isRoot);
   if (chapters.length + arcs.length + volumes.length === 0) {
-    sec.body.appendChild(textNode("Empty shelf for now. File or adopt a chapter to begin.", "lmb-empty"));
+    sec.body.appendChild(textNode("No entries yet. File or adopt a chapter to begin.", "lmb-empty"));
     host.appendChild(sec.wrap);
     return;
   }
@@ -1409,17 +1409,17 @@ function renderEntryItem(view, kind, state, ctx, send, readOnly = false) {
         send({ type: "update_entry", chatId, entryId: view.entryId, patch });
       });
     }, { small: true, title: "Edit this entry's label and content" }), makeButton("Regenerate", async () => {
-      const ok = await confirmDelete(ctx, "Regenerate?", "Memoria will delete this entry and resummarize the same range. The old summary text will be lost.");
+      const ok = await confirmDelete(ctx, "Regenerate?", "LumiBooks will delete this entry and resummarize the same range. The old summary text will be lost.");
       if (!ok || !chatId)
         return;
       send({ type: "regenerate_entry", chatId, entryId: view.entryId });
     }, { small: true, title: "Delete and resummarize the same range" }), makeButton("Release", async () => {
-      const ok = await confirmDelete(ctx, "Release to lorebook?", "Memoria will hand this entry to your regular lorebook (prefixed with [orphaned]) and stop managing it. Those messages will become uncovered.");
+      const ok = await confirmDelete(ctx, "Release to lorebook?", "LumiBooks will hand this entry to your regular lorebook (prefixed with [orphaned]) and stop managing it. Those messages will become uncovered.");
       if (!ok || !chatId)
         return;
       send({ type: "release_entry", chatId, entryId: view.entryId });
     }, { small: true, title: "Strip the LumiBooks marker so the entry becomes a regular lorebook entry" }), makeButton("Delete", async () => {
-      const ok = await confirmDelete(ctx, "Delete?", "Memoria will let those messages back into the prompt.");
+      const ok = await confirmDelete(ctx, "Delete?", "LumiBooks will let those messages back into the prompt.");
       if (!ok || !chatId)
         return;
       send({ type: "delete_entry", chatId, entryId: view.entryId });
@@ -1438,7 +1438,7 @@ function renderEntryItem(view, kind, state, ctx, send, readOnly = false) {
   if (view.meta.shortComment) {
     const cm = document.createElement("div");
     cm.className = "lmb-entry-comment";
-    cm.textContent = `Memoria: ${view.meta.shortComment}`;
+    cm.textContent = view.meta.shortComment;
     li.appendChild(cm);
   }
   const preview = document.createElement("div");
@@ -1779,7 +1779,7 @@ function filterMessages(c) {
 function renderArcPicker(host, c, send) {
   const sec = section("Bind chapters into an arc");
   if (c.state.chapters.length === 0) {
-    sec.body.appendChild(textNode("Memoria has not filed any chapters yet", "lmb-empty"));
+    sec.body.appendChild(textNode("LumiBooks has not filed any chapters yet", "lmb-empty"));
     host.appendChild(sec.wrap);
     return;
   }
@@ -1844,7 +1844,7 @@ function renderVolumePicker(host, c, send) {
   const sec = section("Press arcs into a volume");
   const activeArcs = c.state.arcs.filter((a) => a.active && !a.isRoot);
   if (activeArcs.length === 0) {
-    sec.body.appendChild(textNode("Memoria has no unbound arcs to press yet", "lmb-empty"));
+    sec.body.appendChild(textNode("LumiBooks has no unbound arcs to press yet", "lmb-empty"));
     host.appendChild(sec.wrap);
     return;
   }
@@ -1948,7 +1948,7 @@ function renderContinuity(host, c, ctx, send) {
     const detachRow = document.createElement("div");
     detachRow.className = "lmb-actions";
     detachRow.appendChild(makeButton("Detach root", async () => {
-      const ok = await confirmDelete(ctx, "Detach inherited memories?", "Memoria will remove the inherited memories from this chat. Your own chapters and arcs stay.");
+      const ok = await confirmDelete(ctx, "Detach inherited memories?", "LumiBooks will remove the inherited memories from this chat. Your own chapters and arcs stay.");
       if (ok)
         send({ type: "detach_root", chatId });
     }, { small: true, danger: true, title: "Remove the inherited root memories from this chat" }));
@@ -1978,7 +1978,7 @@ function renderContinuity(host, c, ctx, send) {
         const sourceChatId = picker.value;
         if (!sourceChatId)
           return;
-        const ok = await confirmDelete(ctx, "Rebuild from root?", "Memoria will DELETE this chat's existing chapters and arcs, seed the chosen root, then re-summarize this chat from scratch. This cannot be undone.");
+        const ok = await confirmDelete(ctx, "Rebuild from root?", "LumiBooks will DELETE this chat's existing chapters and arcs, seed the chosen root, then re-summarize this chat from scratch. This cannot be undone.");
         if (ok)
           send({ type: "rebuild_root", chatId, sourceChatId });
       }, { danger: true, title: "Destructive: wipe this chat's memories and reseed from the chosen root" }));
@@ -2142,7 +2142,7 @@ function renderProfilePicker(host, state, ctx, send) {
   enableWrap.body.appendChild(checkbox({
     checked: state.settings.enabled,
     label: "Enabled",
-    hint: "Master switch. When off, Memoria does nothing on this account.",
+    hint: "Master switch. When off, LumiBooks does nothing on this account.",
     onChange: (v) => send({ type: "save_settings", patch: { enabled: v }, chatId: state.activeChatId })
   }));
   sec.body.appendChild(enableWrap.wrap);
@@ -2167,7 +2167,7 @@ function renderConnection(host, state, profile, patch) {
     if (resolved) {
       const hint = document.createElement("div");
       hint.className = "lmb-field-hint";
-      hint.textContent = `Memoria writes with ${resolved.name}`;
+      hint.textContent = `LumiBooks writes with ${resolved.name}`;
       sec.body.appendChild(hint);
     }
   }
@@ -2251,7 +2251,7 @@ function renderRegex(host, state, profile, patch) {
   }
   const help = document.createElement("div");
   help.className = "lmb-help";
-  help.textContent = "Outgoing runs on the prompt before Memoria reads it. Incoming runs on the result after Memoria writes.";
+  help.textContent = "Outgoing runs on the prompt before LumiBooks sends it. Incoming runs on the result after LumiBooks receives it.";
   sec.body.appendChild(help);
   const outgoing = field("Outgoing");
   outgoing.body.appendChild(multiSelect({
@@ -2281,7 +2281,7 @@ function renderContext(host, profile, patch) {
   }));
   const hint = document.createElement("div");
   hint.className = "lmb-field-hint";
-  hint.textContent = "How many recent chapters to feed Memoria as continuity context.";
+  hint.textContent = "How many recent chapters to include as continuity context.";
   f.body.appendChild(hint);
   sec.body.appendChild(f.wrap);
   const retry = field("Retries");
@@ -2294,7 +2294,7 @@ function renderContext(host, profile, patch) {
   }));
   const retryHint = document.createElement("div");
   retryHint.className = "lmb-field-hint";
-  retryHint.textContent = "Tries per attempt. After the last try, Memoria will pick the same messages again next turn.";
+  retryHint.textContent = "Tries per attempt. After the last try, LumiBooks will pick the same messages again next turn.";
   retry.body.appendChild(retryHint);
   sec.body.appendChild(retry.wrap);
   const ttft = field("First-token timeout (seconds)");
@@ -2308,7 +2308,7 @@ function renderContext(host, profile, patch) {
   }));
   const ttftHint = document.createElement("div");
   ttftHint.className = "lmb-field-hint";
-  ttftHint.textContent = "How long Memoria waits for the first streamed token before giving up. After the first token she lets the stream run.";
+  ttftHint.textContent = "How long LumiBooks waits for the first streamed token before giving up. After the first token, the stream can continue.";
   ttft.body.appendChild(ttftHint);
   sec.body.appendChild(ttft.wrap);
   host.appendChild(sec.wrap);
@@ -2318,7 +2318,7 @@ function renderBehavior(host, profile, patch) {
   sec.body.appendChild(checkbox({
     checked: profile.showMemoryPreviews,
     label: "Preview before saving",
-    hint: "Memoria stages new chapters and arcs in the Books tab for your approval.",
+    hint: "LumiBooks stages new chapters and arcs in the Books tab for your approval.",
     onChange: (v) => patch({ showMemoryPreviews: v })
   }));
   host.appendChild(sec.wrap);
@@ -2582,8 +2582,8 @@ function setup(ctx) {
     id: "lumi_books_tab",
     title: "LumiBooks",
     shortName: "Books",
-    description: "Memoria files your chat into chapters and arcs.",
-    keywords: ["lumibooks", "lumi books", "memoria", "memory", "chapters", "arcs", "summary"],
+    description: "LumiBooks files your chat into chapters and arcs.",
+    keywords: ["lumibooks", "lumi books", "memory", "chapters", "arcs", "summary"],
     headerTitle: "LumiBooks",
     iconSvg: ICON_SVG
   });

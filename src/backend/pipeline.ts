@@ -26,7 +26,7 @@ import {
 } from "./summarizer";
 import { describeError, info, warn } from "./runtime";
 import { publishChapterCreated, publishArcCreated, publishVolumeCreated } from "./hooks";
-import { pickPhrase, type PhraseKind } from "./memoria";
+import { pickPhrase, type PhraseKind } from "./phrases";
 
 type ChatMessageDTO = ChatMessage;
 
@@ -140,30 +140,30 @@ function chapterBusyLabel(chars: number, thinkingChars: number, elapsedMs: numbe
   const tokens = approximateTokensFromChars(chars);
   const thinkTokens = approximateTokensFromChars(thinkingChars);
   const t = formatElapsed(elapsedMs);
-  if (tokens === 0 && thinkTokens === 0) return `Memoria is filing a chapter (${t})`;
-  if (tokens === 0 && thinkTokens > 0) return `Memoria is thinking (~${thinkTokens} tokens, ${t})`;
-  if (thinkTokens > 0) return `Memoria is ~${tokens} tokens into a chapter (~${thinkTokens} thinking, ${t})`;
-  return `Memoria is ~${tokens} tokens into a chapter (${t})`;
+  if (tokens === 0 && thinkTokens === 0) return `LumiBooks is filing a chapter (${t})`;
+  if (tokens === 0 && thinkTokens > 0) return `LumiBooks is thinking (~${thinkTokens} tokens, ${t})`;
+  if (thinkTokens > 0) return `LumiBooks is ~${tokens} tokens into a chapter (~${thinkTokens} thinking, ${t})`;
+  return `LumiBooks is ~${tokens} tokens into a chapter (${t})`;
 }
 
 function arcBusyLabel(chars: number, thinkingChars: number, elapsedMs: number): string {
   const tokens = approximateTokensFromChars(chars);
   const thinkTokens = approximateTokensFromChars(thinkingChars);
   const t = formatElapsed(elapsedMs);
-  if (tokens === 0 && thinkTokens === 0) return `Memoria is binding an arc (${t})`;
-  if (tokens === 0 && thinkTokens > 0) return `Memoria is thinking (~${thinkTokens} tokens, ${t})`;
-  if (thinkTokens > 0) return `Memoria is ~${tokens} tokens into an arc (~${thinkTokens} thinking, ${t})`;
-  return `Memoria is ~${tokens} tokens into an arc (${t})`;
+  if (tokens === 0 && thinkTokens === 0) return `LumiBooks is binding an arc (${t})`;
+  if (tokens === 0 && thinkTokens > 0) return `LumiBooks is thinking (~${thinkTokens} tokens, ${t})`;
+  if (thinkTokens > 0) return `LumiBooks is ~${tokens} tokens into an arc (~${thinkTokens} thinking, ${t})`;
+  return `LumiBooks is ~${tokens} tokens into an arc (${t})`;
 }
 
 function volumeBusyLabel(chars: number, thinkingChars: number, elapsedMs: number): string {
   const tokens = approximateTokensFromChars(chars);
   const thinkTokens = approximateTokensFromChars(thinkingChars);
   const t = formatElapsed(elapsedMs);
-  if (tokens === 0 && thinkTokens === 0) return `Memoria is pressing a volume (${t})`;
-  if (tokens === 0 && thinkTokens > 0) return `Memoria is thinking (~${thinkTokens} tokens, ${t})`;
-  if (thinkTokens > 0) return `Memoria is ~${tokens} tokens into a volume (~${thinkTokens} thinking, ${t})`;
-  return `Memoria is ~${tokens} tokens into a volume (${t})`;
+  if (tokens === 0 && thinkTokens === 0) return `LumiBooks is pressing a volume (${t})`;
+  if (tokens === 0 && thinkTokens > 0) return `LumiBooks is thinking (~${thinkTokens} tokens, ${t})`;
+  if (thinkTokens > 0) return `LumiBooks is ~${tokens} tokens into a volume (~${thinkTokens} thinking, ${t})`;
+  return `LumiBooks is ~${tokens} tokens into a volume (${t})`;
 }
 
 function formatBusyLabel(state: ProgressState, elapsedMs: number): string {
@@ -315,7 +315,7 @@ function recordFailure(userId: string, chatId: string, kind: BusyKind, retries: 
   capMap(failureByChat, FAILURE_MAP_CAP);
 }
 
-function nyaaToast(userId: string, kind: PhraseKind): void {
+function phraseToast(userId: string, kind: PhraseKind): void {
   if (!cb) return;
   const tone = kind === "retry" ? "warn"
     : kind === "success" || kind === "arc_success" || kind === "volume_success" ? "success"
@@ -332,7 +332,7 @@ function shortErrorText(err: unknown): string {
 
 function failToast(userId: string, kind: BusyKind, err: unknown): void {
   const noun = kind === "arc" ? "bind the arc" : kind === "volume" ? "press the volume" : "file the chapter";
-  cb?.onToast(userId, "error", `Memoria couldn't ${noun}: ${shortErrorText(err)}`);
+  cb?.onToast(userId, "error", `LumiBooks couldn't ${noun}: ${shortErrorText(err)}`);
 }
 
 export async function createChapterFromRange(
@@ -343,7 +343,7 @@ export async function createChapterFromRange(
   userId: string,
   opts: { replacesEntryId?: string } = {},
 ): Promise<string | null> {
-  if (!setBusy(userId, chatId, "chapter", "Memoria is filing a chapter")) return null;
+  if (!setBusy(userId, chatId, "chapter", "LumiBooks is filing a chapter")) return null;
   try {
     const messages = await spindle.chat.getMessages(chatId);
     if (!messages.length) return null;
@@ -366,7 +366,7 @@ async function runChapter(
   opts: { replacesEntryId?: string } = {},
 ): Promise<string | null> {
   const { replacesEntryId } = opts;
-  nyaaToast(userId, "fire");
+  phraseToast(userId, "fire");
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
   const chapters = coverage.activeEntries
@@ -391,12 +391,12 @@ async function runChapter(
     }
   }, (n, err) => {
     warn(`chapter attempt ${n} failed: ${describeError(err)}`);
-    nyaaToast(userId, "retry");
+    phraseToast(userId, "retry");
   });
 
   if (!outcome.ok) {
     if (outcome.err instanceof AbortedSummarizerError) {
-      cb?.onToast(userId, "info", "Memoria sets the pen down");
+      cb?.onToast(userId, "info", "LumiBooks stopped the generation");
       cb?.onStateChange(userId, chatId);
       return null;
     }
@@ -419,7 +419,7 @@ async function runChapter(
   }
   try {
     const entryId = await commitChapter(chatId, profile, userId, window, result, firstIdx, lastIdx, allMessages, false, replacesEntryId);
-    nyaaToast(userId, "success");
+    phraseToast(userId, "success");
     return entryId;
   } catch (err) {
     warn(`commitChapter failed: ${describeError(err)}`);
@@ -562,7 +562,7 @@ export async function createArcFromChapters(
   userId: string,
   opts: { replacesEntryId?: string } = {},
 ): Promise<string | null> {
-  if (!setBusy(userId, chatId, "arc", "Memoria is binding an arc")) return null;
+  if (!setBusy(userId, chatId, "arc", "LumiBooks is binding an arc")) return null;
   try {
     const entries = await listLmbEntries(chatId, userId);
     const entriesForSelection = opts.replacesEntryId
@@ -589,7 +589,7 @@ async function runArc(
   opts: { replacesEntryId?: string } = {},
 ): Promise<string | null> {
   const { replacesEntryId } = opts;
-  nyaaToast(userId, "arc_fire");
+  phraseToast(userId, "arc_fire");
   const outcome = await runWithRetry(profile.retryCount + 1, async () => {
     const controller = new AbortController();
     registerAborter(userId, chatId, "arc", controller);
@@ -606,12 +606,12 @@ async function runArc(
     }
   }, (n, err) => {
     warn(`arc attempt ${n} failed: ${describeError(err)}`);
-    nyaaToast(userId, "retry");
+    phraseToast(userId, "retry");
   });
 
   if (!outcome.ok) {
     if (outcome.err instanceof AbortedSummarizerError) {
-      cb?.onToast(userId, "info", "Memoria sets the pen down");
+      cb?.onToast(userId, "info", "LumiBooks stopped the generation");
       cb?.onStateChange(userId, chatId);
       return null;
     }
@@ -636,7 +636,7 @@ async function runArc(
   }
   try {
     const entryId = await commitArc(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId);
-    nyaaToast(userId, "arc_success");
+    phraseToast(userId, "arc_success");
     return entryId;
   } catch (err) {
     warn(`commitArc failed: ${describeError(err)}`);
@@ -783,7 +783,7 @@ export async function createVolumeFromArcs(
   userId: string,
   opts: { replacesEntryId?: string } = {},
 ): Promise<string | null> {
-  if (!setBusy(userId, chatId, "volume", "Memoria is pressing a volume")) return null;
+  if (!setBusy(userId, chatId, "volume", "LumiBooks is pressing a volume")) return null;
   try {
     const entries = await listLmbEntries(chatId, userId);
     const entriesForSelection = opts.replacesEntryId
@@ -809,7 +809,7 @@ async function runVolume(
   selected: LMBEntry[],
   replacesEntryId?: string,
 ): Promise<string | null> {
-  nyaaToast(userId, "volume_fire");
+  phraseToast(userId, "volume_fire");
   const outcome = await runWithRetry(profile.retryCount + 1, async () => {
     const controller = new AbortController();
     registerAborter(userId, chatId, "volume", controller);
@@ -826,12 +826,12 @@ async function runVolume(
     }
   }, (n, err) => {
     warn(`volume attempt ${n} failed: ${describeError(err)}`);
-    nyaaToast(userId, "retry");
+    phraseToast(userId, "retry");
   });
 
   if (!outcome.ok) {
     if (outcome.err instanceof AbortedSummarizerError) {
-      cb?.onToast(userId, "info", "Memoria sets the pen down");
+      cb?.onToast(userId, "info", "LumiBooks stopped the generation");
       cb?.onStateChange(userId, chatId);
       return null;
     }
@@ -856,7 +856,7 @@ async function runVolume(
   }
   try {
     const entryId = await commitVolume(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId);
-    nyaaToast(userId, "volume_success");
+    phraseToast(userId, "volume_success");
     return entryId;
   } catch (err) {
     warn(`commitVolume failed: ${describeError(err)}`);
@@ -1017,12 +1017,12 @@ export async function acceptPreview(
       const window = messages.filter((m) => intent.has(m.id) && !coverage.coveredBy.has(m.id) && !isExcluded(m));
       if (window.length === 0) {
         dropPendingPreview(userId, chatId, draftId);
-        cb?.onToast(userId, "warn", "Memoria can't save this chapter, its messages were deleted or already filed");
+        cb?.onToast(userId, "warn", "LumiBooks can't save this chapter, its messages were deleted or already filed");
         cb?.onStateChange(userId, chatId);
         return null;
       }
       if (window.length < preview.sourceMessageIds.length) {
-        cb?.onToast(userId, "warn", "Some messages were missing or already covered, Memoria saved the rest");
+        cb?.onToast(userId, "warn", "Some messages were missing or already covered; LumiBooks saved the rest");
       }
       const firstIdx = messages.findIndex((m) => m.id === window[0]!.id);
       const lastIdx = messages.findIndex((m) => m.id === window[window.length - 1]!.id);
@@ -1044,7 +1044,7 @@ export async function acceptPreview(
           firstIdx, lastIdx, messages, true, preview.replacesEntryId,
         );
         dropPendingPreview(userId, chatId, draftId);
-        nyaaToast(userId, "success");
+        phraseToast(userId, "success");
         cb?.onStateChange(userId, chatId);
         return entryId;
       } catch (err) {
@@ -1066,8 +1066,8 @@ export async function acceptPreview(
     if (selected.length === 0) {
       dropPendingPreview(userId, chatId, draftId);
       cb?.onToast(userId, "warn", isVolume
-        ? "Memoria can't save this volume, its arcs were deleted or already bound"
-        : "Memoria can't save this arc, its chapters were deleted or already bound");
+        ? "LumiBooks can't save this volume, its arcs were deleted or already bound"
+        : "LumiBooks can't save this arc, its chapters were deleted or already bound");
       cb?.onStateChange(userId, chatId);
       return null;
     }
@@ -1094,7 +1094,7 @@ export async function acceptPreview(
             preview.firstMsgIdx ?? 0, preview.lastMsgIdx ?? 0, preview.replacesEntryId,
           );
       dropPendingPreview(userId, chatId, draftId);
-      nyaaToast(userId, isVolume ? "volume_success" : "arc_success");
+      phraseToast(userId, isVolume ? "volume_success" : "arc_success");
       cb?.onStateChange(userId, chatId);
       return entryId;
     } catch (err) {

@@ -157,7 +157,7 @@ async function cloneShelfForFork(
   const newBook = await spindle.world_books.create(
     {
       name: newBookName,
-      description: "Memoria's shelf for this chat. Chapters and arcs live here.",
+      description: "LumiBooks memory book for this chat. Chapters and arcs live here.",
       metadata: {
         lumibooks_chat_id: forkChatId,
         lumibooks_created_at: Date.now(),
