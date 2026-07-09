@@ -4336,11 +4336,12 @@ async function syncNamingForChat(chatId, userId) {
     const rawContent = entry.raw.content || "";
     const nextContent = settings.includeContentHeaders ? rawContent : stripGeneratedHeader(rawContent);
     const patch = {};
-    if (isLegacyAdoptedEntry(entry.meta)) {
+    if (isAdoptedEntry(entry.meta)) {
       const ext = entry.raw.extensions || {};
       const nextMeta = { ...entry.meta, preserveComment: true };
       const repaired = repairLegacyAdoptedComment(entry.raw.comment || "");
-      patch.extensions = { ...ext, [EXTENSION_KEY]: nextMeta };
+      if (!entry.meta.preserveComment)
+        patch.extensions = { ...ext, [EXTENSION_KEY]: nextMeta };
       if (repaired && repaired !== entry.raw.comment)
         patch.comment = repaired;
     } else if (!entry.meta.preserveComment && nextComment && nextComment !== entry.raw.comment) {
@@ -4356,11 +4357,11 @@ async function syncNamingForChat(chatId, userId) {
   }
   invalidateBookCache(userId, chatId);
 }
-function isLegacyAdoptedEntry(meta) {
-  return !meta.preserveComment && (meta.model === "adopted" || meta.connectionId === "adopted");
+function isAdoptedEntry(meta) {
+  return meta.model === "adopted" || meta.connectionId === "adopted";
 }
 function repairLegacyAdoptedComment(comment) {
-  let next = comment.replace(/\s+\(\d+\)\s*$/, "").trim();
+  let next = comment.replace(/\s+\(\d+\)?\s*$/, "").trim();
   const opens = (next.match(/\(/g) ?? []).length;
   const closes = (next.match(/\)/g) ?? []).length;
   if (opens > closes)
