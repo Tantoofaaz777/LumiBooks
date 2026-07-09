@@ -8,7 +8,6 @@ import type { LMBEntry } from "./world-book";
 import { applySelectedRegex } from "./regex";
 import { describeError, warn } from "./runtime";
 import { BUILTIN_ARC_PRESETS, BUILTIN_CHAPTER_PRESETS, BUILTIN_VOLUME_PRESETS } from "./presets";
-import { DEFAULT_SHORT_COMMENT_RULES_TEMPLATE, MEMORIA_PERSONA_LINE } from "./memoria";
 
 type ChatMessageDTO = ChatMessage;
 
@@ -97,42 +96,13 @@ export interface SummarizationResult {
 
 interface BuildOpts {
   systemPromptTemplate: string;
-  targetTokens: number;
-  targetPercent: number;
   previousMemoriesBlock: string;
   bodyHeading: string;
   body: string;
-  shortCommentRulesOverride: string | null;
-  personaOverride: string | null;
-  opener: string;
-}
-
-function applyTemplate(template: string, vars: Record<string, string | number>): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (m, k) => {
-    const v = vars[k as string];
-    return v === undefined ? m : String(v);
-  });
 }
 
 function buildMessages(opts: BuildOpts): { system: string; user: string } {
-  const shortCommentRules = opts.shortCommentRulesOverride && opts.shortCommentRulesOverride.trim()
-    ? opts.shortCommentRulesOverride
-    : DEFAULT_SHORT_COMMENT_RULES_TEMPLATE;
-  const personaLine = opts.personaOverride && opts.personaOverride.trim()
-    ? opts.personaOverride
-    : MEMORIA_PERSONA_LINE;
-  const targetWords = Math.max(1, Math.round(opts.targetTokens / 1.4));
-  const system = [
-    personaLine,
-    "",
-    applyTemplate(opts.systemPromptTemplate, {
-      target_tokens: opts.targetTokens,
-      target_words: targetWords,
-      target_percent: opts.targetPercent,
-      memoria_short_comment_rules: shortCommentRules,
-      memoria_opener: opts.opener,
-    }),
-  ].join("\n");
+  const system = opts.systemPromptTemplate;
   const user = [opts.previousMemoriesBlock, opts.bodyHeading, opts.body].filter(Boolean).join("\n\n");
   return { system, user };
 }
@@ -258,43 +228,6 @@ function buildGenerateRequest(
   } as Parameters<typeof spindle.generate.raw>[0];
 }
 
-async function countTextTokens(text: string, model: string, userId: string): Promise<number> {
-  if (!text) return 0;
-  try {
-    const result = await spindle.tokens.countText(text, { model, userId });
-    return result.total_tokens;
-  } catch (err) {
-    warn(`tokens.countText fallback: ${describeError(err)}`);
-    return Math.ceil(text.length / 4);
-  }
-}
-
-interface ResolvedTargets {
-  targetTokens: number;
-  targetPercent: number;
-  inputTokens: number;
-}
-
-async function resolveTargets(
-  unit: "percent" | "tokens",
-  percent: number,
-  tokens: number,
-  inputText: string,
-  model: string,
-  userId: string,
-): Promise<ResolvedTargets> {
-  const inputTokens = await countTextTokens(inputText, model, userId);
-  if (unit === "tokens") {
-    const targetTokens = Math.max(1, Math.floor(tokens));
-    const targetPercent = inputTokens > 0
-      ? Math.max(1, Math.round((targetTokens / inputTokens) * 100))
-      : 0;
-    return { targetTokens, targetPercent, inputTokens };
-  }
-  const targetTokens = Math.max(1, Math.floor((inputTokens * percent) / 100));
-  return { targetTokens, targetPercent: percent, inputTokens };
-}
-
 function buildPreviousMemoriesBlock(previous: LMBEntry[]): string {
   if (previous.length === 0) return "";
   const lines = ["<<PREVIOUS MEMORIES (for context, do not rewrite)>>"];
@@ -346,7 +279,7 @@ export async function assembleChapterPrompt(
   messages: ChatMessageDTO[],
   previousMemories: LMBEntry[],
   userId: string,
-  opener: string,
+  _opener: string,
 ): Promise<DryRunAssembly> {
   const conn = await resolveConnection(profile, userId);
   if (!conn) throw new FatalSummarizerError("No connection available for Memoria");
@@ -357,36 +290,18 @@ export async function assembleChapterPrompt(
   const transcript = renderTranscript(messages, true);
   if (!transcript.trim()) throw new Error("Empty transcript");
 
-  const { targetTokens, targetPercent, inputTokens: transcriptTokens } = await resolveTargets(
-    profile.chapterTargetUnit,
-    profile.chapterTargetPercent,
-    profile.chapterTargetTokens,
-    transcript,
-    conn.model,
-    userId,
-  );
-
   const built = buildMessages({
     systemPromptTemplate: presetText,
-    targetTokens,
-    targetPercent,
     previousMemoriesBlock: buildPreviousMemoriesBlock(previousMemories),
-    bodyHeading: `<<SCENE TO SUMMARIZE (target ~${targetTokens} tokens)>>`,
+    bodyHeading: "<<SCENE TO SUMMARIZE>>",
     body: transcript,
-    shortCommentRulesOverride: profile.shortCommentRulesOverride,
-    personaOverride: profile.memoriaPersonaOverride,
-    opener,
   });
 
   const samplerParams = buildSamplerParameters(profile);
   const diagnostics: Array<{ message: string }> = [
     { message: `Connection: ${conn.name} (${conn.provider}/${conn.model})` },
     { message: `Window: ${messages.length} message(s)` },
-    { message: `Transcript tokens (model tokenizer): ${transcriptTokens}` },
-    { message: `Target tokens: ${targetTokens} (${profile.chapterTargetUnit === "tokens" ? `fixed budget, ~${targetPercent}% of input` : profile.chapterTargetPercent + "% of input"})` },
-    { message: `Target words (shown to model): ${Math.max(1, Math.round(targetTokens / 1.4))}` },
     { message: `Previous memories included: ${previousMemories.length}` },
-    { message: `Opener: ${opener}` },
     { message: `Preset key: ${profile.chapterPresetKey}` },
     { message: `Sampler parameters being sent on the wire: ${JSON.stringify(samplerParams)}` },
   ];
@@ -412,7 +327,7 @@ export async function assembleArcPrompt(
   chatId: string,
   chapters: LMBEntry[],
   userId: string,
-  opener: string,
+  _opener: string,
 ): Promise<DryRunAssembly> {
   const conn = await resolveConnection(profile, userId);
   if (!conn) throw new FatalSummarizerError("No connection available for Memoria");
@@ -424,35 +339,17 @@ export async function assembleArcPrompt(
     .map((c, idx) => `<<CHAPTER ${idx + 1}: ${c.raw.comment || c.meta.title || "untitled"}>>\n${c.raw.content}`)
     .join("\n\n");
 
-  const { targetTokens, targetPercent, inputTokens: bodyTokens } = await resolveTargets(
-    profile.arcTargetUnit,
-    profile.arcTargetPercent,
-    profile.arcTargetTokens,
-    body,
-    conn.model,
-    userId,
-  );
-
   const built = buildMessages({
     systemPromptTemplate: presetText,
-    targetTokens,
-    targetPercent,
     previousMemoriesBlock: "",
-    bodyHeading: `<<CHAPTERS TO CONSOLIDATE (target ~${targetTokens} tokens)>>`,
+    bodyHeading: "<<CHAPTERS TO CONSOLIDATE>>",
     body,
-    shortCommentRulesOverride: profile.shortCommentRulesOverride,
-    personaOverride: profile.memoriaPersonaOverride,
-    opener,
   });
 
   const samplerParams = buildSamplerParameters(profile);
   const diagnostics: Array<{ message: string }> = [
     { message: `Connection: ${conn.name} (${conn.provider}/${conn.model})` },
     { message: `Source chapters: ${chapters.length}` },
-    { message: `Concatenated chapter body tokens (model tokenizer): ${bodyTokens}` },
-    { message: `Target tokens: ${targetTokens} (${profile.arcTargetUnit === "tokens" ? `fixed budget, ~${targetPercent}% of input` : profile.arcTargetPercent + "% of input"})` },
-    { message: `Target words (shown to model): ${Math.max(1, Math.round(targetTokens / 1.4))}` },
-    { message: `Opener: ${opener}` },
     { message: `Preset key: ${profile.arcPresetKey}` },
     { message: `Sampler parameters being sent on the wire: ${JSON.stringify(samplerParams)}` },
   ];
@@ -478,7 +375,7 @@ export async function assembleVolumePrompt(
   chatId: string,
   arcs: LMBEntry[],
   userId: string,
-  opener: string,
+  _opener: string,
 ): Promise<DryRunAssembly> {
   const conn = await resolveConnection(profile, userId);
   if (!conn) throw new FatalSummarizerError("No connection available for Memoria");
@@ -490,35 +387,17 @@ export async function assembleVolumePrompt(
     .map((a, idx) => `<<ARC ${idx + 1}: ${a.raw.comment || a.meta.title || "untitled"}>>\n${a.raw.content}`)
     .join("\n\n");
 
-  const { targetTokens, targetPercent, inputTokens: bodyTokens } = await resolveTargets(
-    profile.volumeTargetUnit,
-    profile.volumeTargetPercent,
-    profile.volumeTargetTokens,
-    body,
-    conn.model,
-    userId,
-  );
-
   const built = buildMessages({
     systemPromptTemplate: presetText,
-    targetTokens,
-    targetPercent,
     previousMemoriesBlock: "",
-    bodyHeading: `<<ARCS TO CONSOLIDATE (target ~${targetTokens} tokens)>>`,
+    bodyHeading: "<<ARCS TO CONSOLIDATE>>",
     body,
-    shortCommentRulesOverride: profile.shortCommentRulesOverride,
-    personaOverride: profile.memoriaPersonaOverride,
-    opener,
   });
 
   const samplerParams = buildSamplerParameters(profile);
   const diagnostics: Array<{ message: string }> = [
     { message: `Connection: ${conn.name} (${conn.provider}/${conn.model})` },
     { message: `Source arcs: ${arcs.length}` },
-    { message: `Concatenated arc body tokens (model tokenizer): ${bodyTokens}` },
-    { message: `Target tokens: ${targetTokens} (${profile.volumeTargetUnit === "tokens" ? `fixed budget, ~${targetPercent}% of input` : profile.volumeTargetPercent + "% of input"})` },
-    { message: `Target words (shown to model): ${Math.max(1, Math.round(targetTokens / 1.4))}` },
-    { message: `Opener: ${opener}` },
     { message: `Preset key: ${profile.volumePresetKey}` },
     { message: `Sampler parameters being sent on the wire: ${JSON.stringify(samplerParams)}` },
   ];
@@ -557,25 +436,11 @@ export async function summarizeVolume(
     .map((a, idx) => `<<ARC ${idx + 1}: ${a.raw.comment || a.meta.title || "untitled"}>>\n${a.raw.content}`)
     .join("\n\n");
 
-  const { targetTokens, targetPercent } = await resolveTargets(
-    profile.volumeTargetUnit,
-    profile.volumeTargetPercent,
-    profile.volumeTargetTokens,
-    body,
-    conn.model,
-    userId,
-  );
-
   const built = buildMessages({
     systemPromptTemplate: presetText,
-    targetTokens,
-    targetPercent,
     previousMemoriesBlock: "",
-    bodyHeading: `<<ARCS TO CONSOLIDATE (target ~${targetTokens} tokens)>>`,
+    bodyHeading: "<<ARCS TO CONSOLIDATE>>",
     body,
-    shortCommentRulesOverride: profile.shortCommentRulesOverride,
-    personaOverride: profile.memoriaPersonaOverride,
-    opener,
   });
 
   const resolvedSystem = await resolveSystemMacros(built.system, chatId, userId);
@@ -627,25 +492,11 @@ export async function summarizeChapter(
   const transcript = renderTranscript(messages, true);
   if (!transcript.trim()) throw new Error("Empty transcript");
 
-  const { targetTokens, targetPercent } = await resolveTargets(
-    profile.chapterTargetUnit,
-    profile.chapterTargetPercent,
-    profile.chapterTargetTokens,
-    transcript,
-    conn.model,
-    userId,
-  );
-
   const built = buildMessages({
     systemPromptTemplate: presetText,
-    targetTokens,
-    targetPercent,
     previousMemoriesBlock: buildPreviousMemoriesBlock(previousMemories),
-    bodyHeading: `<<SCENE TO SUMMARIZE (target ~${targetTokens} tokens)>>`,
+    bodyHeading: "<<SCENE TO SUMMARIZE>>",
     body: transcript,
-    shortCommentRulesOverride: profile.shortCommentRulesOverride,
-    personaOverride: profile.memoriaPersonaOverride,
-    opener,
   });
 
   const resolvedSystem = await resolveSystemMacros(built.system, chatId, userId);
@@ -698,25 +549,11 @@ export async function summarizeArc(
     .map((c, idx) => `<<CHAPTER ${idx + 1}: ${c.raw.comment || c.meta.title || "untitled"}>>\n${c.raw.content}`)
     .join("\n\n");
 
-  const { targetTokens, targetPercent } = await resolveTargets(
-    profile.arcTargetUnit,
-    profile.arcTargetPercent,
-    profile.arcTargetTokens,
-    body,
-    conn.model,
-    userId,
-  );
-
   const built = buildMessages({
     systemPromptTemplate: presetText,
-    targetTokens,
-    targetPercent,
     previousMemoriesBlock: "",
-    bodyHeading: `<<CHAPTERS TO CONSOLIDATE (target ~${targetTokens} tokens)>>`,
+    bodyHeading: "<<CHAPTERS TO CONSOLIDATE>>",
     body,
-    shortCommentRulesOverride: profile.shortCommentRulesOverride,
-    personaOverride: profile.memoriaPersonaOverride,
-    opener,
   });
 
   const resolvedSystem = await resolveSystemMacros(built.system, chatId, userId);

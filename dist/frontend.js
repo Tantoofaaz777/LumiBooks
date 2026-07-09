@@ -2013,15 +2013,6 @@ function makeDefaultProfile(id, name) {
   return {
     id,
     name,
-    chapterTargetUnit: "percent",
-    chapterTargetPercent: 15,
-    chapterTargetTokens: 800,
-    arcTargetUnit: "percent",
-    arcTargetPercent: 20,
-    arcTargetTokens: 1500,
-    volumeTargetUnit: "percent",
-    volumeTargetPercent: 25,
-    volumeTargetTokens: 3000,
     chapterPresetKey: "summary",
     arcPresetKey: "arc_default",
     volumePresetKey: "volume_default",
@@ -2033,8 +2024,6 @@ function makeDefaultProfile(id, name) {
     hideCoveredMessages: true,
     showMemoryPreviews: false,
     retryCount: 3,
-    shortCommentRulesOverride: null,
-    memoriaPersonaOverride: null,
     ttftTimeoutSecs: 60
   };
 }
@@ -2467,9 +2456,7 @@ function blankPromptTemplate(category) {
     "Return ONLY valid JSON in this exact shape:",
     "{",
     '  "title": "Short title",',
-    `  "content": "Memoria's compressed text. Aim for ~{{target_tokens}} tokens.",`,
-    '  "keywords": ["keyword1", "keyword2"],',
-    '  "short_comment": "{{memoria_short_comment_rules}}"',
+    '  "content": "Compressed memory text"',
     "}",
     "",
     "No commentary outside the JSON."

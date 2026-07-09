@@ -6,7 +6,6 @@ export const STORAGE_VERSION = 4 as const;
 export const SETTINGS_PATH = "settings.json" as const;
 export const CHAT_STATE_DIR = "chats" as const;
 
-export type CompressionTargetUnit = "percent" | "tokens";
 export type MemoryInjectionMode = "chat_history" | "outlet";
 
 export interface SamplerSet {
@@ -22,15 +21,6 @@ export interface SamplerSet {
 export interface LMBProfile {
   id: string;
   name: string;
-  chapterTargetUnit: CompressionTargetUnit;
-  chapterTargetPercent: number;
-  chapterTargetTokens: number;
-  arcTargetUnit: CompressionTargetUnit;
-  arcTargetPercent: number;
-  arcTargetTokens: number;
-  volumeTargetUnit: CompressionTargetUnit;
-  volumeTargetPercent: number;
-  volumeTargetTokens: number;
   chapterPresetKey: string;
   arcPresetKey: string;
   volumePresetKey: string;
@@ -42,8 +32,6 @@ export interface LMBProfile {
   hideCoveredMessages: boolean;
   showMemoryPreviews: boolean;
   retryCount: number;
-  shortCommentRulesOverride: string | null;
-  memoriaPersonaOverride: string | null;
   ttftTimeoutSecs: number;
 }
 
@@ -122,15 +110,6 @@ export function makeDefaultProfile(id: string, name: string): LMBProfile {
   return {
     id,
     name,
-    chapterTargetUnit: "percent",
-    chapterTargetPercent: 15,
-    chapterTargetTokens: 800,
-    arcTargetUnit: "percent",
-    arcTargetPercent: 20,
-    arcTargetTokens: 1500,
-    volumeTargetUnit: "percent",
-    volumeTargetPercent: 25,
-    volumeTargetTokens: 3000,
     chapterPresetKey: "summary",
     arcPresetKey: "arc_default",
     volumePresetKey: "volume_default",
@@ -142,8 +121,6 @@ export function makeDefaultProfile(id: string, name: string): LMBProfile {
     hideCoveredMessages: true,
     showMemoryPreviews: false,
     retryCount: 3,
-    shortCommentRulesOverride: null,
-    memoriaPersonaOverride: null,
     ttftTimeoutSecs: 60,
   };
 }
@@ -222,15 +199,6 @@ export function normalizeProfile(raw: unknown): LMBProfile | null {
   const base = makeDefaultProfile(id, typeof v.name === "string" && v.name.trim() ? v.name : "Untitled");
   return {
     ...base,
-    chapterTargetUnit: v.chapterTargetUnit === "tokens" ? "tokens" : "percent",
-    chapterTargetPercent: clampInt(v.chapterTargetPercent, 2, 90, base.chapterTargetPercent),
-    chapterTargetTokens: clampInt(v.chapterTargetTokens, 50, 1000000, base.chapterTargetTokens),
-    arcTargetUnit: v.arcTargetUnit === "tokens" ? "tokens" : "percent",
-    arcTargetPercent: clampInt(v.arcTargetPercent, 5, 95, base.arcTargetPercent),
-    arcTargetTokens: clampInt(v.arcTargetTokens, 50, 1000000, base.arcTargetTokens),
-    volumeTargetUnit: v.volumeTargetUnit === "tokens" ? "tokens" : "percent",
-    volumeTargetPercent: clampInt(v.volumeTargetPercent, 5, 95, base.volumeTargetPercent),
-    volumeTargetTokens: clampInt(v.volumeTargetTokens, 50, 1000000, base.volumeTargetTokens),
     chapterPresetKey: typeof v.chapterPresetKey === "string" && v.chapterPresetKey.trim() ? v.chapterPresetKey : base.chapterPresetKey,
     arcPresetKey: typeof v.arcPresetKey === "string" && v.arcPresetKey.trim() ? v.arcPresetKey : base.arcPresetKey,
     volumePresetKey: typeof v.volumePresetKey === "string" && v.volumePresetKey.trim() ? v.volumePresetKey : base.volumePresetKey,
@@ -246,14 +214,6 @@ export function normalizeProfile(raw: unknown): LMBProfile | null {
     hideCoveredMessages: typeof v.hideCoveredMessages === "boolean" ? v.hideCoveredMessages : base.hideCoveredMessages,
     showMemoryPreviews: typeof v.showMemoryPreviews === "boolean" ? v.showMemoryPreviews : base.showMemoryPreviews,
     retryCount: clampInt(v.retryCount, 0, 10, base.retryCount),
-    shortCommentRulesOverride:
-      typeof v.shortCommentRulesOverride === "string" && v.shortCommentRulesOverride.trim() !== ""
-        ? v.shortCommentRulesOverride
-        : null,
-    memoriaPersonaOverride:
-      typeof v.memoriaPersonaOverride === "string" && v.memoriaPersonaOverride.trim() !== ""
-        ? v.memoriaPersonaOverride
-        : null,
     ttftTimeoutSecs: clampInt(v.ttftTimeoutSecs, 10, 600, base.ttftTimeoutSecs),
   };
 }

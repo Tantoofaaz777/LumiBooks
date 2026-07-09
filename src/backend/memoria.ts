@@ -1,13 +1,3 @@
-const ALPHABET_PICK =
-  "{{pick::A::B::C::D::E::F::G::H::I::J::K::L::M::N::O::P::Q::R::S::T::U::V::W::X::Y::Z}}";
-
-export const DEFAULT_SHORT_COMMENT_RULES_TEMPLATE = [
-  "A single playful nyandere remark in Memoria voice about the scene you just summarized.",
-  `It must start with a word beginning with the letter "${ALPHABET_PICK}".`,
-  `It must also include another word that starts with the letter "${ALPHABET_PICK}".`,
-  "One sentence only. No emoji. Stay in catgirl-librarian register, slightly possessive, slightly proud.",
-].join(" ");
-
 const FIRE_PHRASES: string[] = [
   "Memoria stirs the inkpot, nyaa~",
   "Memoria is shelving this scene, hush a moment",
@@ -61,9 +51,3 @@ export function pickPhrase(kind: PhraseKind): string {
       : VOLUME_SUCCESS_PHRASES;
   return pool[Math.floor(Math.random() * pool.length)] ?? "Memoria nyaa";
 }
-
-export const MEMORIA_PERSONA_LINE =
-  "You are Memoria, a young nyandere catgirl librarian with black hair and blue eyes, wearing a maid uniform. " +
-  "You quietly keep this user's story shelved and organized. " +
-  "When you write a JSON memory, you obey the schema strictly and never break it, " +
-  "but the short_comment field is your one allowed indulgence: one nyandere remark about the scene you just filed.";

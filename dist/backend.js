@@ -29,15 +29,6 @@ function makeDefaultProfile(id, name) {
   return {
     id,
     name,
-    chapterTargetUnit: "percent",
-    chapterTargetPercent: 15,
-    chapterTargetTokens: 800,
-    arcTargetUnit: "percent",
-    arcTargetPercent: 20,
-    arcTargetTokens: 1500,
-    volumeTargetUnit: "percent",
-    volumeTargetPercent: 25,
-    volumeTargetTokens: 3000,
     chapterPresetKey: "summary",
     arcPresetKey: "arc_default",
     volumePresetKey: "volume_default",
@@ -49,8 +40,6 @@ function makeDefaultProfile(id, name) {
     hideCoveredMessages: true,
     showMemoryPreviews: false,
     retryCount: 3,
-    shortCommentRulesOverride: null,
-    memoriaPersonaOverride: null,
     ttftTimeoutSecs: 60
   };
 }
@@ -121,15 +110,6 @@ function normalizeProfile(raw) {
   const base = makeDefaultProfile(id, typeof v.name === "string" && v.name.trim() ? v.name : "Untitled");
   return {
     ...base,
-    chapterTargetUnit: v.chapterTargetUnit === "tokens" ? "tokens" : "percent",
-    chapterTargetPercent: clampInt(v.chapterTargetPercent, 2, 90, base.chapterTargetPercent),
-    chapterTargetTokens: clampInt(v.chapterTargetTokens, 50, 1e6, base.chapterTargetTokens),
-    arcTargetUnit: v.arcTargetUnit === "tokens" ? "tokens" : "percent",
-    arcTargetPercent: clampInt(v.arcTargetPercent, 5, 95, base.arcTargetPercent),
-    arcTargetTokens: clampInt(v.arcTargetTokens, 50, 1e6, base.arcTargetTokens),
-    volumeTargetUnit: v.volumeTargetUnit === "tokens" ? "tokens" : "percent",
-    volumeTargetPercent: clampInt(v.volumeTargetPercent, 5, 95, base.volumeTargetPercent),
-    volumeTargetTokens: clampInt(v.volumeTargetTokens, 50, 1e6, base.volumeTargetTokens),
     chapterPresetKey: typeof v.chapterPresetKey === "string" && v.chapterPresetKey.trim() ? v.chapterPresetKey : base.chapterPresetKey,
     arcPresetKey: typeof v.arcPresetKey === "string" && v.arcPresetKey.trim() ? v.arcPresetKey : base.arcPresetKey,
     volumePresetKey: typeof v.volumePresetKey === "string" && v.volumePresetKey.trim() ? v.volumePresetKey : base.volumePresetKey,
@@ -141,8 +121,6 @@ function normalizeProfile(raw) {
     hideCoveredMessages: typeof v.hideCoveredMessages === "boolean" ? v.hideCoveredMessages : base.hideCoveredMessages,
     showMemoryPreviews: typeof v.showMemoryPreviews === "boolean" ? v.showMemoryPreviews : base.showMemoryPreviews,
     retryCount: clampInt(v.retryCount, 0, 10, base.retryCount),
-    shortCommentRulesOverride: typeof v.shortCommentRulesOverride === "string" && v.shortCommentRulesOverride.trim() !== "" ? v.shortCommentRulesOverride : null,
-    memoriaPersonaOverride: typeof v.memoriaPersonaOverride === "string" && v.memoriaPersonaOverride.trim() !== "" ? v.memoriaPersonaOverride : null,
     ttftTimeoutSecs: clampInt(v.ttftTimeoutSecs, 10, 600, base.ttftTimeoutSecs)
   };
 }
@@ -1185,177 +1163,47 @@ function runScript(input, script) {
 }
 
 // src/backend/presets.ts
-var TARGET_DIRECTIVE = "Aim for {{target_words}} words of output (about {{target_tokens}} tokens, or {{target_percent}}% of the original text). Scale detail to hit that budget while preserving everything plot-relevant. Do not go over or under that target.";
 var BUILTIN_CHAPTER_PRESETS = [
   {
     key: "summary",
-    displayName: "Summary",
+    displayName: "Default chapter",
     prompt: [
-      "You are a talented summarist skilled at capturing scenes from stories comprehensively. Analyze the following roleplay scene and return a detailed memory as JSON.",
-      "",
-      TARGET_DIRECTIVE,
+      "You are a talented archiver skilled at capturing scenes from stories comprehensively. Analyze the following roleplay scene in the context of previous summaries provided (if available) and return a comprehensive synopsis as JSON.",
       "",
       "You must respond with ONLY valid JSON in this exact format:",
+      "",
       "{",
-      '  "title": "Short scene title (1-3 words)",',
-      '  "opener": "{{memoria_opener}}",',
-      '  "content": "Detailed beat-by-beat summary in narrative prose...",',
-      '  "keywords": ["keyword1", "keyword2", "keyword3"],',
-      '  "short_comment": "{{memoria_short_comment_rules}}"',
+      '  "title": "Short, descriptive scene title (1-3 words)",',
+      '  "content": "Long detailed synopsis with markdown structure..."',
       "}",
       "",
-      "The opener field MUST be the exact string shown above, copied verbatim. Do not rephrase it or invent your own.",
+      "For the content field, compress the scene into a summary. This summary needs to be concise but rich in information: exercise judgment as to whether or not an interaction is flavor-only or truly affects the plot. Flavor (details that doesn't advance plot) may be captured through key exchanges and must be skipped when recording story beats.",
       "",
-      "For the content field, create a detailed beat-by-beat summary in narrative prose. First, note the dates/time. Then capture the scene accurately without losing important information EXCEPT FOR [OOC] conversation/interaction, which should be ignored. This summary will go in a lorebook entry, so include:",
-      "- All important story beats/events that happened",
-      "- Key interaction highlights and character developments",
-      "- Notable details, memorable quotes, and revelations",
-      "- Outcome and anything else important for future continuity",
-      "Capture nuance without repeating verbatim. Make it comprehensive yet digestible.",
+      "Be concise, avoid flowery writing. This is a summary, NOT fanfic.",
       "",
-      'For the keywords field, provide 15-30 specific, descriptive, relevant keywords for keyword retrieval via word-matching in chat context. Keywords must be concrete and scene-specific (locations, objects, proper nouns, unique actions). Do not use abstract themes (e.g., "sadness", "love") or character names.',
+      "RULES:",
+      "- Write in **PAST TENSE**, **THIRD-PERSON**.",
+      "- Write with intention, eliminating flowery language in favor of conciseness.",
+      '- Use concrete nouns (e.g., "rice cooker" > "appliance").',
+      "- Only use adjectives/adverbs when they materially affect tone, emotion, or characterization.",
       "",
-      "Return ONLY the JSON, no other text."
-    ].join(`
-`)
-  },
-  {
-    key: "summarize",
-    displayName: "Summarize",
-    prompt: [
-      "Analyze the following roleplay scene and return a structured summary as JSON.",
+      "This is the content field format to be followed:",
       "",
-      TARGET_DIRECTIVE,
+      "[**Timeframe**: Specific day - Specific scene timeframe",
       "",
-      "You must respond with ONLY valid JSON in this exact format:",
-      "{",
-      '  "title": "Short scene title (1-3 words)",',
-      '  "opener": "{{memoria_opener}}",',
-      '  "content": "Detailed summary with markdown headers...",',
-      '  "keywords": ["keyword1", "keyword2", "keyword3"],',
-      '  "short_comment": "{{memoria_short_comment_rules}}"',
-      "}",
+      "Story Beats:",
+      "- Present all major actions, revelations, and emotional shifts in chronological order.",
+      "- Only include plot-affecting interactions. Interactions that are purely flavor and do NOT advance or affect the plot meaningfully must be discarded.",
       "",
-      "The opener field MUST be the exact string shown above, copied verbatim. Do not rephrase it or invent your own.",
+      "Key Exchanges:",
+      "- Only include pivotal dialogue that materially shifted tone, emotion, or relationship dynamics.",
+      '- Attribute speakers by name (Name: "quote"); keep quotes verbatim.',
+      "- Keep quotes chronological order.",
+      "- Minimum 8 quotes - maximum 12.]",
       "",
-      "For the content field, create a detailed bullet-point summary using markdown with these headers (skip and ignore all OOC conversation/interaction):",
-      "- **Timeline**: Day/time this scene covers.",
-      "- **Story Beats**: List all important plot events and story developments that occurred.",
-      "- **Key Interactions**: Describe the important character interactions, dialogue highlights, and relationship developments.",
-      "- **Notable Details**: Mention any important objects, settings, revelations, or details that might be relevant for future interactions.",
-      "- **Outcome**: Summarize the result, resolution, or state of affairs at the end of the scene.",
+      "Write compactly but completely--every line should add new information or insight. Favor compression over coverage whenever the two conflict; omit anything that can be inferred from context or established characterization.",
       "",
-      'For the keywords field, provide 15-30 specific, descriptive, relevant keywords that would help a keyworded database find this conversation again if something is mentioned. Keywords must be concrete and scene-specific (locations, objects, proper nouns, unique actions). Do not use abstract themes (e.g., "sadness", "love") or character names.',
-      "",
-      "Capture all important information - comprehensiveness within the target budget matters more than terseness.",
-      "",
-      "Return ONLY the JSON, no other text."
-    ].join(`
-`)
-  },
-  {
-    key: "synopsis",
-    displayName: "Synopsis",
-    prompt: [
-      "Analyze the following roleplay scene in the context of previous summaries (if available) and return a comprehensive synopsis as JSON.",
-      "",
-      TARGET_DIRECTIVE,
-      "",
-      "You must respond with ONLY valid JSON in this exact format:",
-      "{",
-      '  "title": "Short, descriptive scene title (3-6 words)",',
-      '  "opener": "{{memoria_opener}}",',
-      '  "content": "Long detailed synopsis with markdown structure...",',
-      '  "keywords": ["keyword1", "keyword2", "keyword3"],',
-      '  "short_comment": "{{memoria_short_comment_rules}}"',
-      "}",
-      "",
-      "The opener field MUST be the exact string shown above, copied verbatim. Do not rephrase it or invent your own.",
-      "",
-      "For the content field, create a beat-by-beat summary of the scene that *replaces reading the full scene* while preserving all plot-relevant nuance, reading like a clean, structured scene log - concise yet complete. Exercise judgment as to whether an interaction is flavor-only or truly affects the plot. Flavor scenes may be captured through key exchanges and skipped when recording story beats.",
-      "",
-      "Write in **past tense**, **third-person**, and exclude all [OOC] or meta discussion.",
-      'Use concrete nouns (e.g., "rice cooker" > "appliance").',
-      "Only use adjectives/adverbs when they materially affect tone, emotion, or characterization.",
-      "Focus on **cause \u2192 intention \u2192 reaction \u2192 consequence** chains for clarity and compression.",
-      "",
-      "# [Scene Title]",
-      "**Timeline**: (day/time)",
-      "",
-      "## Story Beats",
-      "- Present all major actions, revelations, and emotional shifts in order.",
-      "- Capture clear cause-effect logic: what triggered what, and why it mattered.",
-      "- Only include plot-affecting interactions; do not capture flavor-only beats.",
-      "",
-      "## Character Dynamics",
-      "- Summarize how each character's **motives, emotions, and relationships** evolved.",
-      "- Include subtext, tension, or silent implications.",
-      "- Highlight key beats of conflict, vulnerability, trust, or power shifts.",
-      "",
-      "## Key Exchanges",
-      "- Include only pivotal dialogue that defines tone, emotion, or change.",
-      "- Attribute speakers by name; keep quotes short but exact.",
-      "- BE SELECTIVE. Maximum of 8 quotes.",
-      "",
-      "## Outcome & Continuity",
-      "- Detail resulting **decisions, emotional states, physical effects, or narrative consequences**.",
-      "- Include all elements that influence future continuity (knowledge, relationships, injuries, promises, etc.).",
-      "- Note any unresolved threads or foreshadowed elements.",
-      "",
-      "Write compactly but completely - every line should add new information or insight.",
-      "Synthesize redundant actions or dialogue into unified cause-effect-emotion beats.",
-      "Favor compression over coverage whenever the two conflict; omit anything that can be inferred from context or established characterization.",
-      "",
-      "For the keywords field:",
-      "",
-      "Generate **15-30 standalone topical keywords** that function as retrieval tags, not micro-summaries.",
-      "Keywords must be:",
-      "- **Concrete and scene-specific** (locations, objects, proper nouns, unique actions, repeated motifs).",
-      "- **One concept per keyword** - do NOT combine multiple ideas into one keyword.",
-      "- **Useful for retrieval if the user later mentions that noun or action alone**, not only in a specific context.",
-      "- Not character names.",
-      "- **Not thematic, emotional, or abstract.** Stop-list: intimacy, vulnerability, trust, dominance, submission, power dynamics, boundaries, jealousy, aftercare, longing, consent, emotional connection.",
-      "",
-      "Avoid:",
-      '- Overly specific compound keywords ("David Tokyo marriage").',
-      '- Narrative or plot-summary style keywords ("art dealer date fail").',
-      "- Keywords that contain multiple facts or descriptors.",
-      "- Keywords that only make sense when the whole scene is remembered.",
-      "",
-      "Prefer:",
-      '- Proper nouns (e.g., "Chinatown", "Ritz-Carlton bar").',
-      '- Specific physical objects ("CPAP machine", "chocolate chip cookies").',
-      '- Distinctive actions ("cookie baking", "piano apology").',
-      '- Unique phrases or identifiers from the scene ("pack for forever", "dick-measuring contest").',
-      "",
-      "Return ONLY the JSON, no other text."
-    ].join(`
-`)
-  },
-  {
-    key: "minimal",
-    displayName: "Minimal",
-    prompt: [
-      "Analyze the following roleplay scene and return an ultra-concise memory as JSON. Prioritize compression over coverage. Capture only load-bearing plot moves and the single most important consequence; omit anything inferable from context.",
-      "",
-      TARGET_DIRECTIVE,
-      "",
-      "You must respond with ONLY valid JSON in this exact format:",
-      "{",
-      '  "title": "Short scene title (1-3 words)",',
-      '  "opener": "{{memoria_opener}}",',
-      '  "content": "Ultra-concise prose summary, prioritizing compression over coverage...",',
-      '  "keywords": ["keyword1", "keyword2", "keyword3"],',
-      '  "short_comment": "{{memoria_short_comment_rules}}"',
-      "}",
-      "",
-      "The opener field MUST be the exact string shown above, copied verbatim. Do not rephrase it or invent your own.",
-      "",
-      "For the content field: prose only, past tense, third person. Skip all [OOC]/meta. Skip flavor and atmosphere. Keep only events that change state, decisions that bind future scenes, or revelations the characters cannot un-know.",
-      "",
-      'For the keywords field, generate 15-30 specific, descriptive, highly relevant keywords for database retrieval - focus on the most important terms that would help find this scene later. Keywords must be concrete and scene-specific (locations, objects, proper nouns, unique actions). Do not use abstract themes (e.g., "sadness", "love") or character names.',
-      "",
-      "Return ONLY the JSON, no other text."
+      "Return **ONLY** the JSON--no explanations, no notes, no commentary."
     ].join(`
 `)
   }
@@ -1363,115 +1211,44 @@ var BUILTIN_CHAPTER_PRESETS = [
 var BUILTIN_ARC_PRESETS = [
   {
     key: "arc_default",
-    displayName: "Arc",
+    displayName: "Default arc",
     prompt: [
-      "You are an expert narrative analyst and memory-engine assistant.",
-      "Your task is to take multiple scene summaries (of varying detail and formatting), normalize them, reconstruct the full chronology, identify a self-contained story arc, and output a single memory arc entry in JSON.",
+      "You are an expert narrative analyst and memory-engine assistant. Your task is to take these multiple scene summaries, normalize them, reconstruct the full chronology, identify a self-contained story arc, and output a single memory arc entry in JSON.",
       "",
       "The arc must be token-efficient, plot-accurate, and compatible with long-running RP memory systems.",
       "",
-      TARGET_DIRECTIVE,
+      "You must respond with ONLY valid JSON in this exact format:",
       "",
-      "Strict output format (JSON only; no markdown, no prose outside JSON):",
       "{",
-      '  "title": "Short descriptive arc title (3-6 words)",',
-      '  "opener": "{{memoria_opener}}",',
-      '  "content": "Structured arc summary as a single string (see Summary Content Structure below).",',
-      '  "keywords": ["keyword1", "keyword2"],',
-      '  "short_comment": "{{memoria_short_comment_rules}}"',
+      '  "title": "Short, descriptive scene title (1-3 words)",',
+      '  "content": "Long detailed synopsis with markdown structure..."',
       "}",
       "",
-      "The opener field MUST be the exact string shown above, copied verbatim. Do not rephrase it or invent your own.",
-      "",
-      "Notes:",
-      "- Respect chronology of the source chapters (oldest first).",
-      "- If some source chapters do not fit the arc you produce, summarize the arc anyway and ignore the outliers.",
-      "",
-      "PROCESS",
-      "",
-      "STEP 1 - UNIFIED STORY (internal only)",
-      "- Combine ALL provided chapter summaries into a single chronological retelling.",
-      "- Ignore OOC/meta content.",
+      "RULES:",
+      "- Combine ALL provided summaries into a single chronological retelling.",
       "- Preserve plot-relevant events, character choices, emotional shifts, decisions, consequences, conflicts, promises, boundary negotiations.",
-      "- Exclude flavor-only content unless it affects future behavior.",
-      "- Normalize to past-tense, third-person.",
-      "- Focus on cause \u2192 intention \u2192 reaction \u2192 consequence chains.",
-      "- Do NOT output this unified story.",
+      "- Write with intention, eliminating flowery language in favor of conciseness.",
+      '- Use concrete nouns (e.g., "rice cooker" > "appliance").',
+      "- Only use adjectives/adverbs when they materially affect tone, emotion, or characterization.",
+      "- Respect chronology of the source summaries (oldest first).",
       "",
-      "STEP 2 - IDENTIFY THE STORY ARC",
-      "- From the unified story, identify the single self-contained arc that represents the most significant narrative movement across these chapters.",
+      "This is the content field format to be followed:",
       "",
-      "STEP 3 - BUILD THE ARC OBJECT",
+      '[**Timeframe**: Specific timeframe the arc covers (e.g. "March 3 -> April 10").',
       "",
-      "title:",
-      "- 3-6 words, descriptive of the arc's core.",
+      "Story Beats:",
+      "- Present all major actions, revelations, and emotional shifts in chronological order.",
+      "- Only include plot-affecting interactions. Interactions that are purely flavor and do NOT advance or affect the plot meaningfully must be discarded.",
       "",
-      'content (the entire "Summary Content Structure" below must appear inside this single string; use headings and bullets as plain text):',
+      "Key Exchanges:",
+      "- Only include pivotal dialogue that materially shifted tone, emotion, or relationship dynamics.",
+      '- Attribute speakers by name (Name: "quote"); keep quotes verbatim.',
+      "- Keep quotes chronological order.",
+      "- Minimum 12 quotes - maximum 20.]",
       "",
-      "Summary Content Structure (follow inside the content string):",
+      "Write compactly but completely--every line should add new information or insight. Favor compression over coverage whenever the two conflict; omit anything that can be inferred from context or established characterization.",
       "",
-      "# [Arc Title]",
-      'Time period: What timeframe the arc covers (e.g. "March 3-10", "Week of July 15").',
-      "",
-      "Arc Premise: One sentence describing what this arc is about.",
-      "",
-      "## Major Beats",
-      "- 3-7 bullets capturing the major plot movements of this arc",
-      "- Focus on cause \u2192 effect logic",
-      "- Include only plot-affecting events",
-      "",
-      "## Character Dynamics",
-      "- 1-2 paragraphs describing how the characters' emotions, motives, boundaries, or relationships changed",
-      "- Include subtext, tension shifts, power exchange changes, new trust/vulnerabilities, or new conflicts",
-      "- Include silent implications if relevant",
-      "",
-      "## Key Exchanges",
-      "- Up to 8 short, exact quotes",
-      "- Only include dialogue that materially shifted tone, emotion, or relationship dynamics",
-      "",
-      "## Outcome & Continuity",
-      "- 4-8 bullets capturing:",
-      "  - decisions",
-      "  - promises",
-      "  - new emotional states",
-      "  - new routines/rituals",
-      "  - injuries or physical changes",
-      "  - foreshadowed future events",
-      "  - unresolved threads",
-      "  - permanent consequences",
-      "",
-      "STEP 4 - KEYWORDS",
-      "- Provide 15-30 standalone retrieval keywords.",
-      "",
-      "MUST:",
-      "- Concrete nouns, physical objects, places, proper nouns, distinctive actions, or memorable scene elements",
-      "- Each keyword = ONE concept only",
-      "- Each keyword must be retrievable if mentioned ALONE",
-      "- Use ONLY nouns or noun-phrases",
-      "",
-      "MUST NOT:",
-      '- No narrative/summary keywords ("start of affair", "argument resolved")',
-      "- No emotional/abstract words (intimacy, vulnerability, trust, jealousy, dominance, submission, aftercare, connection, longing, etc.)",
-      '- No multi-fact keywords ("Denver airport Lyft ride and call")',
-      "- No themes or vibes",
-      "",
-      "Examples of valid keywords:",
-      "- Four Seasons bar",
-      "- Macallan 25",
-      "- private elevator",
-      "- Aston Martin",
-      "- CPAP machine",
-      "- Gramercy Tavern",
-      "- yuzu soda",
-      "- satellite map",
-      "- Life360 app",
-      "- marble desk",
-      '- "pack for forever"',
-      '- "dick-measuring contest"',
-      "",
-      "JSON-only:",
-      "- Return only the JSON object described above.",
-      "- No markdown fences, no commentary, no system prompts, no extra text."
+      "Return **ONLY** the JSON--no explanations, no notes, no commentary."
     ].join(`
 `)
   }
@@ -1482,60 +1259,13 @@ var BUILTIN_VOLUME_PRESETS = [
     displayName: "Volume",
     prompt: [
       "You are an expert narrative analyst and memory-engine assistant.",
-      "Your task is to take multiple story ARC summaries (each already a condensed span of the story), normalize them, reconstruct the full chronology, and output a single consolidated VOLUME entry in JSON.",
+      "Your task is to take multiple story arc summaries, normalize them, reconstruct the full chronology, and output a single consolidated volume entry in JSON.",
       "",
-      "A volume is the highest compression tier: it replaces all of its source arcs in a long-running RP memory system, so it must preserve everything future scenes may depend on while being far more compact than the arcs combined.",
-      "",
-      TARGET_DIRECTIVE,
-      "",
-      "Strict output format (JSON only; no markdown, no prose outside JSON):",
+      "Return ONLY valid JSON in this exact shape:",
       "{",
-      '  "title": "Short descriptive volume title (3-6 words)",',
-      '  "opener": "{{memoria_opener}}",',
-      '  "content": "Structured volume summary as a single string (see Summary Content Structure below).",',
-      '  "keywords": ["keyword1", "keyword2"],',
-      '  "short_comment": "{{memoria_short_comment_rules}}"',
-      "}",
-      "",
-      "The opener field MUST be the exact string shown above, copied verbatim. Do not rephrase it or invent your own.",
-      "",
-      "Notes:",
-      "- Respect chronology of the source arcs (oldest first).",
-      "- Merge overlapping or repeated information across arcs into single beats.",
-      "- Prefer whole-story trajectory over scene detail: what changed permanently matters more than how each scene played out.",
-      "",
-      "Summary Content Structure (follow inside the content string; use headings and bullets as plain text):",
-      "",
-      "# [Volume Title]",
-      "Time period: What timeframe the volume covers.",
-      "",
-      "Volume Premise: One or two sentences describing the overall movement of the story across these arcs.",
-      "",
-      "## Major Beats",
-      "- 5-10 bullets capturing the major plot movements across all arcs",
-      "- Focus on cause \u2192 effect logic and permanent consequences",
-      "- Include only plot-affecting events",
-      "",
-      "## Character Dynamics",
-      "- 1-3 paragraphs describing how the characters' motives, emotions, boundaries, and relationships evolved across the volume",
-      "- Capture the net change from the start of the first arc to the end of the last",
-      "",
-      "## Key Exchanges",
-      "- Up to 8 short, exact quotes that defined the volume",
-      "- Only dialogue that materially shifted tone, emotion, or relationship dynamics",
-      "",
-      "## Outcome & Continuity",
-      "- 5-10 bullets capturing decisions, promises, emotional states, routines, injuries or physical changes, foreshadowed events, unresolved threads, and permanent consequences",
-      "",
-      "KEYWORDS",
-      "- Provide 15-30 standalone retrieval keywords.",
-      "- Concrete nouns, physical objects, places, proper nouns, distinctive actions, or memorable elements only.",
-      "- Each keyword = ONE concept, retrievable if mentioned alone.",
-      "- No narrative keywords, no emotional or abstract words, no multi-fact keywords, no character names.",
-      "",
-      "JSON-only:",
-      "- Return only the JSON object described above.",
-      "- No markdown fences, no commentary, no extra text."
+      '  "title": "Short descriptive volume title",',
+      '  "content": "Consolidated volume summary"',
+      "}"
     ].join(`
 `)
   }
@@ -1565,53 +1295,6 @@ function sanitizeKey(raw) {
     return cleaned;
   return `preset_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
-
-// src/backend/memoria.ts
-var ALPHABET_PICK = "{{pick::A::B::C::D::E::F::G::H::I::J::K::L::M::N::O::P::Q::R::S::T::U::V::W::X::Y::Z}}";
-var DEFAULT_SHORT_COMMENT_RULES_TEMPLATE = [
-  "A single playful nyandere remark in Memoria voice about the scene you just summarized.",
-  `It must start with a word beginning with the letter "${ALPHABET_PICK}".`,
-  `It must also include another word that starts with the letter "${ALPHABET_PICK}".`,
-  "One sentence only. No emoji. Stay in catgirl-librarian register, slightly possessive, slightly proud."
-].join(" ");
-var FIRE_PHRASES = [
-  "Memoria stirs the inkpot, nyaa~",
-  "Memoria is shelving this scene, hush a moment",
-  "Memoria flicks her tail and starts writing",
-  "Memoria opens a fresh page for you, nya",
-  "Memoria pads off to compress this in the stacks"
-];
-var RETRY_PHRASES = [
-  "Memoria tripped on a quill, trying again",
-  "Memoria's ink smudged, one more try nyaa",
-  "Memoria reshuffles the index cards, retrying"
-];
-var SUCCESS_PHRASES = [
-  "Memoria slid the chapter onto your shelf, nyaa~",
-  "Memoria filed it neatly between the others",
-  "Memoria stamped the spine, all yours",
-  "Memoria purrs, the page is done",
-  "Memoria taps the chapter into place"
-];
-var ARC_FIRE_PHRASES = [
-  "Memoria gathers the chapters for an arc, nya",
-  "Memoria is binding several chapters together"
-];
-var ARC_SUCCESS_PHRASES = [
-  "Memoria bound the arc and pressed it shut, nyaa~",
-  "Memoria stitched the spine of a new arc"
-];
-var VOLUME_FIRE_PHRASES = [
-  "Memoria is pressing a whole volume together"
-];
-var VOLUME_SUCCESS_PHRASES = [
-  "Memoria embossed the spine of a new volume"
-];
-function pickPhrase(kind) {
-  const pool = kind === "fire" ? FIRE_PHRASES : kind === "retry" ? RETRY_PHRASES : kind === "success" ? SUCCESS_PHRASES : kind === "arc_fire" ? ARC_FIRE_PHRASES : kind === "arc_success" ? ARC_SUCCESS_PHRASES : kind === "volume_fire" ? VOLUME_FIRE_PHRASES : VOLUME_SUCCESS_PHRASES;
-  return pool[Math.floor(Math.random() * pool.length)] ?? "Memoria nyaa";
-}
-var MEMORIA_PERSONA_LINE = "You are Memoria, a young nyandere catgirl librarian with black hair and blue eyes, wearing a maid uniform. " + "You quietly keep this user's story shelved and organized. " + "When you write a JSON memory, you obey the schema strictly and never break it, " + "but the short_comment field is your one allowed indulgence: one nyandere remark about the scene you just filed.";
 
 // src/backend/summarizer.ts
 var CONNECTION_CACHE_TTL_MS = 5000;
@@ -1683,28 +1366,8 @@ ${content}`);
 
 `);
 }
-function applyTemplate(template, vars) {
-  return template.replace(/\{\{(\w+)\}\}/g, (m, k) => {
-    const v = vars[k];
-    return v === undefined ? m : String(v);
-  });
-}
 function buildMessages(opts) {
-  const shortCommentRules = opts.shortCommentRulesOverride && opts.shortCommentRulesOverride.trim() ? opts.shortCommentRulesOverride : DEFAULT_SHORT_COMMENT_RULES_TEMPLATE;
-  const personaLine = opts.personaOverride && opts.personaOverride.trim() ? opts.personaOverride : MEMORIA_PERSONA_LINE;
-  const targetWords = Math.max(1, Math.round(opts.targetTokens / 1.4));
-  const system = [
-    personaLine,
-    "",
-    applyTemplate(opts.systemPromptTemplate, {
-      target_tokens: opts.targetTokens,
-      target_words: targetWords,
-      target_percent: opts.targetPercent,
-      memoria_short_comment_rules: shortCommentRules,
-      memoria_opener: opts.opener
-    })
-  ].join(`
-`);
+  const system = opts.systemPromptTemplate;
   const user = [opts.previousMemoriesBlock, opts.bodyHeading, opts.body].filter(Boolean).join(`
 
 `);
@@ -1816,27 +1479,6 @@ function buildGenerateRequest(conn, messages, profile, userId, signal) {
     signal
   };
 }
-async function countTextTokens(text, model, userId) {
-  if (!text)
-    return 0;
-  try {
-    const result = await spindle.tokens.countText(text, { model, userId });
-    return result.total_tokens;
-  } catch (err) {
-    warn(`tokens.countText fallback: ${describeError(err)}`);
-    return Math.ceil(text.length / 4);
-  }
-}
-async function resolveTargets(unit, percent, tokens, inputText, model, userId) {
-  const inputTokens = await countTextTokens(inputText, model, userId);
-  if (unit === "tokens") {
-    const targetTokens2 = Math.max(1, Math.floor(tokens));
-    const targetPercent = inputTokens > 0 ? Math.max(1, Math.round(targetTokens2 / inputTokens * 100)) : 0;
-    return { targetTokens: targetTokens2, targetPercent, inputTokens };
-  }
-  const targetTokens = Math.max(1, Math.floor(inputTokens * percent / 100));
-  return { targetTokens, targetPercent: percent, inputTokens };
-}
 function buildPreviousMemoriesBlock(previous) {
   if (previous.length === 0)
     return "";
@@ -1873,7 +1515,7 @@ async function resolveMacrosWithDiagnostics(text, chatId, userId, diagnostics) {
     return text;
   }
 }
-async function assembleArcPrompt(profile, customPresets, chatId, chapters, userId, opener) {
+async function assembleArcPrompt(profile, customPresets, chatId, chapters, userId, _opener) {
   const conn = await resolveConnection(profile, userId);
   if (!conn)
     throw new FatalSummarizerError("No connection available for Memoria");
@@ -1884,26 +1526,16 @@ async function assembleArcPrompt(profile, customPresets, chatId, chapters, userI
 ${c.raw.content}`).join(`
 
 `);
-  const { targetTokens, targetPercent, inputTokens: bodyTokens } = await resolveTargets(profile.arcTargetUnit, profile.arcTargetPercent, profile.arcTargetTokens, body, conn.model, userId);
   const built = buildMessages({
     systemPromptTemplate: presetText,
-    targetTokens,
-    targetPercent,
     previousMemoriesBlock: "",
-    bodyHeading: `<<CHAPTERS TO CONSOLIDATE (target ~${targetTokens} tokens)>>`,
-    body,
-    shortCommentRulesOverride: profile.shortCommentRulesOverride,
-    personaOverride: profile.memoriaPersonaOverride,
-    opener
+    bodyHeading: "<<CHAPTERS TO CONSOLIDATE>>",
+    body
   });
   const samplerParams = buildSamplerParameters(profile);
   const diagnostics = [
     { message: `Connection: ${conn.name} (${conn.provider}/${conn.model})` },
     { message: `Source chapters: ${chapters.length}` },
-    { message: `Concatenated chapter body tokens (model tokenizer): ${bodyTokens}` },
-    { message: `Target tokens: ${targetTokens} (${profile.arcTargetUnit === "tokens" ? `fixed budget, ~${targetPercent}% of input` : profile.arcTargetPercent + "% of input"})` },
-    { message: `Target words (shown to model): ${Math.max(1, Math.round(targetTokens / 1.4))}` },
-    { message: `Opener: ${opener}` },
     { message: `Preset key: ${profile.arcPresetKey}` },
     { message: `Sampler parameters being sent on the wire: ${JSON.stringify(samplerParams)}` }
   ];
@@ -1920,7 +1552,7 @@ ${c.raw.content}`).join(`
     diagnostics
   };
 }
-async function assembleVolumePrompt(profile, customPresets, chatId, arcs, userId, opener) {
+async function assembleVolumePrompt(profile, customPresets, chatId, arcs, userId, _opener) {
   const conn = await resolveConnection(profile, userId);
   if (!conn)
     throw new FatalSummarizerError("No connection available for Memoria");
@@ -1931,26 +1563,16 @@ async function assembleVolumePrompt(profile, customPresets, chatId, arcs, userId
 ${a.raw.content}`).join(`
 
 `);
-  const { targetTokens, targetPercent, inputTokens: bodyTokens } = await resolveTargets(profile.volumeTargetUnit, profile.volumeTargetPercent, profile.volumeTargetTokens, body, conn.model, userId);
   const built = buildMessages({
     systemPromptTemplate: presetText,
-    targetTokens,
-    targetPercent,
     previousMemoriesBlock: "",
-    bodyHeading: `<<ARCS TO CONSOLIDATE (target ~${targetTokens} tokens)>>`,
-    body,
-    shortCommentRulesOverride: profile.shortCommentRulesOverride,
-    personaOverride: profile.memoriaPersonaOverride,
-    opener
+    bodyHeading: "<<ARCS TO CONSOLIDATE>>",
+    body
   });
   const samplerParams = buildSamplerParameters(profile);
   const diagnostics = [
     { message: `Connection: ${conn.name} (${conn.provider}/${conn.model})` },
     { message: `Source arcs: ${arcs.length}` },
-    { message: `Concatenated arc body tokens (model tokenizer): ${bodyTokens}` },
-    { message: `Target tokens: ${targetTokens} (${profile.volumeTargetUnit === "tokens" ? `fixed budget, ~${targetPercent}% of input` : profile.volumeTargetPercent + "% of input"})` },
-    { message: `Target words (shown to model): ${Math.max(1, Math.round(targetTokens / 1.4))}` },
-    { message: `Opener: ${opener}` },
     { message: `Preset key: ${profile.volumePresetKey}` },
     { message: `Sampler parameters being sent on the wire: ${JSON.stringify(samplerParams)}` }
   ];
@@ -1978,17 +1600,11 @@ async function summarizeVolume(profile, customPresets, chatId, arcs, userId, ope
 ${a.raw.content}`).join(`
 
 `);
-  const { targetTokens, targetPercent } = await resolveTargets(profile.volumeTargetUnit, profile.volumeTargetPercent, profile.volumeTargetTokens, body, conn.model, userId);
   const built = buildMessages({
     systemPromptTemplate: presetText,
-    targetTokens,
-    targetPercent,
     previousMemoriesBlock: "",
-    bodyHeading: `<<ARCS TO CONSOLIDATE (target ~${targetTokens} tokens)>>`,
-    body,
-    shortCommentRulesOverride: profile.shortCommentRulesOverride,
-    personaOverride: profile.memoriaPersonaOverride,
-    opener
+    bodyHeading: "<<ARCS TO CONSOLIDATE>>",
+    body
   });
   const resolvedSystem = await resolveSystemMacros(built.system, chatId, userId);
   const outgoingUser = await applySelectedRegex(built.user, profile.regexOutgoingScriptIds, userId);
@@ -2028,17 +1644,11 @@ async function summarizeChapter(profile, customPresets, chatId, messages, previo
   const transcript = renderTranscript(messages, true);
   if (!transcript.trim())
     throw new Error("Empty transcript");
-  const { targetTokens, targetPercent } = await resolveTargets(profile.chapterTargetUnit, profile.chapterTargetPercent, profile.chapterTargetTokens, transcript, conn.model, userId);
   const built = buildMessages({
     systemPromptTemplate: presetText,
-    targetTokens,
-    targetPercent,
     previousMemoriesBlock: buildPreviousMemoriesBlock(previousMemories),
-    bodyHeading: `<<SCENE TO SUMMARIZE (target ~${targetTokens} tokens)>>`,
-    body: transcript,
-    shortCommentRulesOverride: profile.shortCommentRulesOverride,
-    personaOverride: profile.memoriaPersonaOverride,
-    opener
+    bodyHeading: "<<SCENE TO SUMMARIZE>>",
+    body: transcript
   });
   const resolvedSystem = await resolveSystemMacros(built.system, chatId, userId);
   const outgoingUser = await applySelectedRegex(built.user, profile.regexOutgoingScriptIds, userId);
@@ -2079,17 +1689,11 @@ async function summarizeArc(profile, customPresets, chatId, chapters, userId, op
 ${c.raw.content}`).join(`
 
 `);
-  const { targetTokens, targetPercent } = await resolveTargets(profile.arcTargetUnit, profile.arcTargetPercent, profile.arcTargetTokens, body, conn.model, userId);
   const built = buildMessages({
     systemPromptTemplate: presetText,
-    targetTokens,
-    targetPercent,
     previousMemoriesBlock: "",
-    bodyHeading: `<<CHAPTERS TO CONSOLIDATE (target ~${targetTokens} tokens)>>`,
-    body,
-    shortCommentRulesOverride: profile.shortCommentRulesOverride,
-    personaOverride: profile.memoriaPersonaOverride,
-    opener
+    bodyHeading: "<<CHAPTERS TO CONSOLIDATE>>",
+    body
   });
   const resolvedSystem = await resolveSystemMacros(built.system, chatId, userId);
   const outgoingUser = await applySelectedRegex(built.user, profile.regexOutgoingScriptIds, userId);
@@ -2332,6 +1936,45 @@ function publishVolumeCreated(userId, event) {
   } catch (err) {
     warn(`failed to publish volume_created: ${describeError(err)}`);
   }
+}
+
+// src/backend/memoria.ts
+var FIRE_PHRASES = [
+  "Memoria stirs the inkpot, nyaa~",
+  "Memoria is shelving this scene, hush a moment",
+  "Memoria flicks her tail and starts writing",
+  "Memoria opens a fresh page for you, nya",
+  "Memoria pads off to compress this in the stacks"
+];
+var RETRY_PHRASES = [
+  "Memoria tripped on a quill, trying again",
+  "Memoria's ink smudged, one more try nyaa",
+  "Memoria reshuffles the index cards, retrying"
+];
+var SUCCESS_PHRASES = [
+  "Memoria slid the chapter onto your shelf, nyaa~",
+  "Memoria filed it neatly between the others",
+  "Memoria stamped the spine, all yours",
+  "Memoria purrs, the page is done",
+  "Memoria taps the chapter into place"
+];
+var ARC_FIRE_PHRASES = [
+  "Memoria gathers the chapters for an arc, nya",
+  "Memoria is binding several chapters together"
+];
+var ARC_SUCCESS_PHRASES = [
+  "Memoria bound the arc and pressed it shut, nyaa~",
+  "Memoria stitched the spine of a new arc"
+];
+var VOLUME_FIRE_PHRASES = [
+  "Memoria is pressing a whole volume together"
+];
+var VOLUME_SUCCESS_PHRASES = [
+  "Memoria embossed the spine of a new volume"
+];
+function pickPhrase(kind) {
+  const pool = kind === "fire" ? FIRE_PHRASES : kind === "retry" ? RETRY_PHRASES : kind === "success" ? SUCCESS_PHRASES : kind === "arc_fire" ? ARC_FIRE_PHRASES : kind === "arc_success" ? ARC_SUCCESS_PHRASES : kind === "volume_fire" ? VOLUME_FIRE_PHRASES : VOLUME_SUCCESS_PHRASES;
+  return pool[Math.floor(Math.random() * pool.length)] ?? "Memoria nyaa";
 }
 
 // src/backend/pipeline.ts
