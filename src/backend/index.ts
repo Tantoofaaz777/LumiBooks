@@ -85,6 +85,18 @@ async function notify(
   }
 }
 
+function importSkipSummary(result: {
+  skippedNoRange: number;
+  skippedDuplicate: number;
+  skippedInvalidRange: number;
+}): string {
+  const parts: string[] = [];
+  if (result.skippedNoRange) parts.push(`${result.skippedNoRange} no range`);
+  if (result.skippedInvalidRange) parts.push(`${result.skippedInvalidRange} invalid range`);
+  if (result.skippedDuplicate) parts.push(`${result.skippedDuplicate} duplicate/overlap`);
+  return parts.length ? parts.join(", ") : "0 skipped";
+}
+
 const PUSH_DEBOUNCE_MS = 30;
 const pushTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingPushChatIds = new Map<string, string | null>();
@@ -755,10 +767,10 @@ spindle.onFrontendMessage(async (raw, userId) => {
         }
         const skipped = result.skippedDuplicate + result.skippedInvalidRange + result.skippedNoRange;
         const text = result.imported > 0
-          ? `Imported ${result.imported} entr${result.imported === 1 ? "y" : "ies"} from attached lorebooks${skipped ? ` (${skipped} skipped)` : ""}`
+          ? `Imported ${result.imported} entr${result.imported === 1 ? "y" : "ies"} from attached lorebooks${skipped ? ` (${importSkipSummary(result)})` : ""}`
           : result.scannedBooks === 0
             ? "No other attached lorebooks found to import"
-            : `No importable entries found (${skipped} skipped)`;
+            : `No importable entries found (${importSkipSummary(result)})`;
         await notify(userId, result.imported > 0 ? "success" : "info", text);
         await pushState(userId, msg.chatId);
         break;
