@@ -106,6 +106,30 @@ export const STYLES = `
 .lmb-status-grid > .lmb-label { opacity: 0.65; }
 .lmb-status-grid > .lmb-value { font-weight: 500; }
 
+.lmb-macro-list {
+  display: grid;
+  gap: 7px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.lmb-macro-row {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) 1fr;
+  gap: 10px;
+  align-items: start;
+}
+.lmb-macro-row code {
+  font-family: var(--lumiverse-font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+  font-size: 11px;
+  color: var(--lumiverse-primary, #6b8ff0);
+  background: var(--lumiverse-fill-hover, rgba(255,255,255,0.06));
+  border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
+  border-radius: 4px;
+  padding: 2px 5px;
+  white-space: nowrap;
+}
+.lmb-macro-row > div { opacity: 0.78; }
+
 .lmb-busy {
   display: flex;
   align-items: center;

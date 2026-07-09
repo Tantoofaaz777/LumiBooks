@@ -107,6 +107,30 @@ var STYLES = `
 .lmb-status-grid > .lmb-label { opacity: 0.65; }
 .lmb-status-grid > .lmb-value { font-weight: 500; }
 
+.lmb-macro-list {
+  display: grid;
+  gap: 7px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.lmb-macro-row {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) 1fr;
+  gap: 10px;
+  align-items: start;
+}
+.lmb-macro-row code {
+  font-family: var(--lumiverse-font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+  font-size: 11px;
+  color: var(--lumiverse-primary, #6b8ff0);
+  background: var(--lumiverse-fill-hover, rgba(255,255,255,0.06));
+  border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
+  border-radius: 4px;
+  padding: 2px 5px;
+  white-space: nowrap;
+}
+.lmb-macro-row > div { opacity: 0.78; }
+
 .lmb-busy {
   display: flex;
   align-items: center;
@@ -2456,16 +2480,44 @@ function findPresetText(state, category, key) {
 function renderAboutTab(host, state, send) {
   host.replaceChildren();
   if (state) {
+    renderNameMacros(host);
     renderNaming(host, state, send);
   }
   renderExtras(host, state, send);
 }
+function renderNameMacros(host) {
+  const sec = section("Name macros");
+  const macros = [
+    ["{{scene}}", "Message range covered by the entry, like 1-27. Falls back to the scene number when no range exists."],
+    ["{{sceneNumber}}", "Sequential number inside that tier: chapter 1, arc 1, volume 1, and so on."],
+    ["{{sceneNumberPadded}}", "Scene number padded to three digits, like 001, 002, 003."],
+    ["{{storyOrder}}", "Chronological order used by the lorebook entry."],
+    ["{{storyOrderPadded}}", "Story order padded to three digits."],
+    ["{{title}}", "Title returned by the model, or the fallback title for that tier."],
+    ["{{tier}}", "Entry kind: chapter, arc, or volume."],
+    ["{{chat}}", "Current chat name, or a short chat id if the name is unavailable."],
+    ["{{chatName}}", "Same value as {{chat}}."],
+    ["{{rootPrefix}}", "Adds [Root] only for inherited root entries; otherwise blank."],
+    ["{{turns}}", "Number of source messages covered by the entry, when available."],
+    ["{{sources}}", "Number of source chapters/arcs used by an arc or volume, when available."]
+  ];
+  const list = document.createElement("div");
+  list.className = "lmb-macro-list";
+  for (const [name, detail] of macros) {
+    const row = document.createElement("div");
+    row.className = "lmb-macro-row";
+    const key = document.createElement("code");
+    key.textContent = name;
+    const desc = document.createElement("div");
+    desc.textContent = detail;
+    row.append(key, desc);
+    list.appendChild(row);
+  }
+  sec.body.appendChild(list);
+  host.appendChild(sec.wrap);
+}
 function renderNaming(host, state, send) {
   const sec = section("Naming");
-  const help = document.createElement("div");
-  help.className = "lmb-help";
-  help.textContent = "Templates support Lumiverse macros like {{user}} and {{char}}, plus {{scene}}, {{storyOrder}}, {{sceneNumberPadded}}, {{title}}, and {{chat}}.";
-  sec.body.appendChild(help);
   const saveSetting = (patch) => {
     send({ type: "save_settings", patch, chatId: state.activeChatId });
   };
@@ -2476,10 +2528,6 @@ function renderNaming(host, state, send) {
     onBlur: (v) => saveSetting({ memoryOutletName: v })
   });
   outletField.body.appendChild(outletInput);
-  const macro = document.createElement("div");
-  macro.className = "lmb-field-hint";
-  macro.textContent = `Place {{outlet::${state.settings.memoryOutletName || "lumibooks"}}} in your preset where memories should appear.`;
-  outletField.body.appendChild(macro);
   sec.body.appendChild(outletField.wrap);
   const addTemplate = (label, key, placeholder) => {
     const row = field(label);
