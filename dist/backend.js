@@ -4452,6 +4452,78 @@ async function importAttachedLorebooks(chatId, userId) {
     invalidateBookCache(userId, chatId);
   return { imported, skippedNoRange, skippedDuplicate, skippedInvalidRange, scannedBooks, details, hideThroughIdx };
 }
+async function adoptAttachedLorebooks(chatId, userId, tier) {
+  const settings = await loadSettings(userId);
+  const targetBook = await ensureBookForChat(chatId, userId);
+  const attachedIds = await getChatAttachedBookIds(chatId, userId);
+  const sourceBookIds = [...new Set(attachedIds.filter((id) => id !== targetBook.id))];
+  const existing = await listLmbEntries(chatId, userId);
+  const firstStoryOrder = nextStoryOrder(existing);
+  const maxScene = existing.reduce((max, entry) => {
+    if (entry.meta.tier !== tier || entry.meta.isRoot)
+      return max;
+    return Math.max(max, entry.meta.sceneNumber ?? 0);
+  }, 0);
+  const sources = [];
+  let scannedBooks = 0;
+  let skippedAlreadyManaged = 0;
+  for (const bookId of sourceBookIds) {
+    const book = await spindle.world_books.get(bookId, userId).catch(() => null);
+    if (!book)
+      continue;
+    scannedBooks++;
+    const entries = await listAllEntries(bookId, userId).catch(() => []);
+    for (const entry of entries) {
+      if (entry.disabled)
+        continue;
+      const ext = entry.extensions || {};
+      if (ext[EXTENSION_KEY]) {
+        skippedAlreadyManaged++;
+        continue;
+      }
+      sources.push(entry);
+    }
+  }
+  sources.sort((a, b) => {
+    if (a.order_value !== b.order_value)
+      return a.order_value - b.order_value;
+    return a.created_at - b.created_at;
+  });
+  let adopted = 0;
+  for (const source of sources) {
+    const sceneNumber = maxScene + adopted + 1;
+    const storyOrder = firstStoryOrder + adopted;
+    const title = cleanTitle(source.comment, "") || cleanTitle(source.content.split(/\n+/, 1)[0] || "", "") || "Imported Memory";
+    const meta = {
+      tier,
+      chatId,
+      msgIds: [],
+      tokenCountInput: 0,
+      tokenCountOutput: approximateTokensFromChars((source.content || "").length),
+      model: "adopted",
+      connectionId: "adopted",
+      createdAt: source.created_at || Date.now(),
+      title,
+      sceneNumber,
+      storyOrder
+    };
+    const comment = await formatEntryName(settings, {
+      chatId,
+      userId,
+      tier: tier === 3 ? "volume" : tier === 2 ? "arc" : "chapter",
+      title,
+      sceneNumber,
+      storyOrder,
+      turnCount: 0,
+      sourceCount: 0
+    });
+    await createChapterEntry(targetBook.id, meta, source.content || "", comment, userId, source.key ?? [], settings.forceConstantEntries);
+    adopted++;
+  }
+  if (adopted > 0)
+    invalidateBookCache(userId, chatId);
+  return { adopted, skippedAlreadyManaged, scannedBooks };
+}
 function parseRange(text) {
   for (const pattern of RANGE_PATTERNS) {
     const match = pattern.exec(text);
@@ -5162,6 +5234,14 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const skipped = result.skippedDuplicate + result.skippedInvalidRange + result.skippedNoRange;
         const text = result.imported > 0 ? `Imported ${result.imported} entr${result.imported === 1 ? "y" : "ies"} from attached lorebooks${skipped ? ` (${importSkipSummary(result)})` : ""}${result.details.length ? `; ${result.details.join("; ")}` : ""}` : result.scannedBooks === 0 ? "No other attached lorebooks found to import" : `No importable entries found (${importSkipSummary(result)})${result.details.length ? `; ${result.details.join("; ")}` : ""}`;
         await notify(userId, result.imported > 0 ? "success" : "info", text);
+        await pushState(userId, msg.chatId);
+        break;
+      }
+      case "adopt_attached_lorebooks": {
+        const result = await adoptAttachedLorebooks(msg.chatId, userId, msg.tier);
+        const noun = msg.tier === 3 ? "volume" : msg.tier === 2 ? "arc" : "chapter";
+        const text = result.adopted > 0 ? `Adopted ${result.adopted} entr${result.adopted === 1 ? "y" : "ies"} as ${noun}${result.adopted === 1 ? "" : "s"}` : result.scannedBooks === 0 ? "No other attached lorebooks found to adopt" : `No unmanaged entries found to adopt${result.skippedAlreadyManaged ? ` (${result.skippedAlreadyManaged} already managed)` : ""}`;
+        await notify(userId, result.adopted > 0 ? "success" : "info", text);
         await pushState(userId, msg.chatId);
         break;
       }

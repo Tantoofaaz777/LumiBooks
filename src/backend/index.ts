@@ -65,7 +65,7 @@ import { buildState } from "./state";
 import { parseStmbPresetExport } from "./presets";
 import { syncProjectionEntry } from "./projection";
 import { syncNamingForChat } from "./naming-sync";
-import { importAttachedLorebooks } from "./import-lorebook";
+import { adoptAttachedLorebooks, importAttachedLorebooks } from "./import-lorebook";
 import { syncStoryOrderForChat } from "./story-order";
 
 async function notify(
@@ -773,6 +773,19 @@ spindle.onFrontendMessage(async (raw, userId) => {
             ? "No other attached lorebooks found to import"
             : `No importable entries found (${importSkipSummary(result)})${result.details.length ? `; ${result.details.join("; ")}` : ""}`;
         await notify(userId, result.imported > 0 ? "success" : "info", text);
+        await pushState(userId, msg.chatId);
+        break;
+      }
+
+      case "adopt_attached_lorebooks": {
+        const result = await adoptAttachedLorebooks(msg.chatId, userId, msg.tier);
+        const noun = msg.tier === 3 ? "volume" : msg.tier === 2 ? "arc" : "chapter";
+        const text = result.adopted > 0
+          ? `Adopted ${result.adopted} entr${result.adopted === 1 ? "y" : "ies"} as ${noun}${result.adopted === 1 ? "" : "s"}`
+          : result.scannedBooks === 0
+            ? "No other attached lorebooks found to adopt"
+            : `No unmanaged entries found to adopt${result.skippedAlreadyManaged ? ` (${result.skippedAlreadyManaged} already managed)` : ""}`;
+        await notify(userId, result.adopted > 0 ? "success" : "info", text);
         await pushState(userId, msg.chatId);
         break;
       }
