@@ -172,6 +172,7 @@ export type FrontendToBackend =
   | { type: "release_entry"; chatId: string; entryId: string }
   | { type: "regenerate_entry"; chatId: string; entryId: string }
   | { type: "update_entry"; chatId: string; entryId: string; patch: { content?: string; comment?: string } }
+  | { type: "bind_messages_to_entry"; chatId: string; entryId: string; messageIds: string[] }
   | { type: "prepare_adopt_lorebook"; chatId: string }
   | { type: "confirm_adopt_lorebook"; chatId: string; bookId: string; entries: AdoptLorebookPlanEntry[] }
   | { type: "set_force_constant"; value: boolean; chatId?: string | null }

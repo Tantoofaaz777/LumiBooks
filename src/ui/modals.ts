@@ -1,5 +1,12 @@
 import type { SpindleFrontendContext } from "lumiverse-spindle-types";
-import type { AdoptLorebookCandidate, AdoptLorebookPlanEntry, DryRunDiagnostic, DryRunMessage, FrontendToBackend } from "../types";
+import type {
+  AdoptLorebookCandidate,
+  AdoptLorebookPlanEntry,
+  ChapterView,
+  DryRunDiagnostic,
+  DryRunMessage,
+  FrontendToBackend,
+} from "../types";
 import { makeButton, numberInput, select, textArea, textInput } from "./components";
 
 export interface EditEntryFields {
@@ -278,6 +285,72 @@ export function openAdoptLorebookModal(
 
   root.append(bookField, help, list, actions);
   renderEntries();
+}
+
+export function openBindMessagesModal(
+  ctx: SpindleFrontendContext,
+  chatId: string,
+  chapters: ChapterView[],
+  messageIds: string[],
+  send: (msg: FrontendToBackend) => void,
+  onBound?: () => void,
+): void {
+  const bindable = chapters.filter((chapter) => !chapter.isRoot);
+  const handle = ctx.ui.showModal({ title: "Bind messages to chapter", width: 520, maxHeight: 520 });
+  const root = document.createElement("div");
+  root.className = "lmb-modal-form";
+  handle.root.appendChild(root);
+
+  if (bindable.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "lmb-empty";
+    empty.textContent = "No local chapters are available.";
+    const actions = document.createElement("div");
+    actions.className = "lmb-modal-actions";
+    actions.appendChild(makeButton("Close", () => handle.dismiss(), { primary: true }));
+    root.append(empty, actions);
+    return;
+  }
+
+  const sorted = bindable.slice().sort((a, b) => {
+    const ao = a.meta.storyOrder ?? a.meta.sceneNumber ?? 0;
+    const bo = b.meta.storyOrder ?? b.meta.sceneNumber ?? 0;
+    return ao - bo;
+  });
+  let selectedEntryId = sorted.find((chapter) => chapter.meta.msgIds.length === 0)?.entryId ?? sorted[0]!.entryId;
+
+  const chapterSelect = select({
+    value: selectedEntryId,
+    options: sorted.map((chapter) => {
+      const title = chapter.comment || chapter.meta.title || chapter.entryId.slice(0, 8);
+      return { value: chapter.entryId, label: `${title} (${chapter.meta.msgIds.length} msgs)` };
+    }),
+    onChange: (v) => { selectedEntryId = v; },
+  });
+
+  const field = document.createElement("div");
+  field.className = "lmb-field";
+  const label = document.createElement("div");
+  label.className = "lmb-field-label";
+  label.textContent = "Chapter";
+  field.append(label, chapterSelect);
+
+  const help = document.createElement("div");
+  help.className = "lmb-help";
+  help.textContent = `This will mark ${messageIds.length} selected message${messageIds.length === 1 ? "" : "s"} as covered by the chosen chapter.`;
+
+  const actions = document.createElement("div");
+  actions.className = "lmb-modal-actions";
+  actions.append(
+    makeButton("Cancel", () => handle.dismiss()),
+    makeButton("Bind", () => {
+      send({ type: "bind_messages_to_entry", chatId, entryId: selectedEntryId, messageIds });
+      onBound?.();
+      handle.dismiss();
+    }, { primary: true }),
+  );
+
+  root.append(field, help, actions);
 }
 
 export function promptForString(

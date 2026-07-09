@@ -10,7 +10,7 @@ import {
   textInput,
   textNode,
 } from "../components";
-import { confirmDelete } from "../modals";
+import { confirmDelete, openBindMessagesModal } from "../modals";
 
 interface MakeTabContext {
   state: FrontendState;
@@ -67,7 +67,7 @@ export function renderMakeTab(
         host.appendChild(textNode("Open a chat to pick messages", "lmb-empty"));
         return;
       }
-      renderChapterPicker(host, c, send);
+      renderChapterPicker(host, c, ctx, send);
       renderArcPicker(host, c, send);
       renderVolumePicker(host, c, send);
       renderContinuity(host, c, ctx, send);
@@ -79,6 +79,7 @@ export function renderMakeTab(
 function renderChapterPicker(
   host: HTMLElement,
   c: MakeTabContext,
+  ctx: SpindleFrontendContext,
   send: (msg: FrontendToBackend) => void,
 ): void {
   const sec = section("Pick messages for a chapter");
@@ -146,12 +147,27 @@ function renderChapterPicker(
     send({ type: "set_message_excluded", chatId, messageIds: ids, excluded: !allSelectedExcluded() });
   }, { title: "Toggle exclusion for the selected messages. Excluded messages are never hidden, replaced, or summarized, and they split compression. Click again to allow compression." });
 
+  const bindBtn = makeButton("Bind to chapter", () => {
+    const ids = Array.from(c.selectedMessages);
+    if (ids.length === 0) return;
+    openBindMessagesModal(ctx, chatId, c.state.chapters, ids, send, () => {
+      localState.selectedMessages.clear();
+      c.selectedMessages.clear();
+      localState.anchorMessageId = null;
+      c.rerender();
+    });
+  }, {
+    disabled: c.selectedMessages.size === 0 || c.state.chapters.filter((chapter) => !chapter.isRoot).length === 0,
+    title: "Mark the selected messages as already covered by an existing chapter",
+  });
+
   const syncControls = (): void => {
     const tokens = sumSelectedTokens(c);
     counts.textContent = `${c.selectedMessages.size} selected (~${formatTokens(tokens)} tokens before)`;
     const empty = c.selectedMessages.size === 0;
     compressBtn.disabled = empty;
     excludeBtn.disabled = empty;
+    bindBtn.disabled = empty || c.state.chapters.filter((chapter) => !chapter.isRoot).length === 0;
     excludeBtn.classList.toggle("active", allSelectedExcluded());
   };
 
@@ -166,6 +182,7 @@ function renderChapterPicker(
   actions.className = "lmb-actions";
   actions.append(
     compressBtn,
+    bindBtn,
     makeButton("Pick uncompressed", () => {
       const visible = filterMessages(c).filter((m) => !m.covered && !m.excluded);
       const next = new Set(visible.map((m) => m.id));

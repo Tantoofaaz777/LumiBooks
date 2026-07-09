@@ -5068,6 +5068,38 @@ spindle.onFrontendMessage(async (raw, userId) => {
         await pushState(userId, msg.chatId);
         break;
       }
+      case "bind_messages_to_entry": {
+        const messages = await spindle.chat.getMessages(msg.chatId);
+        const selected = new Set(msg.messageIds);
+        const ordered = messages.map((message, index) => ({ message, index })).filter(({ message }) => selected.has(message.id));
+        if (ordered.length === 0) {
+          await notify(userId, "warn", "No matching chat messages were found to bind");
+          break;
+        }
+        const entries = await listLmbEntries(msg.chatId, userId);
+        const entry = entries.find((candidate) => candidate.raw.id === msg.entryId);
+        if (!entry) {
+          await notify(userId, "warn", "Memoria can't find that chapter anymore");
+          break;
+        }
+        if (entry.meta.tier !== 1 || entry.meta.isRoot) {
+          await notify(userId, "warn", "Messages can only be bound directly to a local chapter");
+          break;
+        }
+        const msgIds = ordered.map(({ message }) => message.id);
+        const firstMsgIdx = Math.min(...ordered.map(({ index }) => index));
+        const lastMsgIdx = Math.max(...ordered.map(({ index }) => index));
+        const tokenCountInput = ordered.reduce((sum, { message }) => sum + approximateTokensFromChars((message.content || "").length), 0);
+        await patchEntryMeta(entry, { msgIds, firstMsgIdx, lastMsgIdx, tokenCountInput }, userId);
+        invalidateBookCache(userId, msg.chatId);
+        const coverage = await buildCoverage(msg.chatId, userId);
+        await syncHiddenForCoveredMessages(msg.chatId, messages, coverage, userId, true, lastMsgIdx).catch((err) => {
+          warn(`bind_messages_to_entry hide sync failed: ${describeError(err)}`);
+        });
+        await notify(userId, "success", `Bound ${msgIds.length} message${msgIds.length === 1 ? "" : "s"} to that chapter`);
+        await pushState(userId, msg.chatId);
+        break;
+      }
       case "prepare_adopt_lorebook": {
         const books = await listAdoptLorebookCandidates(msg.chatId, userId);
         send({ type: "adopt_lorebook_candidates", chatId: msg.chatId, books }, userId);
