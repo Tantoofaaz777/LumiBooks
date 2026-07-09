@@ -762,12 +762,6 @@ function labelled(label, child) {
   wrap.appendChild(child);
   return wrap;
 }
-function pill(text, tone) {
-  const el = document.createElement("span");
-  el.className = `lmb-pill${tone ? " " + tone : ""}`;
-  el.textContent = text;
-  return el;
-}
 function textNode(text, className) {
   const el = document.createElement("div");
   if (className)
@@ -1169,7 +1163,6 @@ function renderBooksTab(host, state, ctx, send) {
   renderStatus(host, state, send);
   renderFailure(host, state, send);
   renderPreviews(host, state, send);
-  renderActions(host, state);
   renderEntries(host, state, ctx, send);
 }
 function renderStatus(host, state, send) {
@@ -1183,8 +1176,9 @@ function renderStatus(host, state, send) {
   addRow(grid, "Chat", state.activeChatName || state.activeChatId.slice(0, 8));
   if (state.activeCharacterName)
     addRow(grid, "Character", state.activeCharacterName);
+  addRow(grid, "Lorebook", state.bookName || (state.bookId ? "Book ready" : "No book yet"));
   addRow(grid, "Messages", `${state.coverage.totalMessages} (${state.coverage.coveredMessages} covered)`);
-  addRow(grid, "Uncompressed tail", `${state.coverage.uncoveredMessages} msgs, ~${formatTokens(state.coverage.approxUncoveredTokens)} tokens`);
+  addRow(grid, "Uncompressed", `${state.coverage.uncoveredMessages} msgs, ~${formatTokens(state.coverage.approxUncoveredTokens)} tokens`);
   sec.body.appendChild(grid);
   inflightBusyLabels.clear();
   for (const b of state.busy) {
@@ -1299,26 +1293,8 @@ function renderPreviewCard(preview, chatId, send) {
   card.appendChild(actions);
   return card;
 }
-function renderActions(host, state) {
-  if (!state.activeChatId)
-    return;
-  const sec = section("Lorebook");
-  const row = document.createElement("div");
-  row.className = "lmb-actions";
-  if (!state.bookId) {
-    const empty = pill("No book yet", "warn");
-    empty.title = "Memoria will create this chat's world book the first time a chapter is filed";
-    row.appendChild(empty);
-  } else {
-    const tag = pill(state.bookName ? state.bookName : "Book ready", "ok");
-    tag.title = "World book where chapters and arcs are stored for this chat (bound to this chat in Lumiverse → Lorebook → This Chat Only)";
-    row.appendChild(tag);
-  }
-  sec.body.appendChild(row);
-  host.appendChild(sec.wrap);
-}
 function renderEntries(host, state, ctx, send) {
-  const sec = section("Chapters and arcs");
+  const sec = untitledSection();
   if (!state.activeChatId) {
     sec.body.appendChild(textNode("No active chat", "lmb-empty"));
     host.appendChild(sec.wrap);
@@ -1357,6 +1333,14 @@ function renderEntries(host, state, ctx, send) {
     sec.body.appendChild(list);
   }
   host.appendChild(sec.wrap);
+}
+function untitledSection() {
+  const wrap = document.createElement("div");
+  wrap.className = "lmb-section";
+  const body = document.createElement("div");
+  body.className = "lmb-collapsible-body";
+  wrap.appendChild(body);
+  return { wrap, body };
 }
 function buildSubtitle(text) {
   const d = document.createElement("div");

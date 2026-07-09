@@ -4,7 +4,6 @@ import {
   field,
   formatTokens,
   makeButton,
-  pill,
   section,
   span,
   textArea,
@@ -44,7 +43,6 @@ export function renderBooksTab(
   renderStatus(host, state, send);
   renderFailure(host, state, send);
   renderPreviews(host, state, send);
-  renderActions(host, state);
   renderEntries(host, state, ctx, send);
 }
 
@@ -58,10 +56,11 @@ function renderStatus(host: HTMLElement, state: FrontendState, send: (m: Fronten
   grid.className = "lmb-status-grid";
   addRow(grid, "Chat", state.activeChatName || state.activeChatId.slice(0, 8));
   if (state.activeCharacterName) addRow(grid, "Character", state.activeCharacterName);
+  addRow(grid, "Lorebook", state.bookName || (state.bookId ? "Book ready" : "No book yet"));
   addRow(grid, "Messages", `${state.coverage.totalMessages} (${state.coverage.coveredMessages} covered)`);
   addRow(
     grid,
-    "Uncompressed tail",
+    "Uncompressed",
     `${state.coverage.uncoveredMessages} msgs, ~${formatTokens(state.coverage.approxUncoveredTokens)} tokens`,
   );
   sec.body.appendChild(grid);
@@ -198,31 +197,13 @@ function renderPreviewCard(preview: PendingPreview, chatId: string, send: (m: Fr
   return card;
 }
 
-function renderActions(host: HTMLElement, state: FrontendState): void {
-  if (!state.activeChatId) return;
-  const sec = section("Lorebook");
-  const row = document.createElement("div");
-  row.className = "lmb-actions";
-  if (!state.bookId) {
-    const empty = pill("No book yet", "warn");
-    empty.title = "Memoria will create this chat's world book the first time a chapter is filed";
-    row.appendChild(empty);
-  } else {
-    const tag = pill(state.bookName ? state.bookName : "Book ready", "ok");
-    tag.title = "World book where chapters and arcs are stored for this chat (bound to this chat in Lumiverse → Lorebook → This Chat Only)";
-    row.appendChild(tag);
-  }
-  sec.body.appendChild(row);
-  host.appendChild(sec.wrap);
-}
-
 function renderEntries(
   host: HTMLElement,
   state: FrontendState,
   ctx: SpindleFrontendContext,
   send: (m: FrontendToBackend) => void,
 ): void {
-  const sec = section("Chapters and arcs");
+  const sec = untitledSection();
   if (!state.activeChatId) {
     sec.body.appendChild(textNode("No active chat", "lmb-empty"));
     host.appendChild(sec.wrap);
@@ -258,6 +239,15 @@ function renderEntries(
     sec.body.appendChild(list);
   }
   host.appendChild(sec.wrap);
+}
+
+function untitledSection(): { wrap: HTMLElement; body: HTMLElement } {
+  const wrap = document.createElement("div");
+  wrap.className = "lmb-section";
+  const body = document.createElement("div");
+  body.className = "lmb-collapsible-body";
+  wrap.appendChild(body);
+  return { wrap, body };
 }
 
 function buildSubtitle(text: string): HTMLElement {
