@@ -1027,10 +1027,13 @@ function openAdoptLorebookModal(ctx, chatId, books, send) {
       const title = document.createElement("div");
       title.className = "lmb-entry-title";
       title.textContent = entry.comment;
-      if (entry.alreadyManaged)
-        title.textContent += " (already managed)";
+      const belongsToThisChat = entry.managedChatId === chatId;
+      if (belongsToThisChat)
+        title.textContent += " (already here)";
+      else if (entry.alreadyManaged)
+        title.textContent += " (from another chat)";
       const tier = select({
-        value: entry.alreadyManaged ? "0" : "1",
+        value: belongsToThisChat ? "0" : "1",
         options: [
           { value: "1", label: "Chapter" },
           { value: "2", label: "Arc" },
@@ -1038,13 +1041,13 @@ function openAdoptLorebookModal(ctx, chatId, books, send) {
           { value: "0", label: "Skip" }
         ]
       });
-      if (entry.alreadyManaged)
+      if (belongsToThisChat)
         tier.disabled = true;
       const order = numberInput({
         value: index + 1,
         min: 1,
         step: 1,
-        disabled: entry.alreadyManaged
+        disabled: belongsToThisChat
       });
       head.append(title, tier, order);
       card.appendChild(head);

@@ -3,7 +3,7 @@ declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 import type { WorldBookEntryDTO } from "lumiverse-spindle-types";
 import type { AdoptLorebookCandidate, AdoptLorebookPlanEntry } from "../types";
 import type { LMBEntryMeta } from "../shared";
-import { EXTENSION_KEY, approximateTokensFromChars, normalizeOutletName } from "../shared";
+import { EXTENSION_KEY, approximateTokensFromChars, normalizeEntryMeta, normalizeOutletName } from "../shared";
 import { loadSettings } from "./storage";
 import {
   adoptBookForChat,
@@ -31,13 +31,15 @@ export async function listAdoptLorebookCandidates(chatId: string, userId: string
       })
       .map((entry) => {
         const ext = (entry.extensions || {}) as Record<string, unknown>;
+        const existingMeta = normalizeEntryMeta(ext[EXTENSION_KEY]);
         return {
           entryId: entry.id,
           comment: entry.comment || "(untitled)",
           preview: (entry.content || "").slice(0, 220).replace(/\s+/g, " ").trim(),
           orderValue: entry.order_value,
           contentChars: (entry.content || "").length,
-          alreadyManaged: !!ext[EXTENSION_KEY],
+          alreadyManaged: !!existingMeta,
+          managedChatId: existingMeta?.chatId ?? null,
         };
       });
     if (drafts.length > 0) books.push({ bookId: book.id, name: book.name || book.id, entries: drafts });
@@ -79,27 +81,34 @@ export async function confirmAdoptLorebook(
       continue;
     }
     const ext = (source.extensions || {}) as Record<string, unknown>;
-    if (ext[EXTENSION_KEY]) {
+    const existingMeta = normalizeEntryMeta(ext[EXTENSION_KEY]);
+    if (existingMeta?.chatId === chatId) {
       skipped++;
       continue;
     }
     const tier = item.tier as 1 | 2 | 3;
     const sceneNumber = (sceneCounts.get(tier) ?? 0) + 1;
     sceneCounts.set(tier, sceneNumber);
-    const title = cleanTitle(source.comment) || cleanTitle(source.content.split(/\n+/, 1)[0] || "") || "Imported Memory";
+    const title = existingMeta?.title || cleanTitle(source.comment) || cleanTitle(source.content.split(/\n+/, 1)[0] || "") || "Imported entry";
     const meta: LMBEntryMeta = {
+      ...existingMeta,
       tier,
       chatId,
       msgIds: [],
+      firstMsgIdx: undefined,
+      lastMsgIdx: undefined,
       tokenCountInput: 0,
       tokenCountOutput: approximateTokensFromChars((source.content || "").length),
-      model: "adopted",
-      connectionId: "adopted",
-      createdAt: source.created_at || Date.now(),
+      model: existingMeta?.model || "adopted",
+      connectionId: existingMeta?.connectionId || "adopted",
+      createdAt: existingMeta?.createdAt || source.created_at || Date.now(),
       title,
       sceneNumber,
       storyOrder: item.storyOrder,
       preserveComment: true,
+      supersededByEntryId: null,
+      isRoot: undefined,
+      rootOrigin: undefined,
     };
     await spindle.world_books.entries.update(
       source.id,

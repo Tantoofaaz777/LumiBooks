@@ -103,6 +103,7 @@ export interface AdoptLorebookEntryDraft {
   orderValue: number;
   contentChars: number;
   alreadyManaged: boolean;
+  managedChatId: string | null;
 }
 
 export interface AdoptLorebookCandidate {

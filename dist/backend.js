@@ -121,7 +121,7 @@ function normalizeProfile(raw) {
     regexIncomingScriptIds: Array.isArray(v.regexIncomingScriptIds) ? v.regexIncomingScriptIds.filter((x) => typeof x === "string") : base.regexIncomingScriptIds,
     connectionId: typeof v.connectionId === "string" && v.connectionId.trim() ? v.connectionId : null,
     samplers: normalizeSamplers(v.samplers),
-    hideCoveredMessages: typeof v.hideCoveredMessages === "boolean" ? v.hideCoveredMessages : base.hideCoveredMessages,
+    hideCoveredMessages: true,
     showMemoryPreviews: typeof v.showMemoryPreviews === "boolean" ? v.showMemoryPreviews : base.showMemoryPreviews,
     retryCount: clampInt(v.retryCount, 0, 10, base.retryCount),
     ttftTimeoutSecs: clampInt(v.ttftTimeoutSecs, 10, 600, base.ttftTimeoutSecs)
@@ -3573,13 +3573,15 @@ async function listAdoptLorebookCandidates(chatId, userId) {
       return a.created_at - b.created_at;
     }).map((entry) => {
       const ext = entry.extensions || {};
+      const existingMeta = normalizeEntryMeta(ext[EXTENSION_KEY]);
       return {
         entryId: entry.id,
         comment: entry.comment || "(untitled)",
         preview: (entry.content || "").slice(0, 220).replace(/\s+/g, " ").trim(),
         orderValue: entry.order_value,
         contentChars: (entry.content || "").length,
-        alreadyManaged: !!ext[EXTENSION_KEY]
+        alreadyManaged: !!existingMeta,
+        managedChatId: existingMeta?.chatId ?? null
       };
     });
     if (drafts.length > 0)
@@ -3613,27 +3615,34 @@ async function confirmAdoptLorebook(chatId, userId, bookId, plan) {
       continue;
     }
     const ext = source.extensions || {};
-    if (ext[EXTENSION_KEY]) {
+    const existingMeta = normalizeEntryMeta(ext[EXTENSION_KEY]);
+    if (existingMeta?.chatId === chatId) {
       skipped++;
       continue;
     }
     const tier = item.tier;
     const sceneNumber = (sceneCounts.get(tier) ?? 0) + 1;
     sceneCounts.set(tier, sceneNumber);
-    const title = cleanTitle(source.comment) || cleanTitle(source.content.split(/\n+/, 1)[0] || "") || "Imported Memory";
+    const title = existingMeta?.title || cleanTitle(source.comment) || cleanTitle(source.content.split(/\n+/, 1)[0] || "") || "Imported entry";
     const meta = {
+      ...existingMeta,
       tier,
       chatId,
       msgIds: [],
+      firstMsgIdx: undefined,
+      lastMsgIdx: undefined,
       tokenCountInput: 0,
       tokenCountOutput: approximateTokensFromChars((source.content || "").length),
-      model: "adopted",
-      connectionId: "adopted",
-      createdAt: source.created_at || Date.now(),
+      model: existingMeta?.model || "adopted",
+      connectionId: existingMeta?.connectionId || "adopted",
+      createdAt: existingMeta?.createdAt || source.created_at || Date.now(),
       title,
       sceneNumber,
       storyOrder: item.storyOrder,
-      preserveComment: true
+      preserveComment: true,
+      supersededByEntryId: null,
+      isRoot: undefined,
+      rootOrigin: undefined
     };
     await spindle.world_books.entries.update(source.id, {
       constant: true,

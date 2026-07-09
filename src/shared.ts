@@ -213,7 +213,7 @@ export function normalizeProfile(raw: unknown): LMBProfile | null {
       : base.regexIncomingScriptIds,
     connectionId: typeof v.connectionId === "string" && v.connectionId.trim() ? v.connectionId : null,
     samplers: normalizeSamplers(v.samplers),
-    hideCoveredMessages: typeof v.hideCoveredMessages === "boolean" ? v.hideCoveredMessages : base.hideCoveredMessages,
+    hideCoveredMessages: true,
     showMemoryPreviews: typeof v.showMemoryPreviews === "boolean" ? v.showMemoryPreviews : base.showMemoryPreviews,
     retryCount: clampInt(v.retryCount, 0, 10, base.retryCount),
     ttftTimeoutSecs: clampInt(v.ttftTimeoutSecs, 10, 600, base.ttftTimeoutSecs),
