@@ -4359,6 +4359,132 @@ async function syncNamingForChat(chatId, userId) {
   invalidateBookCache(userId, chatId);
 }
 
+// src/backend/import-lorebook.ts
+var RANGE_PATTERNS = [
+  /\((?:msgs?|messages?)?\s*(\d{1,6})\s*[-\u2013\u2014]\s*(\d{1,6})\)/i,
+  /\bmsgs?\s*(\d{1,6})\s*[-\u2013\u2014]\s*(\d{1,6})\b/i,
+  /\bmessages?\s*(\d{1,6})\s*[-\u2013\u2014]\s*(\d{1,6})\b/i
+];
+async function importAttachedLorebooks(chatId, userId) {
+  const settings = await loadSettings(userId);
+  const targetBook = await ensureBookForChat(chatId, userId);
+  const attachedIds = await getChatAttachedBookIds(chatId, userId);
+  const sourceBookIds = [...new Set(attachedIds.filter((id) => id !== targetBook.id))];
+  const messages = await spindle.chat.getMessages(chatId);
+  const existing = await listLmbEntries(chatId, userId);
+  const existingRanges = new Set(existing.filter((entry) => entry.meta.tier === 1).map((entry) => `${entry.meta.firstMsgIdx ?? -1}:${entry.meta.lastMsgIdx ?? -1}`));
+  const occupiedRanges = existing.filter((entry) => entry.meta.tier === 1).map((entry) => ({
+    first: entry.meta.firstMsgIdx ?? -1,
+    last: entry.meta.lastMsgIdx ?? -1
+  })).filter((range) => range.first >= 0 && range.last >= range.first);
+  const candidates = [];
+  let skippedNoRange = 0;
+  let skippedDuplicate = 0;
+  let skippedInvalidRange = 0;
+  let scannedBooks = 0;
+  for (const bookId of sourceBookIds) {
+    const book = await spindle.world_books.get(bookId, userId).catch(() => null);
+    if (!book)
+      continue;
+    scannedBooks++;
+    const entries = await listAllEntries(bookId, userId).catch(() => []);
+    for (const entry of entries) {
+      if (entry.disabled)
+        continue;
+      const ext = entry.extensions || {};
+      if (ext[EXTENSION_KEY])
+        continue;
+      const parsed = parseRange(entry.comment || entry.content.split(/\n+/, 1)[0] || "");
+      if (!parsed) {
+        skippedNoRange++;
+        continue;
+      }
+      const firstMsgIdx = parsed.start - 1;
+      const lastMsgIdx = parsed.end - 1;
+      if (firstMsgIdx < 0 || lastMsgIdx < firstMsgIdx || lastMsgIdx >= messages.length) {
+        skippedInvalidRange++;
+        continue;
+      }
+      const key2 = `${firstMsgIdx}:${lastMsgIdx}`;
+      if (existingRanges.has(key2)) {
+        skippedDuplicate++;
+        continue;
+      }
+      if (occupiedRanges.some((range) => rangesOverlap(firstMsgIdx, lastMsgIdx, range.first, range.last))) {
+        skippedDuplicate++;
+        continue;
+      }
+      existingRanges.add(key2);
+      occupiedRanges.push({ first: firstMsgIdx, last: lastMsgIdx });
+      candidates.push({
+        source: entry,
+        firstMsgIdx,
+        lastMsgIdx,
+        title: cleanTitle(entry.comment, parsed.raw) || cleanTitle(entry.content.split(/\n+/, 1)[0] || "", parsed.raw) || "Imported Memory"
+      });
+    }
+  }
+  candidates.sort((a, b) => a.firstMsgIdx - b.firstMsgIdx);
+  const maxScene = existing.reduce((max, entry) => {
+    if (entry.meta.tier !== 1 || entry.meta.isRoot)
+      return max;
+    return Math.max(max, entry.meta.sceneNumber ?? 0);
+  }, 0);
+  let imported = 0;
+  for (const candidate of candidates) {
+    const msgIds = messages.slice(candidate.firstMsgIdx, candidate.lastMsgIdx + 1).map((message) => message.id);
+    const sceneNumber = maxScene + imported + 1;
+    const meta = {
+      tier: 1,
+      chatId,
+      msgIds,
+      firstMsgIdx: candidate.firstMsgIdx,
+      lastMsgIdx: candidate.lastMsgIdx,
+      tokenCountInput: 0,
+      tokenCountOutput: approximateTokensFromChars((candidate.source.content || "").length),
+      model: "imported",
+      connectionId: "imported",
+      createdAt: candidate.source.created_at || Date.now(),
+      title: candidate.title,
+      sceneNumber
+    };
+    const comment = await formatEntryName(settings, {
+      chatId,
+      userId,
+      tier: "chapter",
+      title: meta.title ?? "",
+      sceneNumber,
+      firstMsgIdx: meta.firstMsgIdx,
+      lastMsgIdx: meta.lastMsgIdx,
+      turnCount: msgIds.length
+    });
+    await createChapterEntry(targetBook.id, meta, candidate.source.content || "", comment, userId, candidate.source.key ?? [], settings.forceConstantEntries);
+    imported++;
+  }
+  if (imported > 0)
+    invalidateBookCache(userId, chatId);
+  return { imported, skippedNoRange, skippedDuplicate, skippedInvalidRange, scannedBooks };
+}
+function parseRange(text) {
+  for (const pattern of RANGE_PATTERNS) {
+    const match = pattern.exec(text);
+    if (!match)
+      continue;
+    const start = Number(match[1]);
+    const end = Number(match[2]);
+    if (!Number.isFinite(start) || !Number.isFinite(end))
+      continue;
+    return { start, end, raw: match[0] };
+  }
+  return null;
+}
+function cleanTitle(text, rangeRaw) {
+  return text.replace(rangeRaw, "").replace(/\bmsgs?\s*$/i, "").replace(/\bmessages?\s*$/i, "").replace(/[-\u2013\u2014:#[\]()[\]\s]+$/g, "").replace(/^\s*[-\u2013\u2014:#[\]()[\]\s]+/g, "").trim();
+}
+function rangesOverlap(aFirst, aLast, bFirst, bLast) {
+  return aFirst <= bLast && bFirst <= aLast;
+}
+
 // src/backend/index.ts
 async function notify(userId, tone, text, automation = false) {
   try {
@@ -5002,6 +5128,23 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const messages = await spindle.chat.getMessages(msg.chatId);
         const coverage = await buildCoverage(msg.chatId, userId);
         await syncHiddenForCoveredMessages(msg.chatId, messages, coverage, userId, true);
+        await pushState(userId, msg.chatId);
+        break;
+      }
+      case "import_attached_lorebooks": {
+        const result = await importAttachedLorebooks(msg.chatId, userId);
+        if (result.imported > 0) {
+          const settings = await loadSettings(userId);
+          const profile = settings.profiles.find((p) => p.id === settings.activeProfileId);
+          if (profile?.hideCoveredMessages) {
+            const messages = await spindle.chat.getMessages(msg.chatId);
+            const coverage = await buildCoverage(msg.chatId, userId);
+            await syncHiddenForCoveredMessages(msg.chatId, messages, coverage, userId, true);
+          }
+        }
+        const skipped = result.skippedDuplicate + result.skippedInvalidRange + result.skippedNoRange;
+        const text = result.imported > 0 ? `Imported ${result.imported} entr${result.imported === 1 ? "y" : "ies"} from attached lorebooks${skipped ? ` (${skipped} skipped)` : ""}` : result.scannedBooks === 0 ? "No other attached lorebooks found to import" : `No importable entries found (${skipped} skipped)`;
+        await notify(userId, result.imported > 0 ? "success" : "info", text);
         await pushState(userId, msg.chatId);
         break;
       }

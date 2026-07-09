@@ -65,6 +65,7 @@ import { buildState } from "./state";
 import { parseStmbPresetExport } from "./presets";
 import { syncProjectionEntry } from "./projection";
 import { syncNamingForChat } from "./naming-sync";
+import { importAttachedLorebooks } from "./import-lorebook";
 
 async function notify(
   userId: string,
@@ -737,6 +738,28 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const messages = await spindle.chat.getMessages(msg.chatId);
         const coverage = await buildCoverage(msg.chatId, userId);
         await syncHiddenForCoveredMessages(msg.chatId, messages, coverage, userId, true);
+        await pushState(userId, msg.chatId);
+        break;
+      }
+
+      case "import_attached_lorebooks": {
+        const result = await importAttachedLorebooks(msg.chatId, userId);
+        if (result.imported > 0) {
+          const settings = await loadSettings(userId);
+          const profile = settings.profiles.find((p) => p.id === settings.activeProfileId);
+          if (profile?.hideCoveredMessages) {
+            const messages = await spindle.chat.getMessages(msg.chatId);
+            const coverage = await buildCoverage(msg.chatId, userId);
+            await syncHiddenForCoveredMessages(msg.chatId, messages, coverage, userId, true);
+          }
+        }
+        const skipped = result.skippedDuplicate + result.skippedInvalidRange + result.skippedNoRange;
+        const text = result.imported > 0
+          ? `Imported ${result.imported} entr${result.imported === 1 ? "y" : "ies"} from attached lorebooks${skipped ? ` (${skipped} skipped)` : ""}`
+          : result.scannedBooks === 0
+            ? "No other attached lorebooks found to import"
+            : `No importable entries found (${skipped} skipped)`;
+        await notify(userId, result.imported > 0 ? "success" : "info", text);
         await pushState(userId, msg.chatId);
         break;
       }

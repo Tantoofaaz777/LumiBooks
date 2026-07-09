@@ -153,6 +153,7 @@ export type FrontendToBackend =
   | { type: "update_entry"; chatId: string; entryId: string; patch: { content?: string; comment?: string } }
   | { type: "resync_hidden"; chatId: string }
   | { type: "resync_visibility"; chatId: string }
+  | { type: "import_attached_lorebooks"; chatId: string }
   | { type: "set_force_constant"; value: boolean; chatId?: string | null }
   | { type: "abort_busy"; chatId: string; kind: "chapter" | "arc" | "volume" }
   | { type: "dry_run_chapter"; chatId: string }

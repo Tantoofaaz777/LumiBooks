@@ -193,6 +193,10 @@ function renderExtras(
       disabled,
       title: "Unhide messages whose chapter or arc no longer exists, and re-align hidden state with current coverage. Use after editing or deleting entries in the Lorebook drawer.",
     }),
+    makeButton("Import attached lorebook", () => send({ type: "import_attached_lorebooks", chatId }), {
+      disabled,
+      title: "Copy entries with detectable message ranges from other attached lorebooks into LumiBooks.",
+    }),
   );
   sec.body.appendChild(row);
   host.appendChild(sec.wrap);
