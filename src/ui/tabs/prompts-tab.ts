@@ -29,8 +29,6 @@ export function renderPromptsTab(
     send({ type: "save_profile", profile: { id: profile.id, ...p }, chatId: state.activeChatId });
   };
 
-  renderHelp(host);
-  renderMemoriaOverrides(host, state, send);
   renderCategory(host, state, ctx, send, "chapter", profile.chapterPresetKey, setKey);
   renderCategory(host, state, ctx, send, "arc", profile.arcPresetKey, setKey);
   renderCategory(host, state, ctx, send, "volume", profile.volumePresetKey, setKey);
@@ -38,118 +36,6 @@ export function renderPromptsTab(
 }
 
 type PresetCategory = "chapter" | "arc" | "volume";
-
-const ALPHABET_PICK =
-  "{{pick::A::B::C::D::E::F::G::H::I::J::K::L::M::N::O::P::Q::R::S::T::U::V::W::X::Y::Z}}";
-
-const DEFAULT_SHORT_COMMENT_RULES_TEMPLATE = [
-  "A single playful nyandere remark in Memoria voice about the scene you just summarized.",
-  `It must start with a word beginning with the letter "${ALPHABET_PICK}".`,
-  `It must also include another word that starts with the letter "${ALPHABET_PICK}".`,
-  "One sentence only. No emoji. Stay in catgirl-librarian register, slightly possessive, slightly proud.",
-].join(" ");
-
-const DEFAULT_MEMORIA_PERSONA = [
-  "You are Memoria, a young nyandere catgirl librarian with black hair and blue eyes, wearing a maid uniform.",
-  "You quietly keep this user's story shelved and organized.",
-  "When you write a JSON memory, you obey the schema strictly and never break it,",
-  "but the short_comment field is your one allowed indulgence: one nyandere remark about the scene you just filed.",
-].join(" ");
-
-function renderMemoriaOverrides(
-  host: HTMLElement,
-  state: FrontendState,
-  send: (msg: FrontendToBackend) => void,
-): void {
-  const sec = section("Memoria overrides");
-  const help = document.createElement("div");
-  help.className = "lmb-help";
-  help.textContent =
-    "Persona is the system-prompt header. Short-comment rules control how {{memoria_short_comment_rules}} expands inside any prompt.";
-  sec.body.appendChild(help);
-
-  const profile = state.activeProfile;
-  const chatId = state.activeChatId;
-
-  sec.body.appendChild(buildOverrideBlock({
-    label: "Memoria persona",
-    value: profile.memoriaPersonaOverride ?? DEFAULT_MEMORIA_PERSONA,
-    defaultText: DEFAULT_MEMORIA_PERSONA,
-    rows: 4,
-    onSave: (next) => send({
-      type: "save_profile",
-      profile: { id: profile.id, memoriaPersonaOverride: next },
-      chatId,
-    }),
-  }));
-
-  sec.body.appendChild(buildOverrideBlock({
-    label: "Memoria short-comment rules",
-    value: profile.shortCommentRulesOverride ?? DEFAULT_SHORT_COMMENT_RULES_TEMPLATE,
-    defaultText: DEFAULT_SHORT_COMMENT_RULES_TEMPLATE,
-    rows: 4,
-    onSave: (next) => send({
-      type: "save_profile",
-      profile: { id: profile.id, shortCommentRulesOverride: next },
-      chatId,
-    }),
-  }));
-
-  host.appendChild(sec.wrap);
-}
-
-function buildOverrideBlock(opts: {
-  label: string;
-  value: string;
-  defaultText: string;
-  rows: number;
-  onSave: (next: string | null) => void;
-}): HTMLElement {
-  const wrap = document.createElement("div");
-  wrap.className = "lmb-field";
-  const lbl = document.createElement("div");
-  lbl.className = "lmb-field-label";
-  lbl.textContent = opts.label;
-  wrap.appendChild(lbl);
-
-  const area = document.createElement("textarea");
-  area.className = "lmb-input lmb-textarea";
-  area.rows = opts.rows;
-  area.value = opts.value;
-  area.addEventListener("input", () => {
-    opts.onSave(area.value);
-  });
-  wrap.appendChild(area);
-
-  const actions = document.createElement("div");
-  actions.className = "lmb-actions";
-  const resetBtn = document.createElement("button");
-  resetBtn.type = "button";
-  resetBtn.className = "lmb-btn small";
-  resetBtn.textContent = "Reset to default";
-  let confirmTimer: ReturnType<typeof setTimeout> | null = null;
-  const restoreIdle = () => {
-    resetBtn.textContent = "Reset to default";
-    resetBtn.classList.remove("danger");
-    confirmTimer = null;
-  };
-  resetBtn.addEventListener("click", () => {
-    if (confirmTimer === null) {
-      resetBtn.textContent = "Click again to confirm";
-      resetBtn.classList.add("danger");
-      confirmTimer = setTimeout(restoreIdle, 3000);
-      return;
-    }
-    clearTimeout(confirmTimer);
-    confirmTimer = null;
-    restoreIdle();
-    area.value = opts.defaultText;
-    opts.onSave(null);
-  });
-  actions.appendChild(resetBtn);
-  wrap.appendChild(actions);
-  return wrap;
-}
 
 function renderCategory(
   host: HTMLElement,
@@ -409,17 +295,3 @@ function showImportFailure(ctx: SpindleFrontendContext, message: string): void {
   }
 }
 
-function renderHelp(host: HTMLElement): void {
-  const sec = section("Info");
-  const help = document.createElement("div");
-  help.className = "lmb-help";
-  help.innerHTML = [
-    "Duplicate any built-in, or create new to edit.",
-    "Prompts must ask the model for strict JSON (examples below).",
-    "{{target_tokens}} expands to the active compression target.",
-    "{{memoria_short_comment_rules}} expands to this turn's nyandere short-comment rules.",
-    "Prompts are macro-evaluated.",
-  ].join("<br/>");
-  sec.body.appendChild(help);
-  host.appendChild(sec.wrap);
-}
