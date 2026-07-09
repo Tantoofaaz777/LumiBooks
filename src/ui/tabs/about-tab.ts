@@ -13,46 +13,6 @@ export function renderAboutTab(
     renderNaming(host, state, send);
   }
   renderExtras(host, state, send);
-
-  const hero = section("Memoria");
-  const card = document.createElement("div");
-  card.className = "lmb-about-hero";
-  const right = document.createElement("div");
-  const title = document.createElement("div");
-  title.style.fontWeight = "600";
-  title.style.fontSize = "14px";
-  title.textContent = "Memoria, the LumiBooks librarian";
-  const tag = document.createElement("div");
-  tag.className = "lmb-about-line";
-  tag.textContent =
-    "Young nyandere catgirl in a maid uniform. Black hair, blue eyes. " +
-    "Files your chats into chapters, binds chapters into arcs, and leaves a tiny nyaa note on every shelf.";
-  right.append(title, tag);
-  card.append(right);
-  hero.body.appendChild(card);
-  host.appendChild(hero.wrap);
-
-  const how = section("How it works");
-  const lines = [
-    "You choose message ranges manually, then Memoria writes or binds them into chapters.",
-    "Filed chapters hide the older chat history through that range and send active memories through your outlet.",
-    "Several chapters can be bound into a single arc that replaces them.",
-    "Arcs can be pressed into a volume the same way, manually from the Make tab.",
-    "Storage lives in a world book bound to the chat. Adopted books keep their original names.",
-  ];
-  for (const l of lines) {
-    how.body.appendChild(textNode(l, "lmb-about-line"));
-  }
-  host.appendChild(how.wrap);
-
-  const ack = section("Acknowledgements");
-  const a = document.createElement("div");
-  a.className = "lmb-about-line";
-  a.textContent =
-    "Built on Lumiverse Spindle, with prompts and UX inspired by SillyTavern Memory Books. " +
-    "Memoria thanks the original Memory Books authors for the inspiration.";
-  ack.body.appendChild(a);
-  host.appendChild(ack.wrap);
 }
 
 function renderNaming(

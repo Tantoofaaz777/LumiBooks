@@ -425,8 +425,6 @@ export const STYLES = `
   font-size: 12px;
 }
 
-.lmb-about-hero { display: flex; gap: 12px; align-items: center; }
-.lmb-about-hero img { width: 64px; height: 64px; border-radius: 8px; object-fit: cover; }
 .lmb-about-line { font-size: 12px; opacity: 0.85; line-height: 1.5; }
 
 .lmb-preset-text {
