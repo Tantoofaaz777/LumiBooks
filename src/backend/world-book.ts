@@ -248,6 +248,19 @@ async function bindBookToChat(chatId: string, bookId: string, userId: string): P
   );
 }
 
+export async function adoptBookForChat(chatId: string, bookId: string, userId: string): Promise<void> {
+  const book = await spindle.world_books.get(bookId, userId);
+  if (!book) throw new Error(`World book ${bookId} not found`);
+  const metadata = (book.metadata && typeof book.metadata === "object") ? (book.metadata as Record<string, unknown>) : {};
+  await spindle.world_books.update(
+    bookId,
+    { metadata: { ...metadata, lumibooks_chat_id: chatId, lumibooks_adopted_at: Date.now() } },
+    userId,
+  );
+  await bindBookToChat(chatId, bookId, userId);
+  setBookCache(cacheKey(userId, chatId), { bookId, expiresAt: Date.now() + BOOK_INDEX_CACHE_TTL_MS });
+}
+
 /** The world-book ids the chat has attached at chat scope (chat.metadata.chat_world_book_ids). */
 export async function getChatAttachedBookIds(chatId: string, userId: string): Promise<string[]> {
   const chat = await spindle.chats.get(chatId, userId).catch(() => null);

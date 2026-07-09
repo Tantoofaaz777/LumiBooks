@@ -65,7 +65,7 @@ import { buildState } from "./state";
 import { parseStmbPresetExport } from "./presets";
 import { syncProjectionEntry } from "./projection";
 import { syncNamingForChat } from "./naming-sync";
-import { adoptAttachedLorebooks, importAttachedLorebooks } from "./import-lorebook";
+import { confirmAdoptLorebook, importAttachedLorebooks, listAdoptLorebookCandidates } from "./import-lorebook";
 import { syncStoryOrderForChat } from "./story-order";
 
 async function notify(
@@ -777,14 +777,17 @@ spindle.onFrontendMessage(async (raw, userId) => {
         break;
       }
 
-      case "adopt_attached_lorebooks": {
-        const result = await adoptAttachedLorebooks(msg.chatId, userId, msg.tier);
-        const noun = msg.tier === 3 ? "volume" : msg.tier === 2 ? "arc" : "chapter";
+      case "prepare_adopt_lorebook": {
+        const books = await listAdoptLorebookCandidates(msg.chatId, userId);
+        send({ type: "adopt_lorebook_candidates", chatId: msg.chatId, books }, userId);
+        break;
+      }
+
+      case "confirm_adopt_lorebook": {
+        const result = await confirmAdoptLorebook(msg.chatId, userId, msg.bookId, msg.entries);
         const text = result.adopted > 0
-          ? `Adopted ${result.adopted} entr${result.adopted === 1 ? "y" : "ies"} as ${noun}${result.adopted === 1 ? "" : "s"}`
-          : result.scannedBooks === 0
-            ? "No other attached lorebooks found to adopt"
-            : `No unmanaged entries found to adopt${result.skippedAlreadyManaged ? ` (${result.skippedAlreadyManaged} already managed)` : ""}`;
+          ? `Adopted ${result.adopted} entr${result.adopted === 1 ? "y" : "ies"} in-place${result.skipped ? ` (${result.skipped} skipped)` : ""}`
+          : "No entries were adopted";
         await notify(userId, result.adopted > 0 ? "success" : "info", text);
         await pushState(userId, msg.chatId);
         break;

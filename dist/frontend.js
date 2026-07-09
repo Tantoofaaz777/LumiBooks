@@ -954,6 +954,115 @@ function showDryRunModal(kind, messages, diagnostics) {
   });
   document.body.appendChild(overlay);
 }
+function openAdoptLorebookModal(ctx, chatId, books, send) {
+  const handle = ctx.ui.showModal({ title: "Adopt existing lorebook", width: 780, maxHeight: 760 });
+  const root = document.createElement("div");
+  root.className = "lmb-modal-form";
+  handle.root.appendChild(root);
+  if (books.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "lmb-empty";
+    empty.textContent = "No attached lorebooks with entries were found.";
+    const actions2 = document.createElement("div");
+    actions2.className = "lmb-modal-actions";
+    actions2.appendChild(makeButton("Close", () => handle.dismiss(), { primary: true }));
+    root.append(empty, actions2);
+    return;
+  }
+  let selectedBookId = books[0].bookId;
+  const rows = new Map;
+  const bookSelect = select({
+    value: selectedBookId,
+    options: books.map((book) => ({ value: book.bookId, label: `${book.name} (${book.entries.length})` })),
+    onChange: (v) => {
+      selectedBookId = v;
+      renderEntries();
+    }
+  });
+  const bookField = document.createElement("div");
+  bookField.className = "lmb-field";
+  const bookLabel = document.createElement("div");
+  bookLabel.className = "lmb-field-label";
+  bookLabel.textContent = "Lorebook";
+  bookField.append(bookLabel, bookSelect);
+  const help = document.createElement("div");
+  help.className = "lmb-help";
+  help.textContent = "This modifies the selected lorebook in-place and adds LumiBooks metadata to the chosen entries.";
+  const list = document.createElement("div");
+  list.style.display = "flex";
+  list.style.flexDirection = "column";
+  list.style.gap = "8px";
+  function selectedBook() {
+    return books.find((book) => book.bookId === selectedBookId) ?? books[0];
+  }
+  function renderEntries() {
+    rows.clear();
+    list.replaceChildren();
+    const book = selectedBook();
+    book.entries.forEach((entry, index) => {
+      const card = document.createElement("div");
+      card.className = "lmb-preview-card";
+      const head = document.createElement("div");
+      head.style.display = "grid";
+      head.style.gridTemplateColumns = "minmax(0, 1fr) 130px 90px";
+      head.style.gap = "8px";
+      head.style.alignItems = "center";
+      const title = document.createElement("div");
+      title.className = "lmb-entry-title";
+      title.textContent = entry.comment;
+      if (entry.alreadyManaged)
+        title.textContent += " (already managed)";
+      const tier = select({
+        value: entry.alreadyManaged ? "0" : "1",
+        options: [
+          { value: "1", label: "Chapter" },
+          { value: "2", label: "Arc" },
+          { value: "3", label: "Volume" },
+          { value: "0", label: "Skip" }
+        ]
+      });
+      if (entry.alreadyManaged)
+        tier.disabled = true;
+      const order = numberInput({
+        value: index + 1,
+        min: 1,
+        step: 1,
+        disabled: entry.alreadyManaged
+      });
+      head.append(title, tier, order);
+      card.appendChild(head);
+      if (entry.preview) {
+        const preview = document.createElement("div");
+        preview.className = "lmb-field-hint";
+        preview.textContent = entry.preview;
+        card.appendChild(preview);
+      }
+      list.appendChild(card);
+      rows.set(entry.entryId, { tier, order });
+    });
+  }
+  const actions = document.createElement("div");
+  actions.className = "lmb-modal-actions";
+  actions.append(makeButton("Cancel", () => handle.dismiss()), makeButton("Adopt", () => {
+    const entries = [];
+    for (const entry of selectedBook().entries) {
+      const row = rows.get(entry.entryId);
+      if (!row)
+        continue;
+      const tier = Number(row.tier.value);
+      const storyOrder = Number(row.order.value);
+      entries.push({
+        entryId: entry.entryId,
+        tier: tier === 1 || tier === 2 || tier === 3 ? tier : 0,
+        storyOrder: Number.isFinite(storyOrder) && storyOrder > 0 ? Math.floor(storyOrder) : entries.length + 1
+      });
+    }
+    send({ type: "confirm_adopt_lorebook", chatId, bookId: selectedBookId, entries });
+    handle.dismiss();
+  }, { primary: true }));
+  root.append(bookField, help, list, actions);
+  renderEntries();
+}
 function promptForString(ctx, title, initial) {
   return new Promise((resolve) => {
     let settled = false;
@@ -2913,15 +3022,9 @@ function renderExtras(host, state, send) {
   }), makeButton("Import attached lorebook", () => send({ type: "import_attached_lorebooks", chatId }), {
     disabled,
     title: "Copy entries with detectable message ranges from other attached lorebooks into LumiBooks."
-  }), makeButton("Adopt as chapters", () => send({ type: "adopt_attached_lorebooks", chatId, tier: 1 }), {
+  }), makeButton("Adopt existing lorebook", () => send({ type: "prepare_adopt_lorebook", chatId }), {
     disabled,
-    title: "Copy unmanaged entries from attached lorebooks as historical chapters, without requiring message ranges."
-  }), makeButton("Adopt as arcs", () => send({ type: "adopt_attached_lorebooks", chatId, tier: 2 }), {
-    disabled,
-    title: "Copy unmanaged entries from attached lorebooks as historical arcs."
-  }), makeButton("Adopt as volumes", () => send({ type: "adopt_attached_lorebooks", chatId, tier: 3 }), {
-    disabled,
-    title: "Copy unmanaged entries from attached lorebooks as historical volumes."
+    title: "Add LumiBooks metadata to entries in an attached lorebook in-place."
   }));
   sec.body.appendChild(row);
   host.appendChild(sec.wrap);
@@ -3074,6 +3177,9 @@ function setup(ctx) {
         break;
       case "dry_run_result":
         showDryRunModal(msg.kind, msg.messages, msg.diagnostics);
+        break;
+      case "adopt_lorebook_candidates":
+        openAdoptLorebookModal(ctx, msg.chatId, msg.books, send);
         break;
     }
   });

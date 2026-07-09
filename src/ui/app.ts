@@ -2,7 +2,7 @@ import type { SpindleFrontendContext } from "lumiverse-spindle-types";
 import type { BackendToFrontend, FrontendState, FrontendToBackend } from "../types";
 import { ICON_SVG, STYLES } from "./styles";
 import { preserveScroll } from "./components";
-import { showDryRunModal } from "./modals";
+import { openAdoptLorebookModal, showDryRunModal } from "./modals";
 import { renderBooksTab, tryUpdateBusyLabelsInPlace } from "./tabs/books-tab";
 import { renderMakeTab } from "./tabs/make-tab";
 import { renderProfileTab } from "./tabs/profile-tab";
@@ -163,6 +163,9 @@ export function setup(ctx: SpindleFrontendContext): () => void {
         break;
       case "dry_run_result":
         showDryRunModal(msg.kind, msg.messages, msg.diagnostics);
+        break;
+      case "adopt_lorebook_candidates":
+        openAdoptLorebookModal(ctx, msg.chatId, msg.books, send);
         break;
     }
   });

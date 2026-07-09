@@ -704,6 +704,15 @@ async function bindBookToChat(chatId, bookId, userId) {
     }
   }, userId);
 }
+async function adoptBookForChat(chatId, bookId, userId) {
+  const book = await spindle.world_books.get(bookId, userId);
+  if (!book)
+    throw new Error(`World book ${bookId} not found`);
+  const metadata = book.metadata && typeof book.metadata === "object" ? book.metadata : {};
+  await spindle.world_books.update(bookId, { metadata: { ...metadata, lumibooks_chat_id: chatId, lumibooks_adopted_at: Date.now() } }, userId);
+  await bindBookToChat(chatId, bookId, userId);
+  setBookCache(cacheKey(userId, chatId), { bookId, expiresAt: Date.now() + BOOK_INDEX_CACHE_TTL_MS });
+}
 async function getChatAttachedBookIds(chatId, userId) {
   const chat = await spindle.chats.get(chatId, userId).catch(() => null);
   const md = chat && chat.metadata && typeof chat.metadata === "object" ? chat.metadata : null;
@@ -4452,47 +4461,69 @@ async function importAttachedLorebooks(chatId, userId) {
     invalidateBookCache(userId, chatId);
   return { imported, skippedNoRange, skippedDuplicate, skippedInvalidRange, scannedBooks, details, hideThroughIdx };
 }
-async function adoptAttachedLorebooks(chatId, userId, tier) {
-  const settings = await loadSettings(userId);
-  const targetBook = await ensureBookForChat(chatId, userId);
+async function listAdoptLorebookCandidates(chatId, userId) {
+  const targetBookId = await findBookForChat(chatId, userId).catch(() => null);
   const attachedIds = await getChatAttachedBookIds(chatId, userId);
-  const sourceBookIds = [...new Set(attachedIds.filter((id) => id !== targetBook.id))];
-  const existing = await listLmbEntries(chatId, userId);
-  const firstStoryOrder = nextStoryOrder(existing);
-  const maxScene = existing.reduce((max, entry) => {
-    if (entry.meta.tier !== tier || entry.meta.isRoot)
-      return max;
-    return Math.max(max, entry.meta.sceneNumber ?? 0);
-  }, 0);
-  const sources = [];
-  let scannedBooks = 0;
-  let skippedAlreadyManaged = 0;
+  const sourceBookIds = [...new Set(attachedIds.filter((id) => id !== targetBookId))];
+  const books = [];
   for (const bookId of sourceBookIds) {
     const book = await spindle.world_books.get(bookId, userId).catch(() => null);
     if (!book)
       continue;
-    scannedBooks++;
     const entries = await listAllEntries(bookId, userId).catch(() => []);
-    for (const entry of entries) {
-      if (entry.disabled)
-        continue;
+    const drafts = entries.filter((entry) => !entry.disabled).sort((a, b) => {
+      if (a.order_value !== b.order_value)
+        return a.order_value - b.order_value;
+      return a.created_at - b.created_at;
+    }).map((entry) => {
       const ext = entry.extensions || {};
-      if (ext[EXTENSION_KEY]) {
-        skippedAlreadyManaged++;
-        continue;
-      }
-      sources.push(entry);
-    }
+      return {
+        entryId: entry.id,
+        comment: entry.comment || "(untitled)",
+        preview: (entry.content || "").slice(0, 220).replace(/\s+/g, " ").trim(),
+        orderValue: entry.order_value,
+        contentChars: (entry.content || "").length,
+        alreadyManaged: !!ext[EXTENSION_KEY]
+      };
+    });
+    if (drafts.length > 0)
+      books.push({ bookId: book.id, name: book.name || book.id, entries: drafts });
   }
-  sources.sort((a, b) => {
-    if (a.order_value !== b.order_value)
-      return a.order_value - b.order_value;
-    return a.created_at - b.created_at;
-  });
+  return books;
+}
+async function confirmAdoptLorebook(chatId, userId, bookId, plan) {
+  const settings = await loadSettings(userId);
+  await adoptBookForChat(chatId, bookId, userId);
+  const existing = await listLmbEntries(chatId, userId);
+  const sceneCounts = new Map([
+    [1, 0],
+    [2, 0],
+    [3, 0]
+  ]);
+  for (const entry of existing) {
+    if (entry.meta.isRoot)
+      continue;
+    sceneCounts.set(entry.meta.tier, Math.max(sceneCounts.get(entry.meta.tier) ?? 0, entry.meta.sceneNumber ?? 0));
+  }
+  const entries = await listAllEntries(bookId, userId);
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  const orderedPlan = plan.filter((entry) => entry.tier === 1 || entry.tier === 2 || entry.tier === 3).slice().sort((a, b) => a.storyOrder - b.storyOrder);
   let adopted = 0;
-  for (const source of sources) {
-    const sceneNumber = maxScene + adopted + 1;
-    const storyOrder = firstStoryOrder + adopted;
+  let skipped = 0;
+  for (const item of orderedPlan) {
+    const source = byId.get(item.entryId);
+    if (!source || source.disabled) {
+      skipped++;
+      continue;
+    }
+    const ext = source.extensions || {};
+    if (ext[EXTENSION_KEY]) {
+      skipped++;
+      continue;
+    }
+    const tier = item.tier;
+    const sceneNumber = (sceneCounts.get(tier) ?? 0) + 1;
+    sceneCounts.set(tier, sceneNumber);
     const title = cleanTitle(source.comment, "") || cleanTitle(source.content.split(/\n+/, 1)[0] || "", "") || "Imported Memory";
     const meta = {
       tier,
@@ -4505,7 +4536,7 @@ async function adoptAttachedLorebooks(chatId, userId, tier) {
       createdAt: source.created_at || Date.now(),
       title,
       sceneNumber,
-      storyOrder
+      storyOrder: item.storyOrder
     };
     const comment = await formatEntryName(settings, {
       chatId,
@@ -4513,16 +4544,22 @@ async function adoptAttachedLorebooks(chatId, userId, tier) {
       tier: tier === 3 ? "volume" : tier === 2 ? "arc" : "chapter",
       title,
       sceneNumber,
-      storyOrder,
+      storyOrder: item.storyOrder,
       turnCount: 0,
       sourceCount: 0
     });
-    await createChapterEntry(targetBook.id, meta, source.content || "", comment, userId, source.key ?? [], settings.forceConstantEntries);
+    await spindle.world_books.entries.update(source.id, {
+      comment,
+      constant: true,
+      position: 8,
+      outlet_name: normalizeOutletName(settings.memoryOutletName),
+      order_value: item.storyOrder,
+      extensions: { ...ext, [EXTENSION_KEY]: meta }
+    }, userId);
     adopted++;
   }
-  if (adopted > 0)
-    invalidateBookCache(userId, chatId);
-  return { adopted, skippedAlreadyManaged, scannedBooks };
+  invalidateBookCache(userId, chatId);
+  return { adopted, skipped };
 }
 function parseRange(text) {
   for (const pattern of RANGE_PATTERNS) {
@@ -5237,10 +5274,14 @@ spindle.onFrontendMessage(async (raw, userId) => {
         await pushState(userId, msg.chatId);
         break;
       }
-      case "adopt_attached_lorebooks": {
-        const result = await adoptAttachedLorebooks(msg.chatId, userId, msg.tier);
-        const noun = msg.tier === 3 ? "volume" : msg.tier === 2 ? "arc" : "chapter";
-        const text = result.adopted > 0 ? `Adopted ${result.adopted} entr${result.adopted === 1 ? "y" : "ies"} as ${noun}${result.adopted === 1 ? "" : "s"}` : result.scannedBooks === 0 ? "No other attached lorebooks found to adopt" : `No unmanaged entries found to adopt${result.skippedAlreadyManaged ? ` (${result.skippedAlreadyManaged} already managed)` : ""}`;
+      case "prepare_adopt_lorebook": {
+        const books = await listAdoptLorebookCandidates(msg.chatId, userId);
+        send({ type: "adopt_lorebook_candidates", chatId: msg.chatId, books }, userId);
+        break;
+      }
+      case "confirm_adopt_lorebook": {
+        const result = await confirmAdoptLorebook(msg.chatId, userId, msg.bookId, msg.entries);
+        const text = result.adopted > 0 ? `Adopted ${result.adopted} entr${result.adopted === 1 ? "y" : "ies"} in-place${result.skipped ? ` (${result.skipped} skipped)` : ""}` : "No entries were adopted";
         await notify(userId, result.adopted > 0 ? "success" : "info", text);
         await pushState(userId, msg.chatId);
         break;

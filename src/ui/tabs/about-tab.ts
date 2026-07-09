@@ -179,17 +179,9 @@ function renderExtras(
       disabled,
       title: "Copy entries with detectable message ranges from other attached lorebooks into LumiBooks.",
     }),
-    makeButton("Adopt as chapters", () => send({ type: "adopt_attached_lorebooks", chatId, tier: 1 }), {
+    makeButton("Adopt existing lorebook", () => send({ type: "prepare_adopt_lorebook", chatId }), {
       disabled,
-      title: "Copy unmanaged entries from attached lorebooks as historical chapters, without requiring message ranges.",
-    }),
-    makeButton("Adopt as arcs", () => send({ type: "adopt_attached_lorebooks", chatId, tier: 2 }), {
-      disabled,
-      title: "Copy unmanaged entries from attached lorebooks as historical arcs.",
-    }),
-    makeButton("Adopt as volumes", () => send({ type: "adopt_attached_lorebooks", chatId, tier: 3 }), {
-      disabled,
-      title: "Copy unmanaged entries from attached lorebooks as historical volumes.",
+      title: "Add LumiBooks metadata to entries in an attached lorebook in-place.",
     }),
   );
   sec.body.appendChild(row);

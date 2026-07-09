@@ -98,6 +98,27 @@ export interface PendingPreview {
   replacesEntryId?: string;
 }
 
+export interface AdoptLorebookEntryDraft {
+  entryId: string;
+  comment: string;
+  preview: string;
+  orderValue: number;
+  contentChars: number;
+  alreadyManaged: boolean;
+}
+
+export interface AdoptLorebookCandidate {
+  bookId: string;
+  name: string;
+  entries: AdoptLorebookEntryDraft[];
+}
+
+export interface AdoptLorebookPlanEntry {
+  entryId: string;
+  tier: 1 | 2 | 3 | 0;
+  storyOrder: number;
+}
+
 export interface FrontendState {
   activeChatId: string | null;
   activeChatName: string | null;
@@ -154,7 +175,8 @@ export type FrontendToBackend =
   | { type: "resync_hidden"; chatId: string }
   | { type: "resync_visibility"; chatId: string }
   | { type: "import_attached_lorebooks"; chatId: string }
-  | { type: "adopt_attached_lorebooks"; chatId: string; tier: 1 | 2 | 3 }
+  | { type: "prepare_adopt_lorebook"; chatId: string }
+  | { type: "confirm_adopt_lorebook"; chatId: string; bookId: string; entries: AdoptLorebookPlanEntry[] }
   | { type: "set_force_constant"; value: boolean; chatId?: string | null }
   | { type: "abort_busy"; chatId: string; kind: "chapter" | "arc" | "volume" }
   | { type: "dry_run_chapter"; chatId: string }
@@ -186,4 +208,5 @@ export type BackendToFrontend =
   | { type: "toast"; tone: "success" | "info" | "warn" | "error"; text: string }
   | { type: "busy"; entries: BusyEntry[] }
   | { type: "error"; text: string }
+  | { type: "adopt_lorebook_candidates"; chatId: string; books: AdoptLorebookCandidate[] }
   | { type: "dry_run_result"; kind: "chapter" | "arc" | "volume"; messages: DryRunMessage[]; diagnostics: DryRunDiagnostic[] };

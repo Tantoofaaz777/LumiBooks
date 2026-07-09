@@ -1,13 +1,16 @@
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 import type { WorldBookEntryDTO } from "lumiverse-spindle-types";
+import type { AdoptLorebookCandidate, AdoptLorebookPlanEntry } from "../types";
 import type { LMBEntryMeta } from "../shared";
-import { EXTENSION_KEY, approximateTokensFromChars } from "../shared";
+import { EXTENSION_KEY, approximateTokensFromChars, normalizeOutletName } from "../shared";
 import { formatEntryName } from "./naming";
 import { loadSettings } from "./storage";
 import {
+  adoptBookForChat,
   createChapterEntry,
   ensureBookForChat,
+  findBookForChat,
   getChatAttachedBookIds,
   invalidateBookCache,
   listAllEntries,
@@ -23,12 +26,6 @@ export interface ImportAttachedLorebooksResult {
   scannedBooks: number;
   details: string[];
   hideThroughIdx?: number;
-}
-
-export interface AdoptAttachedLorebooksResult {
-  adopted: number;
-  skippedAlreadyManaged: number;
-  scannedBooks: number;
 }
 
 interface ImportCandidate {
@@ -186,51 +183,78 @@ export async function importAttachedLorebooks(chatId: string, userId: string): P
   return { imported, skippedNoRange, skippedDuplicate, skippedInvalidRange, scannedBooks, details, hideThroughIdx };
 }
 
-export async function adoptAttachedLorebooks(
-  chatId: string,
-  userId: string,
-  tier: 1 | 2 | 3,
-): Promise<AdoptAttachedLorebooksResult> {
-  const settings = await loadSettings(userId);
-  const targetBook = await ensureBookForChat(chatId, userId);
+export async function listAdoptLorebookCandidates(chatId: string, userId: string): Promise<AdoptLorebookCandidate[]> {
+  const targetBookId = await findBookForChat(chatId, userId).catch(() => null);
   const attachedIds = await getChatAttachedBookIds(chatId, userId);
-  const sourceBookIds = [...new Set(attachedIds.filter((id) => id !== targetBook.id))];
-  const existing = await listLmbEntries(chatId, userId);
-  const firstStoryOrder = nextStoryOrder(existing);
-  const maxScene = existing.reduce((max, entry) => {
-    if (entry.meta.tier !== tier || entry.meta.isRoot) return max;
-    return Math.max(max, entry.meta.sceneNumber ?? 0);
-  }, 0);
-
-  const sources: WorldBookEntryDTO[] = [];
-  let scannedBooks = 0;
-  let skippedAlreadyManaged = 0;
-
+  const sourceBookIds = [...new Set(attachedIds.filter((id) => id !== targetBookId))];
+  const books: AdoptLorebookCandidate[] = [];
   for (const bookId of sourceBookIds) {
     const book = await spindle.world_books.get(bookId, userId).catch(() => null);
     if (!book) continue;
-    scannedBooks++;
     const entries = await listAllEntries(bookId, userId).catch(() => [] as WorldBookEntryDTO[]);
-    for (const entry of entries) {
-      if (entry.disabled) continue;
-      const ext = (entry.extensions || {}) as Record<string, unknown>;
-      if (ext[EXTENSION_KEY]) {
-        skippedAlreadyManaged++;
-        continue;
-      }
-      sources.push(entry);
-    }
+    const drafts = entries
+      .filter((entry) => !entry.disabled)
+      .sort((a, b) => {
+        if (a.order_value !== b.order_value) return a.order_value - b.order_value;
+        return a.created_at - b.created_at;
+      })
+      .map((entry) => {
+        const ext = (entry.extensions || {}) as Record<string, unknown>;
+        return {
+          entryId: entry.id,
+          comment: entry.comment || "(untitled)",
+          preview: (entry.content || "").slice(0, 220).replace(/\s+/g, " ").trim(),
+          orderValue: entry.order_value,
+          contentChars: (entry.content || "").length,
+          alreadyManaged: !!ext[EXTENSION_KEY],
+        };
+      });
+    if (drafts.length > 0) books.push({ bookId: book.id, name: book.name || book.id, entries: drafts });
+  }
+  return books;
+}
+
+export async function confirmAdoptLorebook(
+  chatId: string,
+  userId: string,
+  bookId: string,
+  plan: AdoptLorebookPlanEntry[],
+): Promise<{ adopted: number; skipped: number }> {
+  const settings = await loadSettings(userId);
+  await adoptBookForChat(chatId, bookId, userId);
+  const existing = await listLmbEntries(chatId, userId);
+  const sceneCounts = new Map<1 | 2 | 3, number>([
+    [1, 0],
+    [2, 0],
+    [3, 0],
+  ]);
+  for (const entry of existing) {
+    if (entry.meta.isRoot) continue;
+    sceneCounts.set(entry.meta.tier, Math.max(sceneCounts.get(entry.meta.tier) ?? 0, entry.meta.sceneNumber ?? 0));
   }
 
-  sources.sort((a, b) => {
-    if (a.order_value !== b.order_value) return a.order_value - b.order_value;
-    return a.created_at - b.created_at;
-  });
-
+  const entries = await listAllEntries(bookId, userId);
+  const byId = new Map(entries.map((entry) => [entry.id, entry] as const));
+  const orderedPlan = plan
+    .filter((entry) => entry.tier === 1 || entry.tier === 2 || entry.tier === 3)
+    .slice()
+    .sort((a, b) => a.storyOrder - b.storyOrder);
   let adopted = 0;
-  for (const source of sources) {
-    const sceneNumber = maxScene + adopted + 1;
-    const storyOrder = firstStoryOrder + adopted;
+  let skipped = 0;
+  for (const item of orderedPlan) {
+    const source = byId.get(item.entryId);
+    if (!source || source.disabled) {
+      skipped++;
+      continue;
+    }
+    const ext = (source.extensions || {}) as Record<string, unknown>;
+    if (ext[EXTENSION_KEY]) {
+      skipped++;
+      continue;
+    }
+    const tier = item.tier as 1 | 2 | 3;
+    const sceneNumber = (sceneCounts.get(tier) ?? 0) + 1;
+    sceneCounts.set(tier, sceneNumber);
     const title = cleanTitle(source.comment, "") || cleanTitle(source.content.split(/\n+/, 1)[0] || "", "") || "Imported Memory";
     const meta: LMBEntryMeta = {
       tier,
@@ -243,7 +267,7 @@ export async function adoptAttachedLorebooks(
       createdAt: source.created_at || Date.now(),
       title,
       sceneNumber,
-      storyOrder,
+      storyOrder: item.storyOrder,
     };
     const comment = await formatEntryName(settings, {
       chatId,
@@ -251,24 +275,26 @@ export async function adoptAttachedLorebooks(
       tier: tier === 3 ? "volume" : tier === 2 ? "arc" : "chapter",
       title,
       sceneNumber,
-      storyOrder,
+      storyOrder: item.storyOrder,
       turnCount: 0,
       sourceCount: 0,
     });
-    await createChapterEntry(
-      targetBook.id,
-      meta,
-      source.content || "",
-      comment,
+    await spindle.world_books.entries.update(
+      source.id,
+      {
+        comment,
+        constant: true,
+        position: 8,
+        outlet_name: normalizeOutletName(settings.memoryOutletName),
+        order_value: item.storyOrder,
+        extensions: { ...ext, [EXTENSION_KEY]: meta },
+      } as never,
       userId,
-      source.key ?? [],
-      settings.forceConstantEntries,
     );
     adopted++;
   }
-
-  if (adopted > 0) invalidateBookCache(userId, chatId);
-  return { adopted, skippedAlreadyManaged, scannedBooks };
+  invalidateBookCache(userId, chatId);
+  return { adopted, skipped };
 }
 
 function parseRange(text: string): { start: number; end: number; raw: string } | null {
