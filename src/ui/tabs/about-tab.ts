@@ -18,43 +18,26 @@ export function renderAboutTab(
 
 function renderNameMacros(host: HTMLElement): void {
   const sec = section("Name macros");
-  const chips = [
-    "{{scene}}",
-    "{{sceneNumber}}",
-    "{{sceneNumberPadded}}",
-    "{{storyOrder}}",
-    "{{storyOrderPadded}}",
-    "{{title}}",
-    "{{tier}}",
-    "{{chat}}",
-    "{{chatName}}",
-    "{{rootPrefix}}",
-    "{{turns}}",
-    "{{sources}}",
+  const macros: Array<[string, string]> = [
+    ["{{title}}", "Title returned by the model, or the fallback title for that tier."],
+    ["{{scene}}", "Visible message range covered by the entry, like 1-27."],
+    ["{{storyOrder}}", "Chronological lorebook order: 1, 2, 3..."],
+    ["{{sceneNumberPadded}}", "Tier number padded to three digits, like 001, 002, 003."],
+    ["{{chat}}", "Current chat name, or a short chat id if the name is unavailable."],
   ];
-  const chipWrap = document.createElement("div");
-  chipWrap.className = "lmb-macro-chips";
-  for (const name of chips) {
+  const list = document.createElement("div");
+  list.className = "lmb-macro-list";
+  for (const [name, detail] of macros) {
+    const row = document.createElement("div");
+    row.className = "lmb-macro-row";
     const key = document.createElement("code");
     key.textContent = name;
-    chipWrap.appendChild(key);
+    const desc = document.createElement("div");
+    desc.textContent = detail;
+    row.append(key, desc);
+    list.appendChild(row);
   }
-  sec.body.appendChild(chipWrap);
-
-  const notes = document.createElement("div");
-  notes.className = "lmb-macro-notes";
-  for (const text of [
-    "{{scene}} is the visible message range, like 1-27.",
-    "{{sceneNumber}} counts entries inside the same tier; the padded version becomes 001, 002, 003.",
-    "{{storyOrder}} is the chronological lorebook order; the padded version also uses three digits.",
-    "{{title}}, {{tier}}, {{chat}}/{{chatName}}, {{turns}}, and {{sources}} insert their literal metadata values.",
-    "{{rootPrefix}} inserts [Root] for inherited root entries and nothing otherwise.",
-  ]) {
-    const note = document.createElement("div");
-    note.textContent = text;
-    notes.appendChild(note);
-  }
-  sec.body.appendChild(notes);
+  sec.body.appendChild(list);
   host.appendChild(sec.wrap);
 }
 

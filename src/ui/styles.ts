@@ -106,12 +106,19 @@ export const STYLES = `
 .lmb-status-grid > .lmb-label { opacity: 0.65; }
 .lmb-status-grid > .lmb-value { font-weight: 500; }
 
-.lmb-macro-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+.lmb-macro-list {
+  display: grid;
+  gap: 6px;
 }
-.lmb-macro-chips code {
+.lmb-macro-row {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) 1fr;
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.lmb-macro-row code {
   font-family: var(--lumiverse-font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
   font-size: 11px;
   color: var(--lumiverse-text, #dde2ea);
@@ -122,13 +129,7 @@ export const STYLES = `
   white-space: nowrap;
   opacity: 0.82;
 }
-.lmb-macro-notes {
-  display: grid;
-  gap: 4px;
-  font-size: 11px;
-  line-height: 1.4;
-  opacity: 0.68;
-}
+.lmb-macro-row > div { opacity: 0.72; }
 
 .lmb-busy {
   display: flex;

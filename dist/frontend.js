@@ -107,12 +107,19 @@ var STYLES = `
 .lmb-status-grid > .lmb-label { opacity: 0.65; }
 .lmb-status-grid > .lmb-value { font-weight: 500; }
 
-.lmb-macro-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+.lmb-macro-list {
+  display: grid;
+  gap: 6px;
 }
-.lmb-macro-chips code {
+.lmb-macro-row {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) 1fr;
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.lmb-macro-row code {
   font-family: var(--lumiverse-font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
   font-size: 11px;
   color: var(--lumiverse-text, #dde2ea);
@@ -123,13 +130,7 @@ var STYLES = `
   white-space: nowrap;
   opacity: 0.82;
 }
-.lmb-macro-notes {
-  display: grid;
-  gap: 4px;
-  font-size: 11px;
-  line-height: 1.4;
-  opacity: 0.68;
-}
+.lmb-macro-row > div { opacity: 0.72; }
 
 .lmb-busy {
   display: flex;
@@ -2487,42 +2488,26 @@ function renderAboutTab(host, state, send) {
 }
 function renderNameMacros(host) {
   const sec = section("Name macros");
-  const chips = [
-    "{{scene}}",
-    "{{sceneNumber}}",
-    "{{sceneNumberPadded}}",
-    "{{storyOrder}}",
-    "{{storyOrderPadded}}",
-    "{{title}}",
-    "{{tier}}",
-    "{{chat}}",
-    "{{chatName}}",
-    "{{rootPrefix}}",
-    "{{turns}}",
-    "{{sources}}"
+  const macros = [
+    ["{{title}}", "Title returned by the model, or the fallback title for that tier."],
+    ["{{scene}}", "Visible message range covered by the entry, like 1-27."],
+    ["{{storyOrder}}", "Chronological lorebook order: 1, 2, 3..."],
+    ["{{sceneNumberPadded}}", "Tier number padded to three digits, like 001, 002, 003."],
+    ["{{chat}}", "Current chat name, or a short chat id if the name is unavailable."]
   ];
-  const chipWrap = document.createElement("div");
-  chipWrap.className = "lmb-macro-chips";
-  for (const name of chips) {
+  const list = document.createElement("div");
+  list.className = "lmb-macro-list";
+  for (const [name, detail] of macros) {
+    const row = document.createElement("div");
+    row.className = "lmb-macro-row";
     const key = document.createElement("code");
     key.textContent = name;
-    chipWrap.appendChild(key);
+    const desc = document.createElement("div");
+    desc.textContent = detail;
+    row.append(key, desc);
+    list.appendChild(row);
   }
-  sec.body.appendChild(chipWrap);
-  const notes = document.createElement("div");
-  notes.className = "lmb-macro-notes";
-  for (const text of [
-    "{{scene}} is the visible message range, like 1-27.",
-    "{{sceneNumber}} counts entries inside the same tier; the padded version becomes 001, 002, 003.",
-    "{{storyOrder}} is the chronological lorebook order; the padded version also uses three digits.",
-    "{{title}}, {{tier}}, {{chat}}/{{chatName}}, {{turns}}, and {{sources}} insert their literal metadata values.",
-    "{{rootPrefix}} inserts [Root] for inherited root entries and nothing otherwise."
-  ]) {
-    const note = document.createElement("div");
-    note.textContent = text;
-    notes.appendChild(note);
-  }
-  sec.body.appendChild(notes);
+  sec.body.appendChild(list);
   host.appendChild(sec.wrap);
 }
 function renderNaming(host, state, send) {
