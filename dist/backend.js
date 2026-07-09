@@ -55,12 +55,14 @@ var DEFAULT_SETTINGS = {
   memoryOutletName: "lumibooks",
   bookNameTemplate: `${WORLD_BOOK_NAME_PREFIX} - {{chat}}`,
   chapterNameTemplate: "#{{storyOrder}} - {{title}} (msgs {{scene}})",
-  arcNameTemplate: "{{rootPrefix}}Arc {{sceneNumberPadded}} - {{title}}",
-  volumeNameTemplate: "{{rootPrefix}}Volume {{sceneNumberPadded}} - {{title}}"
+  arcNameTemplate: "{{rootPrefix}}Arc {{padded}} - {{title}}",
+  volumeNameTemplate: "{{rootPrefix}}Volume {{padded}} - {{title}}"
 };
 var LEGACY_CHAPTER_NAME_TEMPLATE = "#{{sceneNumber}} - {{title}} (msgs {{scene}})";
 var LEGACY_ARC_NAME_TEMPLATE = "{{rootPrefix}}Arc #{{sceneNumber}} - {{title}} (msgs {{scene}})";
 var LEGACY_VOLUME_NAME_TEMPLATE = "{{rootPrefix}}Volume #{{sceneNumber}} - {{title}} (msgs {{scene}})";
+var PRE_PADDED_ARC_NAME_TEMPLATE = "{{rootPrefix}}Arc {{sceneNumberPadded}} - {{title}}";
+var PRE_PADDED_VOLUME_NAME_TEMPLATE = "{{rootPrefix}}Volume {{sceneNumberPadded}} - {{title}}";
 function diskVersionFor(raw) {
   const v = raw && typeof raw === "object" ? raw : {};
   return typeof v.version === "number" ? v.version : 1;
@@ -86,15 +88,15 @@ function normalizeSettings(raw) {
     memoryOutletName: normalizeOutletName(v.memoryOutletName, fallback.memoryOutletName),
     bookNameTemplate: normalizeTemplate(v.bookNameTemplate, fallback.bookNameTemplate),
     chapterNameTemplate: normalizeTemplate(v.chapterNameTemplate, fallback.chapterNameTemplate, LEGACY_CHAPTER_NAME_TEMPLATE),
-    arcNameTemplate: normalizeTemplate(v.arcNameTemplate, fallback.arcNameTemplate, LEGACY_ARC_NAME_TEMPLATE),
-    volumeNameTemplate: normalizeTemplate(v.volumeNameTemplate, fallback.volumeNameTemplate, LEGACY_VOLUME_NAME_TEMPLATE)
+    arcNameTemplate: normalizeTemplate(v.arcNameTemplate, fallback.arcNameTemplate, LEGACY_ARC_NAME_TEMPLATE, PRE_PADDED_ARC_NAME_TEMPLATE),
+    volumeNameTemplate: normalizeTemplate(v.volumeNameTemplate, fallback.volumeNameTemplate, LEGACY_VOLUME_NAME_TEMPLATE, PRE_PADDED_VOLUME_NAME_TEMPLATE)
   };
 }
-function normalizeTemplate(raw, fallback, legacyDefault) {
+function normalizeTemplate(raw, fallback, ...legacyDefaults) {
   if (typeof raw !== "string")
     return fallback;
   const trimmed = raw.trim();
-  if (legacyDefault && trimmed === legacyDefault)
+  if (legacyDefaults.includes(trimmed))
     return fallback;
   return trimmed || fallback;
 }
@@ -400,6 +402,7 @@ function applyLocalMacros(template, ctx) {
     scene: range || String(ctx.sceneNumber),
     scenenumber: String(ctx.sceneNumber),
     scenenumberpadded: pad3(ctx.sceneNumber),
+    padded: pad3(ctx.sceneNumber),
     storyorder: typeof ctx.storyOrder === "number" ? String(ctx.storyOrder) : String(ctx.sceneNumber),
     storyorderpadded: pad3(typeof ctx.storyOrder === "number" ? ctx.storyOrder : ctx.sceneNumber),
     title: ctx.title.trim() || fallbackTitle(ctx),
