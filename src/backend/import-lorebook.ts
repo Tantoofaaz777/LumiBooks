@@ -20,6 +20,7 @@ export interface ImportAttachedLorebooksResult {
   skippedDuplicate: number;
   skippedInvalidRange: number;
   scannedBooks: number;
+  details: string[];
 }
 
 interface ImportCandidate {
@@ -65,6 +66,7 @@ export async function importAttachedLorebooks(chatId: string, userId: string): P
   let skippedDuplicate = 0;
   let skippedInvalidRange = 0;
   let scannedBooks = 0;
+  const details: string[] = [];
 
   for (const bookId of sourceBookIds) {
     const book = await spindle.world_books.get(bookId, userId).catch(() => null);
@@ -79,6 +81,7 @@ export async function importAttachedLorebooks(chatId: string, userId: string): P
       const parsed = parseRange(entry.comment || entry.content.split(/\n+/, 1)[0] || "");
       if (!parsed) {
         skippedNoRange++;
+        addDetail(details, `${entryLabel(entry)}: no range`);
         continue;
       }
       parsedEntries.push({ entry, parsed });
@@ -89,16 +92,19 @@ export async function importAttachedLorebooks(chatId: string, userId: string): P
       const resolved = resolveRange(parsed.start, parsed.end, messages.length, zeroBasedBook);
       if (!resolved) {
         skippedInvalidRange++;
+        addDetail(details, `${entryLabel(entry)}: invalid range ${parsed.start}-${parsed.end} for ${messages.length} chat messages`);
         continue;
       }
       const { firstMsgIdx, lastMsgIdx } = resolved;
       const key = `${firstMsgIdx}:${lastMsgIdx}`;
       if (existingRanges.has(key)) {
         skippedDuplicate++;
+        addDetail(details, `${entryLabel(entry)}: duplicate range`);
         continue;
       }
       if (occupiedRanges.some((range) => rangesOverlap(firstMsgIdx, lastMsgIdx, range.first, range.last))) {
         skippedDuplicate++;
+        addDetail(details, `${entryLabel(entry)}: overlapping range`);
         continue;
       }
       existingRanges.add(key);
@@ -161,7 +167,7 @@ export async function importAttachedLorebooks(chatId: string, userId: string): P
   }
 
   if (imported > 0) invalidateBookCache(userId, chatId);
-  return { imported, skippedNoRange, skippedDuplicate, skippedInvalidRange, scannedBooks };
+  return { imported, skippedNoRange, skippedDuplicate, skippedInvalidRange, scannedBooks, details };
 }
 
 function parseRange(text: string): { start: number; end: number; raw: string } | null {
@@ -207,4 +213,13 @@ function cleanTitle(text: string, rangeRaw: string): string {
 
 function rangesOverlap(aFirst: number, aLast: number, bFirst: number, bLast: number): boolean {
   return aFirst <= bLast && bFirst <= aLast;
+}
+
+function entryLabel(entry: WorldBookEntryDTO): string {
+  const label = (entry.comment || entry.content.split(/\n+/, 1)[0] || entry.id).trim();
+  return label.length > 80 ? `${label.slice(0, 77)}...` : label;
+}
+
+function addDetail(details: string[], detail: string): void {
+  if (details.length < 3) details.push(detail);
 }

@@ -767,10 +767,10 @@ spindle.onFrontendMessage(async (raw, userId) => {
         }
         const skipped = result.skippedDuplicate + result.skippedInvalidRange + result.skippedNoRange;
         const text = result.imported > 0
-          ? `Imported ${result.imported} entr${result.imported === 1 ? "y" : "ies"} from attached lorebooks${skipped ? ` (${importSkipSummary(result)})` : ""}`
+          ? `Imported ${result.imported} entr${result.imported === 1 ? "y" : "ies"} from attached lorebooks${skipped ? ` (${importSkipSummary(result)})` : ""}${result.details.length ? `; ${result.details.join("; ")}` : ""}`
           : result.scannedBooks === 0
             ? "No other attached lorebooks found to import"
-            : `No importable entries found (${importSkipSummary(result)})`;
+            : `No importable entries found (${importSkipSummary(result)})${result.details.length ? `; ${result.details.join("; ")}` : ""}`;
         await notify(userId, result.imported > 0 ? "success" : "info", text);
         await pushState(userId, msg.chatId);
         break;

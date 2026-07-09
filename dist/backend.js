@@ -4382,6 +4382,7 @@ async function importAttachedLorebooks(chatId, userId) {
   let skippedDuplicate = 0;
   let skippedInvalidRange = 0;
   let scannedBooks = 0;
+  const details = [];
   for (const bookId of sourceBookIds) {
     const book = await spindle.world_books.get(bookId, userId).catch(() => null);
     if (!book)
@@ -4398,6 +4399,7 @@ async function importAttachedLorebooks(chatId, userId) {
       const parsed = parseRange(entry.comment || entry.content.split(/\n+/, 1)[0] || "");
       if (!parsed) {
         skippedNoRange++;
+        addDetail(details, `${entryLabel(entry)}: no range`);
         continue;
       }
       parsedEntries.push({ entry, parsed });
@@ -4407,16 +4409,19 @@ async function importAttachedLorebooks(chatId, userId) {
       const resolved = resolveRange(parsed.start, parsed.end, messages.length, zeroBasedBook);
       if (!resolved) {
         skippedInvalidRange++;
+        addDetail(details, `${entryLabel(entry)}: invalid range ${parsed.start}-${parsed.end} for ${messages.length} chat messages`);
         continue;
       }
       const { firstMsgIdx, lastMsgIdx } = resolved;
       const key2 = `${firstMsgIdx}:${lastMsgIdx}`;
       if (existingRanges.has(key2)) {
         skippedDuplicate++;
+        addDetail(details, `${entryLabel(entry)}: duplicate range`);
         continue;
       }
       if (occupiedRanges.some((range) => rangesOverlap(firstMsgIdx, lastMsgIdx, range.first, range.last))) {
         skippedDuplicate++;
+        addDetail(details, `${entryLabel(entry)}: overlapping range`);
         continue;
       }
       existingRanges.add(key2);
@@ -4468,7 +4473,7 @@ async function importAttachedLorebooks(chatId, userId) {
   }
   if (imported > 0)
     invalidateBookCache(userId, chatId);
-  return { imported, skippedNoRange, skippedDuplicate, skippedInvalidRange, scannedBooks };
+  return { imported, skippedNoRange, skippedDuplicate, skippedInvalidRange, scannedBooks, details };
 }
 function parseRange(text) {
   for (const pattern of RANGE_PATTERNS) {
@@ -4502,6 +4507,14 @@ function cleanTitle(text, rangeRaw) {
 }
 function rangesOverlap(aFirst, aLast, bFirst, bLast) {
   return aFirst <= bLast && bFirst <= aLast;
+}
+function entryLabel(entry) {
+  const label = (entry.comment || entry.content.split(/\n+/, 1)[0] || entry.id).trim();
+  return label.length > 80 ? `${label.slice(0, 77)}...` : label;
+}
+function addDetail(details, detail) {
+  if (details.length < 3)
+    details.push(detail);
 }
 
 // src/backend/index.ts
@@ -5172,7 +5185,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
           }
         }
         const skipped = result.skippedDuplicate + result.skippedInvalidRange + result.skippedNoRange;
-        const text = result.imported > 0 ? `Imported ${result.imported} entr${result.imported === 1 ? "y" : "ies"} from attached lorebooks${skipped ? ` (${importSkipSummary(result)})` : ""}` : result.scannedBooks === 0 ? "No other attached lorebooks found to import" : `No importable entries found (${importSkipSummary(result)})`;
+        const text = result.imported > 0 ? `Imported ${result.imported} entr${result.imported === 1 ? "y" : "ies"} from attached lorebooks${skipped ? ` (${importSkipSummary(result)})` : ""}${result.details.length ? `; ${result.details.join("; ")}` : ""}` : result.scannedBooks === 0 ? "No other attached lorebooks found to import" : `No importable entries found (${importSkipSummary(result)})${result.details.length ? `; ${result.details.join("; ")}` : ""}`;
         await notify(userId, result.imported > 0 ? "success" : "info", text);
         await pushState(userId, msg.chatId);
         break;
