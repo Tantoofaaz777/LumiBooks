@@ -254,7 +254,14 @@ export async function adoptBookForChat(chatId: string, bookId: string, userId: s
   const metadata = (book.metadata && typeof book.metadata === "object") ? (book.metadata as Record<string, unknown>) : {};
   await spindle.world_books.update(
     bookId,
-    { metadata: { ...metadata, lumibooks_chat_id: chatId, lumibooks_adopted_at: Date.now() } },
+    {
+      metadata: {
+        ...metadata,
+        lumibooks_chat_id: chatId,
+        lumibooks_adopted_at: Date.now(),
+        lumibooks_preserve_name: true,
+      },
+    },
     userId,
   );
   await bindBookToChat(chatId, bookId, userId);

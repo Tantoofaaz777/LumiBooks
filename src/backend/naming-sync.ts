@@ -14,8 +14,10 @@ export async function syncNamingForChat(chatId: string, userId: string): Promise
   const chat = await spindle.chats.get(chatId, userId).catch(() => null);
   const book = await spindle.world_books.get(bookId, userId).catch(() => null);
   if (book) {
-    const nextName = await formatBookName(settings, chatId, userId, chat?.name);
-    if (nextName && nextName !== book.name) {
+    const bookMeta = (book.metadata && typeof book.metadata === "object") ? (book.metadata as Record<string, unknown>) : {};
+    const preserveBookName = bookMeta["lumibooks_preserve_name"] === true;
+    const nextName = preserveBookName ? "" : await formatBookName(settings, chatId, userId, chat?.name);
+    if (!preserveBookName && nextName && nextName !== book.name) {
       await spindle.world_books.update(book.id, { name: nextName }, userId).catch((err) => {
         warn(`book rename failed: ${describeError(err)}`);
       });
