@@ -29,6 +29,11 @@ interface ImportCandidate {
   title: string;
 }
 
+interface ParsedSourceEntry {
+  entry: WorldBookEntryDTO;
+  parsed: { start: number; end: number; raw: string };
+}
+
 const RANGE_PATTERNS = [
   /\((?:msgs?|messages?)?\s*(\d{1,6})\s*[-–—]\s*(\d{1,6})\)/i,
   /\bmsgs?\s*(\d{1,6})\s*[-–—]\s*(\d{1,6})\b/i,
@@ -66,6 +71,7 @@ export async function importAttachedLorebooks(chatId: string, userId: string): P
     if (!book) continue;
     scannedBooks++;
     const entries = await listAllEntries(bookId, userId).catch(() => [] as WorldBookEntryDTO[]);
+    const parsedEntries: ParsedSourceEntry[] = [];
     for (const entry of entries) {
       if (entry.disabled) continue;
       const ext = (entry.extensions || {}) as Record<string, unknown>;
@@ -75,12 +81,17 @@ export async function importAttachedLorebooks(chatId: string, userId: string): P
         skippedNoRange++;
         continue;
       }
-      const firstMsgIdx = parsed.start - 1;
-      const lastMsgIdx = parsed.end - 1;
-      if (firstMsgIdx < 0 || lastMsgIdx < firstMsgIdx || lastMsgIdx >= messages.length) {
+      parsedEntries.push({ entry, parsed });
+    }
+
+    const zeroBasedBook = parsedEntries.some(({ parsed }) => parsed.start === 0);
+    for (const { entry, parsed } of parsedEntries) {
+      const resolved = resolveRange(parsed.start, parsed.end, messages.length, zeroBasedBook);
+      if (!resolved) {
         skippedInvalidRange++;
         continue;
       }
+      const { firstMsgIdx, lastMsgIdx } = resolved;
       const key = `${firstMsgIdx}:${lastMsgIdx}`;
       if (existingRanges.has(key)) {
         skippedDuplicate++;
@@ -163,6 +174,25 @@ function parseRange(text: string): { start: number; end: number; raw: string } |
     return { start, end, raw: match[0] };
   }
   return null;
+}
+
+function resolveRange(
+  start: number,
+  end: number,
+  messageCount: number,
+  preferZeroBased: boolean,
+): { firstMsgIdx: number; lastMsgIdx: number } | null {
+  const zeroBased = { firstMsgIdx: start, lastMsgIdx: end };
+  const oneBased = { firstMsgIdx: start - 1, lastMsgIdx: end - 1 };
+  const preferred = preferZeroBased ? zeroBased : oneBased;
+  if (isValidRange(preferred.firstMsgIdx, preferred.lastMsgIdx, messageCount)) return preferred;
+  const fallback = preferZeroBased ? oneBased : zeroBased;
+  if (isValidRange(fallback.firstMsgIdx, fallback.lastMsgIdx, messageCount)) return fallback;
+  return null;
+}
+
+function isValidRange(firstMsgIdx: number, lastMsgIdx: number, messageCount: number): boolean {
+  return firstMsgIdx >= 0 && lastMsgIdx >= firstMsgIdx && lastMsgIdx < messageCount;
 }
 
 function cleanTitle(text: string, rangeRaw: string): string {

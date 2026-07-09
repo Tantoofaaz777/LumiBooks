@@ -4388,6 +4388,7 @@ async function importAttachedLorebooks(chatId, userId) {
       continue;
     scannedBooks++;
     const entries = await listAllEntries(bookId, userId).catch(() => []);
+    const parsedEntries = [];
     for (const entry of entries) {
       if (entry.disabled)
         continue;
@@ -4399,12 +4400,16 @@ async function importAttachedLorebooks(chatId, userId) {
         skippedNoRange++;
         continue;
       }
-      const firstMsgIdx = parsed.start - 1;
-      const lastMsgIdx = parsed.end - 1;
-      if (firstMsgIdx < 0 || lastMsgIdx < firstMsgIdx || lastMsgIdx >= messages.length) {
+      parsedEntries.push({ entry, parsed });
+    }
+    const zeroBasedBook = parsedEntries.some(({ parsed }) => parsed.start === 0);
+    for (const { entry, parsed } of parsedEntries) {
+      const resolved = resolveRange(parsed.start, parsed.end, messages.length, zeroBasedBook);
+      if (!resolved) {
         skippedInvalidRange++;
         continue;
       }
+      const { firstMsgIdx, lastMsgIdx } = resolved;
       const key2 = `${firstMsgIdx}:${lastMsgIdx}`;
       if (existingRanges.has(key2)) {
         skippedDuplicate++;
@@ -4477,6 +4482,20 @@ function parseRange(text) {
     return { start, end, raw: match[0] };
   }
   return null;
+}
+function resolveRange(start, end, messageCount, preferZeroBased) {
+  const zeroBased = { firstMsgIdx: start, lastMsgIdx: end };
+  const oneBased = { firstMsgIdx: start - 1, lastMsgIdx: end - 1 };
+  const preferred = preferZeroBased ? zeroBased : oneBased;
+  if (isValidRange(preferred.firstMsgIdx, preferred.lastMsgIdx, messageCount))
+    return preferred;
+  const fallback = preferZeroBased ? oneBased : zeroBased;
+  if (isValidRange(fallback.firstMsgIdx, fallback.lastMsgIdx, messageCount))
+    return fallback;
+  return null;
+}
+function isValidRange(firstMsgIdx, lastMsgIdx, messageCount) {
+  return firstMsgIdx >= 0 && lastMsgIdx >= firstMsgIdx && lastMsgIdx < messageCount;
 }
 function cleanTitle(text, rangeRaw) {
   return text.replace(rangeRaw, "").replace(/\bmsgs?\s*$/i, "").replace(/\bmessages?\s*$/i, "").replace(/[-\u2013\u2014:#[\]()[\]\s]+$/g, "").replace(/^\s*[-\u2013\u2014:#[\]()[\]\s]+/g, "").trim();
