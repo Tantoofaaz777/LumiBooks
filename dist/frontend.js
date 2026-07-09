@@ -107,29 +107,29 @@ var STYLES = `
 .lmb-status-grid > .lmb-label { opacity: 0.65; }
 .lmb-status-grid > .lmb-value { font-weight: 500; }
 
-.lmb-macro-list {
-  display: grid;
-  gap: 7px;
-  font-size: 12px;
-  line-height: 1.35;
+.lmb-macro-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
 }
-.lmb-macro-row {
-  display: grid;
-  grid-template-columns: minmax(120px, max-content) 1fr;
-  gap: 10px;
-  align-items: start;
-}
-.lmb-macro-row code {
+.lmb-macro-chips code {
   font-family: var(--lumiverse-font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
   font-size: 11px;
-  color: var(--lumiverse-primary, #6b8ff0);
-  background: var(--lumiverse-fill-hover, rgba(255,255,255,0.06));
+  color: var(--lumiverse-text, #dde2ea);
+  background: rgba(255,255,255,0.035);
   border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
   border-radius: 4px;
-  padding: 2px 5px;
+  padding: 3px 6px;
   white-space: nowrap;
+  opacity: 0.82;
 }
-.lmb-macro-row > div { opacity: 0.78; }
+.lmb-macro-notes {
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  opacity: 0.68;
+}
 
 .lmb-busy {
   display: flex;
@@ -2487,33 +2487,42 @@ function renderAboutTab(host, state, send) {
 }
 function renderNameMacros(host) {
   const sec = section("Name macros");
-  const macros = [
-    ["{{scene}}", "Message range covered by the entry, like 1-27. Falls back to the scene number when no range exists."],
-    ["{{sceneNumber}}", "Sequential number inside that tier: chapter 1, arc 1, volume 1, and so on."],
-    ["{{sceneNumberPadded}}", "Scene number padded to three digits, like 001, 002, 003."],
-    ["{{storyOrder}}", "Chronological order used by the lorebook entry."],
-    ["{{storyOrderPadded}}", "Story order padded to three digits."],
-    ["{{title}}", "Title returned by the model, or the fallback title for that tier."],
-    ["{{tier}}", "Entry kind: chapter, arc, or volume."],
-    ["{{chat}}", "Current chat name, or a short chat id if the name is unavailable."],
-    ["{{chatName}}", "Same value as {{chat}}."],
-    ["{{rootPrefix}}", "Adds [Root] only for inherited root entries; otherwise blank."],
-    ["{{turns}}", "Number of source messages covered by the entry, when available."],
-    ["{{sources}}", "Number of source chapters/arcs used by an arc or volume, when available."]
+  const chips = [
+    "{{scene}}",
+    "{{sceneNumber}}",
+    "{{sceneNumberPadded}}",
+    "{{storyOrder}}",
+    "{{storyOrderPadded}}",
+    "{{title}}",
+    "{{tier}}",
+    "{{chat}}",
+    "{{chatName}}",
+    "{{rootPrefix}}",
+    "{{turns}}",
+    "{{sources}}"
   ];
-  const list = document.createElement("div");
-  list.className = "lmb-macro-list";
-  for (const [name, detail] of macros) {
-    const row = document.createElement("div");
-    row.className = "lmb-macro-row";
+  const chipWrap = document.createElement("div");
+  chipWrap.className = "lmb-macro-chips";
+  for (const name of chips) {
     const key = document.createElement("code");
     key.textContent = name;
-    const desc = document.createElement("div");
-    desc.textContent = detail;
-    row.append(key, desc);
-    list.appendChild(row);
+    chipWrap.appendChild(key);
   }
-  sec.body.appendChild(list);
+  sec.body.appendChild(chipWrap);
+  const notes = document.createElement("div");
+  notes.className = "lmb-macro-notes";
+  for (const text of [
+    "{{scene}} is the visible message range, like 1-27.",
+    "{{sceneNumber}} counts entries inside the same tier; the padded version becomes 001, 002, 003.",
+    "{{storyOrder}} is the chronological lorebook order; the padded version also uses three digits.",
+    "{{title}}, {{tier}}, {{chat}}/{{chatName}}, {{turns}}, and {{sources}} insert their literal metadata values.",
+    "{{rootPrefix}} inserts [Root] for inherited root entries and nothing otherwise."
+  ]) {
+    const note = document.createElement("div");
+    note.textContent = text;
+    notes.appendChild(note);
+  }
+  sec.body.appendChild(notes);
   host.appendChild(sec.wrap);
 }
 function renderNaming(host, state, send) {

@@ -106,29 +106,29 @@ export const STYLES = `
 .lmb-status-grid > .lmb-label { opacity: 0.65; }
 .lmb-status-grid > .lmb-value { font-weight: 500; }
 
-.lmb-macro-list {
-  display: grid;
-  gap: 7px;
-  font-size: 12px;
-  line-height: 1.35;
+.lmb-macro-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
 }
-.lmb-macro-row {
-  display: grid;
-  grid-template-columns: minmax(120px, max-content) 1fr;
-  gap: 10px;
-  align-items: start;
-}
-.lmb-macro-row code {
+.lmb-macro-chips code {
   font-family: var(--lumiverse-font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
   font-size: 11px;
-  color: var(--lumiverse-primary, #6b8ff0);
-  background: var(--lumiverse-fill-hover, rgba(255,255,255,0.06));
+  color: var(--lumiverse-text, #dde2ea);
+  background: rgba(255,255,255,0.035);
   border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
   border-radius: 4px;
-  padding: 2px 5px;
+  padding: 3px 6px;
   white-space: nowrap;
+  opacity: 0.82;
 }
-.lmb-macro-row > div { opacity: 0.78; }
+.lmb-macro-notes {
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  opacity: 0.68;
+}
 
 .lmb-busy {
   display: flex;
