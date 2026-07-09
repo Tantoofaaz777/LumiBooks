@@ -93,6 +93,7 @@ function applyLocalMacros(template: string, ctx: TemplateContext): string {
     scenenumberpadded: pad3(ctx.sceneNumber),
     padded: pad3(ctx.sceneNumber),
     storyorder: typeof ctx.storyOrder === "number" ? String(ctx.storyOrder) : String(ctx.sceneNumber),
+    order: typeof ctx.storyOrder === "number" ? String(ctx.storyOrder) : String(ctx.sceneNumber),
     storyorderpadded: pad3(typeof ctx.storyOrder === "number" ? ctx.storyOrder : ctx.sceneNumber),
     title: ctx.title.trim() || fallbackTitle(ctx),
     tier: ctx.tier,

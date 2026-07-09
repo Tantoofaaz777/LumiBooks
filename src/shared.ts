@@ -135,16 +135,19 @@ export const DEFAULT_SETTINGS: LMBSettings = {
   memoryInjectionMode: "outlet",
   memoryOutletName: "lumibooks",
   bookNameTemplate: `${WORLD_BOOK_NAME_PREFIX} - {{chat}}`,
-  chapterNameTemplate: "#{{storyOrder}} - {{title}} (msgs {{scene}})",
-  arcNameTemplate: "{{rootPrefix}}Arc {{padded}} - {{title}}",
-  volumeNameTemplate: "{{rootPrefix}}Volume {{padded}} - {{title}}",
+  chapterNameTemplate: "#{{order}} - {{title}} (msgs {{scene}})",
+  arcNameTemplate: "Arc {{padded}} - {{title}}",
+  volumeNameTemplate: "Volume {{padded}} - {{title}}",
 };
 
 const LEGACY_CHAPTER_NAME_TEMPLATE = "#{{sceneNumber}} - {{title}} (msgs {{scene}})";
 const LEGACY_ARC_NAME_TEMPLATE = "{{rootPrefix}}Arc #{{sceneNumber}} - {{title}} (msgs {{scene}})";
 const LEGACY_VOLUME_NAME_TEMPLATE = "{{rootPrefix}}Volume #{{sceneNumber}} - {{title}} (msgs {{scene}})";
+const PRE_ORDER_CHAPTER_NAME_TEMPLATE = "#{{storyOrder}} - {{title}} (msgs {{scene}})";
 const PRE_PADDED_ARC_NAME_TEMPLATE = "{{rootPrefix}}Arc {{sceneNumberPadded}} - {{title}}";
 const PRE_PADDED_VOLUME_NAME_TEMPLATE = "{{rootPrefix}}Volume {{sceneNumberPadded}} - {{title}}";
+const PRE_ROOT_ARC_NAME_TEMPLATE = "{{rootPrefix}}Arc {{padded}} - {{title}}";
+const PRE_ROOT_VOLUME_NAME_TEMPLATE = "{{rootPrefix}}Volume {{padded}} - {{title}}";
 
 export function diskVersionFor(raw: Partial<LMBSettings> | null | undefined): number {
   const v = raw && typeof raw === "object" ? raw : {};
@@ -177,9 +180,9 @@ export function normalizeSettings(raw: Partial<LMBSettings> | null | undefined):
     memoryInjectionMode: "outlet",
     memoryOutletName: normalizeOutletName(v.memoryOutletName, fallback.memoryOutletName),
     bookNameTemplate: normalizeTemplate(v.bookNameTemplate, fallback.bookNameTemplate),
-    chapterNameTemplate: normalizeTemplate(v.chapterNameTemplate, fallback.chapterNameTemplate, LEGACY_CHAPTER_NAME_TEMPLATE),
-    arcNameTemplate: normalizeTemplate(v.arcNameTemplate, fallback.arcNameTemplate, LEGACY_ARC_NAME_TEMPLATE, PRE_PADDED_ARC_NAME_TEMPLATE),
-    volumeNameTemplate: normalizeTemplate(v.volumeNameTemplate, fallback.volumeNameTemplate, LEGACY_VOLUME_NAME_TEMPLATE, PRE_PADDED_VOLUME_NAME_TEMPLATE),
+    chapterNameTemplate: normalizeTemplate(v.chapterNameTemplate, fallback.chapterNameTemplate, LEGACY_CHAPTER_NAME_TEMPLATE, PRE_ORDER_CHAPTER_NAME_TEMPLATE),
+    arcNameTemplate: normalizeTemplate(v.arcNameTemplate, fallback.arcNameTemplate, LEGACY_ARC_NAME_TEMPLATE, PRE_PADDED_ARC_NAME_TEMPLATE, PRE_ROOT_ARC_NAME_TEMPLATE),
+    volumeNameTemplate: normalizeTemplate(v.volumeNameTemplate, fallback.volumeNameTemplate, LEGACY_VOLUME_NAME_TEMPLATE, PRE_PADDED_VOLUME_NAME_TEMPLATE, PRE_ROOT_VOLUME_NAME_TEMPLATE),
   };
 }
 

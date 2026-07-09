@@ -21,7 +21,7 @@ function renderNameMacros(host: HTMLElement): void {
   const macros: Array<[string, string]> = [
     ["{{title}}", "Title returned by the model, or the fallback title for that tier."],
     ["{{scene}}", "Visible message range covered by the entry, like 1-27."],
-    ["{{storyOrder}}", "Chronological lorebook order: 1, 2, 3..."],
+    ["{{order}}", "Chronological lorebook order: 1, 2, 3..."],
     ["{{padded}}", "Tier number padded to three digits, like 001, 002, 003."],
     ["{{chat}}", "Current chat name, or a short chat id if the name is unavailable."],
   ];
@@ -75,9 +75,9 @@ function renderNaming(
   };
 
   addTemplate("Lorebook name", "bookNameTemplate", "LumiBooks - {{chat}}");
-  addTemplate("Chapter entry", "chapterNameTemplate", "#{{storyOrder}} - {{title}} (msgs {{scene}})");
-  addTemplate("Arc entry", "arcNameTemplate", "{{rootPrefix}}Arc {{padded}} - {{title}}");
-  addTemplate("Volume entry", "volumeNameTemplate", "{{rootPrefix}}Volume {{padded}} - {{title}}");
+  addTemplate("Chapter entry", "chapterNameTemplate", "#{{order}} - {{title}} (msgs {{scene}})");
+  addTemplate("Arc entry", "arcNameTemplate", "Arc {{padded}} - {{title}}");
+  addTemplate("Volume entry", "volumeNameTemplate", "Volume {{padded}} - {{title}}");
 
   host.appendChild(sec.wrap);
 }
