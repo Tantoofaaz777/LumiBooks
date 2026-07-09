@@ -54,7 +54,6 @@ import { invalidateConnectionsCache } from "./summarizer";
 import { invalidateRegexCache } from "./regex";
 import { registerHookEndpoints } from "./hooks";
 import { buildState } from "./state";
-import { parseStmbPresetExport } from "./presets";
 import { syncProjectionEntry } from "./projection";
 import { syncNamingForChat } from "./naming-sync";
 import { confirmAdoptLorebook, listAdoptLorebookCandidates } from "./import-lorebook";
@@ -734,27 +733,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
 
       case "ensure_book": {
         await ensureBookForChat(msg.chatId, userId);
-        await pushState(userId, msg.chatId);
-        break;
-      }
-
-      case "import_preset": {
-        const parsed = parseStmbPresetExport(msg.raw, msg.category);
-        if (parsed.length === 0) {
-          await notify(userId, "warn", "Memoria found no usable presets in that file");
-          break;
-        }
-        await mutateSettings(userId, (cur) => {
-          const merged = [...cur.customPresets];
-          for (const p of parsed) {
-            const existing = merged.findIndex((c) => c.key === p.key && c.category === msg.category);
-            const record = { ...p, category: msg.category, createdAt: Date.now() };
-            if (existing >= 0) merged[existing] = record;
-            else merged.push(record);
-          }
-          return { ...cur, customPresets: merged };
-        });
-        await notify(userId, "success", `Memoria imported ${parsed.length} preset${parsed.length === 1 ? "" : "s"}`);
         await pushState(userId, msg.chatId);
         break;
       }

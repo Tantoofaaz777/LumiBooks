@@ -1234,31 +1234,6 @@ var BUILTIN_VOLUME_PRESETS = [
 `)
   }
 ];
-function parseStmbPresetExport(raw, category) {
-  const out = [];
-  if (!raw || typeof raw !== "object" || Array.isArray(raw))
-    return out;
-  const overrides = raw.overrides;
-  if (!overrides || typeof overrides !== "object" || Array.isArray(overrides))
-    return out;
-  for (const [k, v] of Object.entries(overrides)) {
-    if (!v || typeof v !== "object")
-      continue;
-    const node = v;
-    if (typeof node.prompt !== "string" || !node.prompt.trim())
-      continue;
-    const key = sanitizeKey(`${category}_${k}`);
-    const displayName = typeof node.displayName === "string" && node.displayName.trim() ? node.displayName : k;
-    out.push({ key, displayName, prompt: node.prompt });
-  }
-  return out;
-}
-function sanitizeKey(raw) {
-  const cleaned = raw.toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80);
-  if (cleaned)
-    return cleaned;
-  return `preset_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
 
 // src/backend/summarizer.ts
 var CONNECTION_CACHE_TTL_MS = 5000;
@@ -4299,28 +4274,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
       }
       case "ensure_book": {
         await ensureBookForChat(msg.chatId, userId);
-        await pushState(userId, msg.chatId);
-        break;
-      }
-      case "import_preset": {
-        const parsed = parseStmbPresetExport(msg.raw, msg.category);
-        if (parsed.length === 0) {
-          await notify(userId, "warn", "Memoria found no usable presets in that file");
-          break;
-        }
-        await mutateSettings(userId, (cur) => {
-          const merged = [...cur.customPresets];
-          for (const p of parsed) {
-            const existing = merged.findIndex((c) => c.key === p.key && c.category === msg.category);
-            const record = { ...p, category: msg.category, createdAt: Date.now() };
-            if (existing >= 0)
-              merged[existing] = record;
-            else
-              merged.push(record);
-          }
-          return { ...cur, customPresets: merged };
-        });
-        await notify(userId, "success", `Memoria imported ${parsed.length} preset${parsed.length === 1 ? "" : "s"}`);
         await pushState(userId, msg.chatId);
         break;
       }

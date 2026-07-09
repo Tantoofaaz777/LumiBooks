@@ -111,36 +111,3 @@ export function findBuiltInPreset(category: "chapter" | "arc" | "volume", key: s
   const pool = category === "arc" ? BUILTIN_ARC_PRESETS : category === "volume" ? BUILTIN_VOLUME_PRESETS : BUILTIN_CHAPTER_PRESETS;
   return pool.find((p) => p.key === key) ?? null;
 }
-
-export interface ImportedPresetMap {
-  chapter: { key: string; displayName: string; prompt: string }[];
-  arc: { key: string; displayName: string; prompt: string }[];
-}
-
-export function parseStmbPresetExport(raw: unknown, category: "chapter" | "arc"): ImportedPresetMap[keyof ImportedPresetMap] {
-  const out: { key: string; displayName: string; prompt: string }[] = [];
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
-  const overrides = (raw as { overrides?: unknown }).overrides;
-  if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) return out;
-  for (const [k, v] of Object.entries(overrides as Record<string, unknown>)) {
-    if (!v || typeof v !== "object") continue;
-    const node = v as { displayName?: unknown; prompt?: unknown };
-    if (typeof node.prompt !== "string" || !node.prompt.trim()) continue;
-    const key = sanitizeKey(`${category}_${k}`);
-    const displayName = typeof node.displayName === "string" && node.displayName.trim()
-      ? node.displayName
-      : k;
-    out.push({ key, displayName, prompt: node.prompt });
-  }
-  return out;
-}
-
-function sanitizeKey(raw: string): string {
-  const cleaned = raw
-    .toLowerCase()
-    .replace(/[^a-z0-9_]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 80);
-  if (cleaned) return cleaned;
-  return `preset_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}

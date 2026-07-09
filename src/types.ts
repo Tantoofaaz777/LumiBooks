@@ -172,7 +172,6 @@ export type FrontendToBackend =
   | { type: "dry_run_arc"; chatId: string }
   | { type: "dry_run_volume"; chatId: string }
   | { type: "ensure_book"; chatId: string }
-  | { type: "import_preset"; raw: unknown; category: "chapter" | "arc"; chatId?: string | null }
   | { type: "save_custom_preset"; preset: CustomPreset; chatId?: string | null }
   | { type: "delete_custom_preset"; key: string; category: "chapter" | "arc" | "volume"; chatId?: string | null }
   | { type: "accept_preview"; draftId: string; chatId: string }

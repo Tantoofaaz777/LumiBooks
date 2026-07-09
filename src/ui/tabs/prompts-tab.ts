@@ -8,7 +8,6 @@ import {
   select,
   textArea,
   textInput,
-  textNode,
 } from "../components";
 import { confirmDelete, promptForString } from "../modals";
 
@@ -32,7 +31,6 @@ export function renderPromptsTab(
   renderCategory(host, state, ctx, send, "chapter", profile.chapterPresetKey, setKey);
   renderCategory(host, state, ctx, send, "arc", profile.arcPresetKey, setKey);
   renderCategory(host, state, ctx, send, "volume", profile.volumePresetKey, setKey);
-  renderImport(host, state, ctx, send);
 }
 
 type PresetCategory = "chapter" | "arc" | "volume";
@@ -193,103 +191,5 @@ function findPresetText(state: FrontendState, category: PresetCategory, key: str
   const builtIns = category === "arc" ? state.arcPresets : category === "volume" ? state.volumePresets : state.chapterPresets;
   const b = builtIns.find((p) => p.key === key);
   return b?.prompt ?? "";
-}
-
-function renderImport(
-  host: HTMLElement,
-  state: FrontendState,
-  ctx: SpindleFrontendContext,
-  send: (msg: FrontendToBackend) => void,
-): void {
-  const sec = section("Import STMB presets");
-  const help = document.createElement("div");
-  help.className = "lmb-help";
-  help.textContent =
-    "Upload a SillyTavern Memory Books export. Memoria reads the prompts and adds them as custom presets you can edit.";
-  sec.body.appendChild(help);
-
-  const row = document.createElement("div");
-  row.className = "lmb-actions";
-  row.append(
-    makeButton("Import chapter presets", () => importFile(ctx, "chapter", send, state.activeChatId)),
-    makeButton("Import arc presets", () => importFile(ctx, "arc", send, state.activeChatId)),
-  );
-  sec.body.appendChild(row);
-
-  if (state.customPresets.length > 0) {
-    const list = document.createElement("ul");
-    list.className = "lmb-entry-list";
-    for (const p of state.customPresets) {
-      const li = document.createElement("li");
-      li.className = "lmb-entry";
-      const head = document.createElement("div");
-      head.className = "lmb-entry-head";
-      const tag = document.createElement("span");
-      tag.className = "lmb-entry-tag";
-      tag.textContent = p.category.toUpperCase();
-      const title = document.createElement("div");
-      title.className = "lmb-entry-title";
-      title.textContent = p.displayName;
-      head.append(tag, title);
-      head.append(makeButton("Delete", async () => {
-        const ok = await confirmDelete(ctx, "Delete preset?", "");
-        if (ok) send({ type: "delete_custom_preset", key: p.key, category: p.category, chatId: state.activeChatId });
-      }, { small: true, danger: true }));
-      li.appendChild(head);
-      list.appendChild(li);
-    }
-    sec.body.appendChild(list);
-  } else {
-    sec.body.appendChild(textNode("No custom presets yet", "lmb-empty"));
-  }
-
-  host.appendChild(sec.wrap);
-}
-
-function importFile(
-  ctx: SpindleFrontendContext,
-  category: "chapter" | "arc",
-  send: (msg: FrontendToBackend) => void,
-  chatId: string | null,
-): void {
-  ctx.uploads.pickFile({ accept: [".json", "application/json"], maxSizeBytes: 1_000_000 })
-    .then((files) => {
-      if (!files.length) return;
-      const file = files[0]!;
-      let text: string;
-      try {
-        text = new TextDecoder().decode(file.bytes);
-      } catch (err) {
-        console.warn("[LumiBooks] preset file decode failed", err);
-        showImportFailure(ctx, "Memoria can't read this file");
-        return;
-      }
-      let parsed: unknown = null;
-      try {
-        parsed = JSON.parse(text);
-      } catch (err) {
-        console.warn("[LumiBooks] preset JSON parse failed", err);
-        showImportFailure(ctx, "Memoria couldn't parse the preset JSON");
-        return;
-      }
-      send({ type: "import_preset", category, raw: parsed, chatId });
-    })
-    .catch((err) => {
-      console.warn("[LumiBooks] import picker failed", err);
-    });
-}
-
-function showImportFailure(ctx: SpindleFrontendContext, message: string): void {
-  try {
-    void ctx.ui.showConfirm({
-      title: "Import failed",
-      message,
-      variant: "warning",
-      confirmLabel: "OK",
-      cancelLabel: "OK",
-    });
-  } catch {
-    window.alert(message);
-  }
 }
 
