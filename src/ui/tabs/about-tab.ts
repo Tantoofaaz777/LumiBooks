@@ -102,13 +102,6 @@ function renderNaming(
   addTemplate("Arc entry", "arcNameTemplate", "{{rootPrefix}}Arc {{sceneNumberPadded}} - {{title}}");
   addTemplate("Volume entry", "volumeNameTemplate", "{{rootPrefix}}Volume {{sceneNumberPadded}} - {{title}}");
 
-  sec.body.appendChild(checkbox({
-    checked: state.settings.includeContentHeaders,
-    label: "Save generated headers in memory content",
-    hint: "When off, entries save only the actual memory text, without the generated Chapter/ARC/VOLUME header.",
-    onChange: (v) => saveSetting({ includeContentHeaders: v }),
-  }));
-
   host.appendChild(sec.wrap);
 }
 

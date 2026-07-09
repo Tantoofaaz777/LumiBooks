@@ -143,7 +143,6 @@ function tryParseJsonObject(cand: string): Record<string, unknown> | null {
 
 interface ParsedSummary {
   title: string;
-  opener: string;
   content: string;
   keywords: string[];
   shortComment: string;
@@ -154,7 +153,7 @@ export function parseSummaryJsonForTest(raw: string): ParsedSummary {
   const normalized = normalizeText(cleaned);
   const safeFallback = (title: string): ParsedSummary => {
     const looksDegenerate = normalized === "" || normalized === "null" || normalized === "undefined";
-    return { title, opener: "", content: looksDegenerate ? "" : normalized, keywords: [], shortComment: "" };
+    return { title, content: looksDegenerate ? "" : normalized, keywords: [], shortComment: "" };
   };
 
   const candidates = collectJsonCandidates(normalized);
@@ -162,13 +161,12 @@ export function parseSummaryJsonForTest(raw: string): ParsedSummary {
     const obj = tryParseJsonObject(cand);
     if (!obj) continue;
     const title = typeof obj["title"] === "string" ? (obj["title"] as string) : "";
-    const opener = typeof obj["opener"] === "string" ? (obj["opener"] as string) : "";
     const contentRaw = obj["content"] ?? obj["summary"] ?? obj["memory_content"];
     if (typeof contentRaw !== "string") continue;
     const kw = obj["keywords"];
     const keywords = Array.isArray(kw) ? kw.filter((x): x is string => typeof x === "string") : [];
     const sc = typeof obj["short_comment"] === "string" ? (obj["short_comment"] as string) : "";
-    return { title, opener, content: contentRaw, keywords, shortComment: sc };
+    return { title, content: contentRaw, keywords, shortComment: sc };
   }
   return safeFallback("");
 }

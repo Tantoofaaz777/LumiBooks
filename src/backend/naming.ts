@@ -34,17 +34,8 @@ export function sceneRange(firstMsgIdx?: number, lastMsgIdx?: number): string {
   return "";
 }
 
-export function savedMemoryContent(settings: LMBSettings, opener: string, content: string): string {
-  const clean = content.trim();
-  if (!settings.includeContentHeaders) return clean;
-  return `${opener.trim()}\n\n${clean}`.trim();
-}
-
-export function stripGeneratedHeader(content: string): string {
-  return content.replace(
-    /^\s*\d+(?:st|nd|rd|th) Summary (?:Chapter|ARC|VOLUME) Containing [^\n]*\n{2,}/i,
-    "",
-  ).trim();
+export function savedMemoryContent(content: string): string {
+  return content.trim();
 }
 
 export async function formatEntryName(settings: LMBSettings, ctx: EntryNameContext): Promise<string> {

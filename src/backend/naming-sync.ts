@@ -1,6 +1,6 @@
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
-import { formatBookName, formatEntryName, stripGeneratedHeader } from "./naming";
+import { formatBookName, formatEntryName } from "./naming";
 import { EXTENSION_KEY } from "../shared";
 import { describeError, warn } from "./runtime";
 import { loadSettings } from "./storage";
@@ -40,9 +40,7 @@ export async function syncNamingForChat(chatId: string, userId: string): Promise
       turnCount: entry.meta.msgIds.length,
       isRoot: entry.meta.isRoot,
     });
-    const rawContent = entry.raw.content || "";
-    const nextContent = settings.includeContentHeaders ? rawContent : stripGeneratedHeader(rawContent);
-    const patch: { comment?: string; content?: string; extensions?: Record<string, unknown> } = {};
+    const patch: { comment?: string; extensions?: Record<string, unknown> } = {};
     if (isAdoptedEntry(entry.meta)) {
       const ext = (entry.raw.extensions || {}) as Record<string, unknown>;
       const nextMeta = { ...entry.meta, preserveComment: true };
@@ -52,7 +50,6 @@ export async function syncNamingForChat(chatId: string, userId: string): Promise
     } else if (!entry.meta.preserveComment && nextComment && nextComment !== entry.raw.comment) {
       patch.comment = nextComment;
     }
-    if (nextContent !== rawContent) patch.content = nextContent;
     if (Object.keys(patch).length === 0) continue;
     await updateEntry(entry.raw.id, patch, userId).catch((err) => {
       warn(`entry rename failed for ${entry.raw.id}: ${describeError(err)}`);

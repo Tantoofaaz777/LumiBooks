@@ -2040,8 +2040,7 @@ var DEFAULT_SETTINGS = {
   bookNameTemplate: `${WORLD_BOOK_NAME_PREFIX} - {{chat}}`,
   chapterNameTemplate: "#{{storyOrder}} - {{title}} (msgs {{scene}})",
   arcNameTemplate: "{{rootPrefix}}Arc {{sceneNumberPadded}} - {{title}}",
-  volumeNameTemplate: "{{rootPrefix}}Volume {{sceneNumberPadded}} - {{title}}",
-  includeContentHeaders: false
+  volumeNameTemplate: "{{rootPrefix}}Volume {{sceneNumberPadded}} - {{title}}"
 };
 
 // src/ui/tabs/profile-tab.ts
@@ -2625,12 +2624,6 @@ function renderNaming(host, state, send) {
   addTemplate("Chapter entry", "chapterNameTemplate", "#{{storyOrder}} - {{title}} (msgs {{scene}})");
   addTemplate("Arc entry", "arcNameTemplate", "{{rootPrefix}}Arc {{sceneNumberPadded}} - {{title}}");
   addTemplate("Volume entry", "volumeNameTemplate", "{{rootPrefix}}Volume {{sceneNumberPadded}} - {{title}}");
-  sec.body.appendChild(checkbox({
-    checked: state.settings.includeContentHeaders,
-    label: "Save generated headers in memory content",
-    hint: "When off, entries save only the actual memory text, without the generated Chapter/ARC/VOLUME header.",
-    onChange: (v) => saveSetting({ includeContentHeaders: v })
-  }));
   host.appendChild(sec.wrap);
 }
 function renderExtras(host, state, send) {

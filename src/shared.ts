@@ -57,7 +57,6 @@ export interface LMBSettings {
   chapterNameTemplate: string;
   arcNameTemplate: string;
   volumeNameTemplate: string;
-  includeContentHeaders: boolean;
 }
 
 export interface LMBEntryMeta {
@@ -139,7 +138,6 @@ export const DEFAULT_SETTINGS: LMBSettings = {
   chapterNameTemplate: "#{{storyOrder}} - {{title}} (msgs {{scene}})",
   arcNameTemplate: "{{rootPrefix}}Arc {{sceneNumberPadded}} - {{title}}",
   volumeNameTemplate: "{{rootPrefix}}Volume {{sceneNumberPadded}} - {{title}}",
-  includeContentHeaders: false,
 };
 
 const LEGACY_CHAPTER_NAME_TEMPLATE = "#{{sceneNumber}} - {{title}} (msgs {{scene}})";
@@ -180,7 +178,6 @@ export function normalizeSettings(raw: Partial<LMBSettings> | null | undefined):
     chapterNameTemplate: normalizeTemplate(v.chapterNameTemplate, fallback.chapterNameTemplate, LEGACY_CHAPTER_NAME_TEMPLATE),
     arcNameTemplate: normalizeTemplate(v.arcNameTemplate, fallback.arcNameTemplate, LEGACY_ARC_NAME_TEMPLATE),
     volumeNameTemplate: normalizeTemplate(v.volumeNameTemplate, fallback.volumeNameTemplate, LEGACY_VOLUME_NAME_TEMPLATE),
-    includeContentHeaders: typeof v.includeContentHeaders === "boolean" ? v.includeContentHeaders : fallback.includeContentHeaders,
   };
 }
 
@@ -310,30 +307,6 @@ export function normalizeOutletName(raw: unknown, fallback = "lumibooks"): strin
 
 export function approximateTokensFromChars(chars: number): number {
   return Math.ceil(chars / 4);
-}
-
-export function ordinal(n: number): string {
-  if (!Number.isFinite(n) || n < 1) return String(n);
-  const mod100 = n % 100;
-  if (mod100 >= 11 && mod100 <= 13) return `${n}th`;
-  switch (n % 10) {
-    case 1: return `${n}st`;
-    case 2: return `${n}nd`;
-    case 3: return `${n}rd`;
-    default: return `${n}th`;
-  }
-}
-
-export function buildChapterHeader(sceneNumber: number, turnCount: number): string {
-  return `${ordinal(sceneNumber)} Summary Chapter Containing ${turnCount} Prior Turn${turnCount === 1 ? "" : "s"}`;
-}
-
-export function buildArcHeader(sceneNumber: number, chapterCount: number, turnCount: number): string {
-  return `${ordinal(sceneNumber)} Summary ARC Containing ${chapterCount} Prior Chapter${chapterCount === 1 ? "" : "s"} and ${turnCount} Prior Turn${turnCount === 1 ? "" : "s"}`;
-}
-
-export function buildVolumeHeader(sceneNumber: number, arcCount: number, turnCount: number): string {
-  return `${ordinal(sceneNumber)} Summary VOLUME Containing ${arcCount} Prior Arc${arcCount === 1 ? "" : "s"} and ${turnCount} Prior Turn${turnCount === 1 ? "" : "s"}`;
 }
 
 export function bookNameFor(chatName: string | null | undefined, chatId: string): string {

@@ -83,7 +83,6 @@ export function renderTranscript(messages: ChatMessageDTO[], includeIndex = true
 export interface SummarizationResult {
   rawOutput: string;
   title: string;
-  opener: string;
   content: string;
   keywords: string[];
   shortComment: string;
@@ -279,7 +278,6 @@ export async function assembleChapterPrompt(
   messages: ChatMessageDTO[],
   previousMemories: LMBEntry[],
   userId: string,
-  _opener: string,
 ): Promise<DryRunAssembly> {
   const conn = await resolveConnection(profile, userId);
   if (!conn) throw new FatalSummarizerError("No connection available for Memoria");
@@ -327,7 +325,6 @@ export async function assembleArcPrompt(
   chatId: string,
   chapters: LMBEntry[],
   userId: string,
-  _opener: string,
 ): Promise<DryRunAssembly> {
   const conn = await resolveConnection(profile, userId);
   if (!conn) throw new FatalSummarizerError("No connection available for Memoria");
@@ -375,7 +372,6 @@ export async function assembleVolumePrompt(
   chatId: string,
   arcs: LMBEntry[],
   userId: string,
-  _opener: string,
 ): Promise<DryRunAssembly> {
   const conn = await resolveConnection(profile, userId);
   if (!conn) throw new FatalSummarizerError("No connection available for Memoria");
@@ -423,7 +419,6 @@ export async function summarizeVolume(
   chatId: string,
   arcs: LMBEntry[],
   userId: string,
-  opener: string,
   streamOptions: StreamOptions,
 ): Promise<SummarizationResult> {
   const conn = await resolveConnection(profile, userId);
@@ -461,7 +456,6 @@ export async function summarizeVolume(
   return {
     rawOutput: rawText,
     title: parsed.title,
-    opener: parsed.opener || opener,
     content: parsed.content,
     keywords: parsed.keywords,
     shortComment: parsed.shortComment,
@@ -480,7 +474,6 @@ export async function summarizeChapter(
   messages: ChatMessageDTO[],
   previousMemories: LMBEntry[],
   userId: string,
-  opener: string,
   streamOptions: StreamOptions,
 ): Promise<SummarizationResult> {
   const conn = await resolveConnection(profile, userId);
@@ -518,7 +511,6 @@ export async function summarizeChapter(
   return {
     rawOutput: rawText,
     title: parsed.title,
-    opener: parsed.opener || opener,
     content: parsed.content,
     keywords: parsed.keywords,
     shortComment: parsed.shortComment,
@@ -536,7 +528,6 @@ export async function summarizeArc(
   chatId: string,
   chapters: LMBEntry[],
   userId: string,
-  opener: string,
   streamOptions: StreamOptions,
 ): Promise<SummarizationResult> {
   const conn = await resolveConnection(profile, userId);
@@ -574,7 +565,6 @@ export async function summarizeArc(
   return {
     rawOutput: rawText,
     title: parsed.title,
-    opener: parsed.opener || opener,
     content: parsed.content,
     keywords: parsed.keywords,
     shortComment: parsed.shortComment,
@@ -588,7 +578,6 @@ export async function summarizeArc(
 
 interface ParsedSummary {
   title: string;
-  opener: string;
   content: string;
   keywords: string[];
   shortComment: string;
@@ -605,13 +594,12 @@ function parseSummaryJson(raw: string): ParsedSummary {
     if (!obj) continue;
     sawParseableObject = true;
     const title = typeof obj["title"] === "string" ? (obj["title"] as string) : "";
-    const opener = typeof obj["opener"] === "string" ? (obj["opener"] as string) : "";
     const contentRaw = obj["content"] ?? obj["summary"] ?? obj["memory_content"];
     if (typeof contentRaw !== "string") continue;
     const kw = obj["keywords"];
     const keywords = Array.isArray(kw) ? kw.filter((x): x is string => typeof x === "string") : [];
     const sc = typeof obj["short_comment"] === "string" ? (obj["short_comment"] as string) : "";
-    return { title, opener, content: contentRaw, keywords, shortComment: sc };
+    return { title, content: contentRaw, keywords, shortComment: sc };
   }
   if (sawParseableObject) {
     throw new Error("The model's JSON had no content field");

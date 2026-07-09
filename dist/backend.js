@@ -56,8 +56,7 @@ var DEFAULT_SETTINGS = {
   bookNameTemplate: `${WORLD_BOOK_NAME_PREFIX} - {{chat}}`,
   chapterNameTemplate: "#{{storyOrder}} - {{title}} (msgs {{scene}})",
   arcNameTemplate: "{{rootPrefix}}Arc {{sceneNumberPadded}} - {{title}}",
-  volumeNameTemplate: "{{rootPrefix}}Volume {{sceneNumberPadded}} - {{title}}",
-  includeContentHeaders: false
+  volumeNameTemplate: "{{rootPrefix}}Volume {{sceneNumberPadded}} - {{title}}"
 };
 var LEGACY_CHAPTER_NAME_TEMPLATE = "#{{sceneNumber}} - {{title}} (msgs {{scene}})";
 var LEGACY_ARC_NAME_TEMPLATE = "{{rootPrefix}}Arc #{{sceneNumber}} - {{title}} (msgs {{scene}})";
@@ -88,8 +87,7 @@ function normalizeSettings(raw) {
     bookNameTemplate: normalizeTemplate(v.bookNameTemplate, fallback.bookNameTemplate),
     chapterNameTemplate: normalizeTemplate(v.chapterNameTemplate, fallback.chapterNameTemplate, LEGACY_CHAPTER_NAME_TEMPLATE),
     arcNameTemplate: normalizeTemplate(v.arcNameTemplate, fallback.arcNameTemplate, LEGACY_ARC_NAME_TEMPLATE),
-    volumeNameTemplate: normalizeTemplate(v.volumeNameTemplate, fallback.volumeNameTemplate, LEGACY_VOLUME_NAME_TEMPLATE),
-    includeContentHeaders: typeof v.includeContentHeaders === "boolean" ? v.includeContentHeaders : fallback.includeContentHeaders
+    volumeNameTemplate: normalizeTemplate(v.volumeNameTemplate, fallback.volumeNameTemplate, LEGACY_VOLUME_NAME_TEMPLATE)
   };
 }
 function normalizeTemplate(raw, fallback, legacyDefault) {
@@ -214,32 +212,6 @@ function normalizeOutletName(raw, fallback = "lumibooks") {
 }
 function approximateTokensFromChars(chars) {
   return Math.ceil(chars / 4);
-}
-function ordinal(n) {
-  if (!Number.isFinite(n) || n < 1)
-    return String(n);
-  const mod100 = n % 100;
-  if (mod100 >= 11 && mod100 <= 13)
-    return `${n}th`;
-  switch (n % 10) {
-    case 1:
-      return `${n}st`;
-    case 2:
-      return `${n}nd`;
-    case 3:
-      return `${n}rd`;
-    default:
-      return `${n}th`;
-  }
-}
-function buildChapterHeader(sceneNumber, turnCount) {
-  return `${ordinal(sceneNumber)} Summary Chapter Containing ${turnCount} Prior Turn${turnCount === 1 ? "" : "s"}`;
-}
-function buildArcHeader(sceneNumber, chapterCount, turnCount) {
-  return `${ordinal(sceneNumber)} Summary ARC Containing ${chapterCount} Prior Chapter${chapterCount === 1 ? "" : "s"} and ${turnCount} Prior Turn${turnCount === 1 ? "" : "s"}`;
-}
-function buildVolumeHeader(sceneNumber, arcCount, turnCount) {
-  return `${ordinal(sceneNumber)} Summary VOLUME Containing ${arcCount} Prior Arc${arcCount === 1 ? "" : "s"} and ${turnCount} Prior Turn${turnCount === 1 ? "" : "s"}`;
 }
 function bookNameFor(chatName, chatId) {
   const cleanName = (chatName ?? "").trim();
@@ -388,16 +360,8 @@ function sceneRange(firstMsgIdx, lastMsgIdx) {
     return String(firstMsgIdx + 1);
   return "";
 }
-function savedMemoryContent(settings, opener, content) {
-  const clean = content.trim();
-  if (!settings.includeContentHeaders)
-    return clean;
-  return `${opener.trim()}
-
-${clean}`.trim();
-}
-function stripGeneratedHeader(content) {
-  return content.replace(/^\s*\d+(?:st|nd|rd|th) Summary (?:Chapter|ARC|VOLUME) Containing [^\n]*\n{2,}/i, "").trim();
+function savedMemoryContent(content) {
+  return content.trim();
 }
 async function formatEntryName(settings, ctx) {
   const template = ctx.tier === "volume" ? settings.volumeNameTemplate : ctx.tier === "arc" ? settings.arcNameTemplate : settings.chapterNameTemplate;
@@ -1515,7 +1479,7 @@ async function resolveMacrosWithDiagnostics(text, chatId, userId, diagnostics) {
     return text;
   }
 }
-async function assembleArcPrompt(profile, customPresets, chatId, chapters, userId, _opener) {
+async function assembleArcPrompt(profile, customPresets, chatId, chapters, userId) {
   const conn = await resolveConnection(profile, userId);
   if (!conn)
     throw new FatalSummarizerError("No connection available for Memoria");
@@ -1552,7 +1516,7 @@ ${c.raw.content}`).join(`
     diagnostics
   };
 }
-async function assembleVolumePrompt(profile, customPresets, chatId, arcs, userId, _opener) {
+async function assembleVolumePrompt(profile, customPresets, chatId, arcs, userId) {
   const conn = await resolveConnection(profile, userId);
   if (!conn)
     throw new FatalSummarizerError("No connection available for Memoria");
@@ -1589,7 +1553,7 @@ ${a.raw.content}`).join(`
     diagnostics
   };
 }
-async function summarizeVolume(profile, customPresets, chatId, arcs, userId, opener, streamOptions) {
+async function summarizeVolume(profile, customPresets, chatId, arcs, userId, streamOptions) {
   const conn = await resolveConnection(profile, userId);
   if (!conn)
     throw new FatalSummarizerError("No connection available for Memoria");
@@ -1623,7 +1587,6 @@ ${a.raw.content}`).join(`
   return {
     rawOutput: rawText,
     title: parsed.title,
-    opener: parsed.opener || opener,
     content: parsed.content,
     keywords: parsed.keywords,
     shortComment: parsed.shortComment,
@@ -1634,7 +1597,7 @@ ${a.raw.content}`).join(`
     presetKey: profile.volumePresetKey
   };
 }
-async function summarizeChapter(profile, customPresets, chatId, messages, previousMemories, userId, opener, streamOptions) {
+async function summarizeChapter(profile, customPresets, chatId, messages, previousMemories, userId, streamOptions) {
   const conn = await resolveConnection(profile, userId);
   if (!conn)
     throw new FatalSummarizerError("No connection available for Memoria");
@@ -1667,7 +1630,6 @@ async function summarizeChapter(profile, customPresets, chatId, messages, previo
   return {
     rawOutput: rawText,
     title: parsed.title,
-    opener: parsed.opener || opener,
     content: parsed.content,
     keywords: parsed.keywords,
     shortComment: parsed.shortComment,
@@ -1678,7 +1640,7 @@ async function summarizeChapter(profile, customPresets, chatId, messages, previo
     presetKey: profile.chapterPresetKey
   };
 }
-async function summarizeArc(profile, customPresets, chatId, chapters, userId, opener, streamOptions) {
+async function summarizeArc(profile, customPresets, chatId, chapters, userId, streamOptions) {
   const conn = await resolveConnection(profile, userId);
   if (!conn)
     throw new FatalSummarizerError("No connection available for Memoria");
@@ -1712,7 +1674,6 @@ ${c.raw.content}`).join(`
   return {
     rawOutput: rawText,
     title: parsed.title,
-    opener: parsed.opener || opener,
     content: parsed.content,
     keywords: parsed.keywords,
     shortComment: parsed.shortComment,
@@ -1734,14 +1695,13 @@ function parseSummaryJson(raw) {
       continue;
     sawParseableObject = true;
     const title = typeof obj["title"] === "string" ? obj["title"] : "";
-    const opener = typeof obj["opener"] === "string" ? obj["opener"] : "";
     const contentRaw = obj["content"] ?? obj["summary"] ?? obj["memory_content"];
     if (typeof contentRaw !== "string")
       continue;
     const kw = obj["keywords"];
     const keywords = Array.isArray(kw) ? kw.filter((x) => typeof x === "string") : [];
     const sc = typeof obj["short_comment"] === "string" ? obj["short_comment"] : "";
-    return { title, opener, content: contentRaw, keywords, shortComment: sc };
+    return { title, content: contentRaw, keywords, shortComment: sc };
   }
   if (sawParseableObject) {
     throw new Error("The model's JSON had no content field");
@@ -2275,13 +2235,11 @@ async function runChapter(chatId, profile, settings, userId, allMessages, window
   const coverage = await buildCoverage(chatId, userId, entries);
   const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && typeof e.meta.firstMsgIdx === "number").sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
   const previousMemories = profile.previousMemoriesCount > 0 ? chapters.slice(-profile.previousMemoriesCount) : [];
-  const provisionalSceneNumber = await nextSceneNumber(chatId, 1, userId);
-  const opener = buildChapterHeader(provisionalSceneNumber, window.length);
   const outcome = await runWithRetry(profile.retryCount + 1, async () => {
     const controller = new AbortController;
     registerAborter(userId, chatId, "chapter", controller);
     try {
-      return await summarizeChapter(profile, settings.customPresets, chatId, window, previousMemories, userId, opener, {
+      return await summarizeChapter(profile, settings.customPresets, chatId, window, previousMemories, userId, {
         externalSignal: controller.signal,
         onProgress: (chars, thinking) => updateProgressNumbers(userId, chatId, "chapter", chars, thinking)
       });
@@ -2385,8 +2343,7 @@ async function commitChapter(chatId, profile, userId, window, result, firstIdx, 
       lastMsgIdx: meta.lastMsgIdx,
       turnCount: msgIds.length
     });
-    const opener = buildChapterHeader(sceneNumber, msgIds.length);
-    const finalContent = savedMemoryContent(settings, opener, result.content);
+    const finalContent = savedMemoryContent(result.content);
     const entry = await createChapterEntry(book.id, meta, finalContent, comment, userId, result.keywords ?? [], settings.forceConstantEntries);
     invalidateBookCache(userId, chatId);
     if (replacesEntryId) {
@@ -2440,14 +2397,11 @@ async function createArcFromChapters(chatId, chapterEntryIds, profile, settings,
 async function runArc(chatId, profile, settings, userId, selected, opts = {}) {
   const { replacesEntryId } = opts;
   nyaaToast(userId, "arc_fire");
-  const totalTurns = selected.reduce((acc, c) => acc + c.meta.msgIds.length, 0);
-  const provisionalSceneNumber = await nextSceneNumber(chatId, 2, userId);
-  const opener = buildArcHeader(provisionalSceneNumber, selected.length, totalTurns);
   const outcome = await runWithRetry(profile.retryCount + 1, async () => {
     const controller = new AbortController;
     registerAborter(userId, chatId, "arc", controller);
     try {
-      return await summarizeArc(profile, settings.customPresets, chatId, selected, userId, opener, {
+      return await summarizeArc(profile, settings.customPresets, chatId, selected, userId, {
         externalSignal: controller.signal,
         onProgress: (chars, thinking) => updateProgressNumbers(userId, chatId, "arc", chars, thinking)
       });
@@ -2566,8 +2520,7 @@ async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, re
       turnCount: msgIds.length,
       isRoot: isRootArc
     });
-    const arcOpener = buildArcHeader(sceneNumber, sourceChapterEntryIds.length, msgIds.length);
-    const finalArcContent = savedMemoryContent(arcSettings, arcOpener, result.content);
+    const finalArcContent = savedMemoryContent(result.content);
     const arcEntry = await createChapterEntry(book.id, meta, finalArcContent, comment, userId, result.keywords ?? [], arcSettings.forceConstantEntries);
     const failedSupersedes = [];
     for (const ch of selected) {
@@ -2622,14 +2575,11 @@ async function createVolumeFromArcs(chatId, arcEntryIds, profile, settings, user
 }
 async function runVolume(chatId, profile, settings, userId, selected, replacesEntryId) {
   nyaaToast(userId, "volume_fire");
-  const totalTurns = selected.reduce((acc, a) => acc + a.meta.msgIds.length, 0);
-  const provisionalSceneNumber = await nextSceneNumber(chatId, 3, userId);
-  const opener = buildVolumeHeader(provisionalSceneNumber, selected.length, totalTurns);
   const outcome = await runWithRetry(profile.retryCount + 1, async () => {
     const controller = new AbortController;
     registerAborter(userId, chatId, "volume", controller);
     try {
-      return await summarizeVolume(profile, settings.customPresets, chatId, selected, userId, opener, {
+      return await summarizeVolume(profile, settings.customPresets, chatId, selected, userId, {
         externalSignal: controller.signal,
         onProgress: (chars, thinking) => updateProgressNumbers(userId, chatId, "volume", chars, thinking)
       });
@@ -2748,8 +2698,7 @@ async function commitVolume(chatId, userId, selected, result, firstIdx, lastIdx,
       turnCount: msgIds.length,
       isRoot: isRootVolume
     });
-    const volumeOpener = buildVolumeHeader(sceneNumber, sourceArcEntryIds.length, msgIds.length);
-    const finalVolumeContent = savedMemoryContent(volumeSettings, volumeOpener, result.content);
+    const finalVolumeContent = savedMemoryContent(result.content);
     const volumeEntry = await createChapterEntry(book.id, meta, finalVolumeContent, comment, userId, result.keywords ?? [], volumeSettings.forceConstantEntries);
     const failedSupersedes = [];
     for (const arc of selected) {
@@ -2815,7 +2764,6 @@ async function acceptPreview(chatId, draftId, profile, userId) {
       const fakeResult2 = {
         rawOutput: preview.content,
         title: preview.title,
-        opener: "",
         content: preview.content,
         keywords: [],
         shortComment: preview.shortComment,
@@ -2854,7 +2802,6 @@ async function acceptPreview(chatId, draftId, profile, userId) {
     const fakeResult = {
       rawOutput: preview.content,
       title: preview.title,
-      opener: "",
       content: preview.content,
       keywords: [],
       shortComment: preview.shortComment,
@@ -2886,10 +2833,7 @@ async function dryRunArc(chatId, profile, settings, userId) {
   const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && !e.meta.isRoot).sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
   if (chapters.length === 0)
     throw new Error("No chapters to bind yet");
-  const totalTurns = chapters.reduce((acc, c) => acc + c.meta.msgIds.length, 0);
-  const provisionalSceneNumber = await nextSceneNumber(chatId, 2, userId);
-  const opener = buildArcHeader(provisionalSceneNumber, chapters.length, totalTurns);
-  return assembleArcPrompt(profile, settings.customPresets, chatId, chapters, userId, opener);
+  return assembleArcPrompt(profile, settings.customPresets, chatId, chapters, userId);
 }
 async function dryRunVolume(chatId, profile, settings, userId) {
   const entries = await listLmbEntries(chatId, userId);
@@ -2897,10 +2841,7 @@ async function dryRunVolume(chatId, profile, settings, userId) {
   const arcs = coverage.activeEntries.filter((e) => e.meta.tier === 2 && !e.meta.isRoot).sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
   if (arcs.length === 0)
     throw new Error("No arcs to press yet");
-  const totalTurns = arcs.reduce((acc, a) => acc + a.meta.msgIds.length, 0);
-  const provisionalSceneNumber = await nextSceneNumber(chatId, 3, userId);
-  const opener = buildVolumeHeader(provisionalSceneNumber, arcs.length, totalTurns);
-  return assembleVolumePrompt(profile, settings.customPresets, chatId, arcs, userId, opener);
+  return assembleVolumePrompt(profile, settings.customPresets, chatId, arcs, userId);
 }
 async function nextSceneNumber(chatId, tier, userId) {
   const entries = await listLmbEntries(chatId, userId).catch(() => []);
@@ -3601,8 +3542,6 @@ async function syncNamingForChat(chatId, userId) {
       turnCount: entry.meta.msgIds.length,
       isRoot: entry.meta.isRoot
     });
-    const rawContent = entry.raw.content || "";
-    const nextContent = settings.includeContentHeaders ? rawContent : stripGeneratedHeader(rawContent);
     const patch = {};
     if (isAdoptedEntry(entry.meta)) {
       const ext = entry.raw.extensions || {};
@@ -3615,8 +3554,6 @@ async function syncNamingForChat(chatId, userId) {
     } else if (!entry.meta.preserveComment && nextComment && nextComment !== entry.raw.comment) {
       patch.comment = nextComment;
     }
-    if (nextContent !== rawContent)
-      patch.content = nextContent;
     if (Object.keys(patch).length === 0)
       continue;
     await updateEntry(entry.raw.id, patch, userId).catch((err) => {

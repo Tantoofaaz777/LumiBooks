@@ -3,7 +3,7 @@ declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 import type { LMBProfile, LMBSettings, LMBEntryMeta } from "../shared";
 import type { BusyEntry, FailureRecord, PendingPreview } from "../types";
 import type { ChatMessage } from "./coverage";
-import { approximateTokensFromChars, buildArcHeader, buildChapterHeader, buildVolumeHeader } from "../shared";
+import { approximateTokensFromChars } from "../shared";
 import {
   buildCoverage,
   isExcluded,
@@ -375,15 +375,12 @@ async function runChapter(
   const previousMemories = profile.previousMemoriesCount > 0
     ? chapters.slice(-profile.previousMemoriesCount)
     : [];
-  const provisionalSceneNumber = await nextSceneNumber(chatId, 1, userId);
-  const opener = buildChapterHeader(provisionalSceneNumber, window.length);
-
   const outcome = await runWithRetry(profile.retryCount + 1, async () => {
     const controller = new AbortController();
     registerAborter(userId, chatId, "chapter", controller);
     try {
       return await summarizeChapter(
-        profile, settings.customPresets, chatId, window, previousMemories, userId, opener,
+        profile, settings.customPresets, chatId, window, previousMemories, userId,
         {
           externalSignal: controller.signal,
           onProgress: (chars, thinking) => updateProgressNumbers(userId, chatId, "chapter", chars, thinking),
@@ -512,8 +509,7 @@ async function commitChapter(
     lastMsgIdx: meta.lastMsgIdx,
     turnCount: msgIds.length,
   });
-  const opener = buildChapterHeader(sceneNumber, msgIds.length);
-  const finalContent = savedMemoryContent(settings, opener, result.content);
+  const finalContent = savedMemoryContent(result.content);
   const entry = await createChapterEntry(book.id, meta, finalContent, comment, userId, result.keywords ?? [], settings.forceConstantEntries);
   invalidateBookCache(userId, chatId);
 
@@ -594,15 +590,12 @@ async function runArc(
 ): Promise<string | null> {
   const { replacesEntryId } = opts;
   nyaaToast(userId, "arc_fire");
-  const totalTurns = selected.reduce((acc, c) => acc + c.meta.msgIds.length, 0);
-  const provisionalSceneNumber = await nextSceneNumber(chatId, 2, userId);
-  const opener = buildArcHeader(provisionalSceneNumber, selected.length, totalTurns);
   const outcome = await runWithRetry(profile.retryCount + 1, async () => {
     const controller = new AbortController();
     registerAborter(userId, chatId, "arc", controller);
     try {
       return await summarizeArc(
-        profile, settings.customPresets, chatId, selected, userId, opener,
+        profile, settings.customPresets, chatId, selected, userId,
         {
           externalSignal: controller.signal,
           onProgress: (chars, thinking) => updateProgressNumbers(userId, chatId, "arc", chars, thinking),
@@ -740,8 +733,7 @@ async function commitArc(
     turnCount: msgIds.length,
     isRoot: isRootArc,
   });
-  const arcOpener = buildArcHeader(sceneNumber, sourceChapterEntryIds.length, msgIds.length);
-  const finalArcContent = savedMemoryContent(arcSettings, arcOpener, result.content);
+  const finalArcContent = savedMemoryContent(result.content);
   const arcEntry = await createChapterEntry(book.id, meta, finalArcContent, comment, userId, result.keywords ?? [], arcSettings.forceConstantEntries);
   const failedSupersedes: string[] = [];
   for (const ch of selected) {
@@ -818,15 +810,12 @@ async function runVolume(
   replacesEntryId?: string,
 ): Promise<string | null> {
   nyaaToast(userId, "volume_fire");
-  const totalTurns = selected.reduce((acc, a) => acc + a.meta.msgIds.length, 0);
-  const provisionalSceneNumber = await nextSceneNumber(chatId, 3, userId);
-  const opener = buildVolumeHeader(provisionalSceneNumber, selected.length, totalTurns);
   const outcome = await runWithRetry(profile.retryCount + 1, async () => {
     const controller = new AbortController();
     registerAborter(userId, chatId, "volume", controller);
     try {
       return await summarizeVolume(
-        profile, settings.customPresets, chatId, selected, userId, opener,
+        profile, settings.customPresets, chatId, selected, userId,
         {
           externalSignal: controller.signal,
           onProgress: (chars, thinking) => updateProgressNumbers(userId, chatId, "volume", chars, thinking),
@@ -964,8 +953,7 @@ async function commitVolume(
     turnCount: msgIds.length,
     isRoot: isRootVolume,
   });
-  const volumeOpener = buildVolumeHeader(sceneNumber, sourceArcEntryIds.length, msgIds.length);
-  const finalVolumeContent = savedMemoryContent(volumeSettings, volumeOpener, result.content);
+  const finalVolumeContent = savedMemoryContent(result.content);
   const volumeEntry = await createChapterEntry(book.id, meta, finalVolumeContent, comment, userId, result.keywords ?? [], volumeSettings.forceConstantEntries);
   const failedSupersedes: string[] = [];
   for (const arc of selected) {
@@ -1041,7 +1029,6 @@ export async function acceptPreview(
       const fakeResult: SummarizationResult = {
         rawOutput: preview.content,
         title: preview.title,
-        opener: "",
         content: preview.content,
         keywords: [],
         shortComment: preview.shortComment,
@@ -1087,7 +1074,6 @@ export async function acceptPreview(
     const fakeResult: SummarizationResult = {
       rawOutput: preview.content,
       title: preview.title,
-      opener: "",
       content: preview.content,
       keywords: [],
       shortComment: preview.shortComment,
@@ -1134,10 +1120,7 @@ export async function dryRunArc(
     .filter((e) => e.meta.tier === 1 && !e.meta.isRoot)
     .sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
   if (chapters.length === 0) throw new Error("No chapters to bind yet");
-  const totalTurns = chapters.reduce((acc, c) => acc + c.meta.msgIds.length, 0);
-  const provisionalSceneNumber = await nextSceneNumber(chatId, 2, userId);
-  const opener = buildArcHeader(provisionalSceneNumber, chapters.length, totalTurns);
-  return assembleArcPrompt(profile, settings.customPresets, chatId, chapters, userId, opener);
+  return assembleArcPrompt(profile, settings.customPresets, chatId, chapters, userId);
 }
 
 export async function dryRunVolume(
@@ -1152,10 +1135,7 @@ export async function dryRunVolume(
     .filter((e) => e.meta.tier === 2 && !e.meta.isRoot)
     .sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
   if (arcs.length === 0) throw new Error("No arcs to press yet");
-  const totalTurns = arcs.reduce((acc, a) => acc + a.meta.msgIds.length, 0);
-  const provisionalSceneNumber = await nextSceneNumber(chatId, 3, userId);
-  const opener = buildVolumeHeader(provisionalSceneNumber, arcs.length, totalTurns);
-  return assembleVolumePrompt(profile, settings.customPresets, chatId, arcs, userId, opener);
+  return assembleVolumePrompt(profile, settings.customPresets, chatId, arcs, userId);
 }
 
 async function nextSceneNumber(chatId: string, tier: 1 | 2 | 3, userId: string): Promise<number> {
