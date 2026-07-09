@@ -2539,12 +2539,6 @@ function renderContext(host, profile, patch) {
 function renderBehavior(host, profile, patch) {
   const sec = section("Behavior");
   sec.body.appendChild(checkbox({
-    checked: profile.hideCoveredMessages,
-    label: "Hide messages once filed",
-    hint: "Greys out covered messages in the chat. Enforcement runs in the interceptor either way.",
-    onChange: (v) => patch({ hideCoveredMessages: v })
-  }));
-  sec.body.appendChild(checkbox({
     checked: profile.showMemoryPreviews,
     label: "Preview before saving",
     hint: "Memoria stages new chapters and arcs in the Books tab for your approval.",
@@ -2893,7 +2887,6 @@ function renderHelp(host) {
 function renderAboutTab(host, state, send) {
   host.replaceChildren();
   if (state) {
-    renderInjection(host, state, send);
     renderNaming(host, state, send);
   }
   renderExtras(host, state, send);
@@ -2915,10 +2908,10 @@ function renderAboutTab(host, state, send) {
   const how = section("How it works");
   const lines = [
     "Tail messages stay uncompressed until they pass the lag.",
-    "Once the window fills, Memoria writes a chapter, hides those messages in the chat, and slices the chapter into the prompt at the same spot.",
+    "Once the window fills, Memoria writes a chapter, hides the older chat history through that range, and sends active memories through your outlet.",
     "Several chapters can be bound into a single arc that replaces them.",
     "Arcs can be pressed into a volume the same way, manually from the Make tab.",
-    "Storage lives in a per-chat world book named LumiBooks. Renaming or deleting entries there releases the messages back."
+    "Storage lives in a world book bound to the chat. Adopted books keep their original names."
   ];
   for (const l of lines) {
     how.body.appendChild(textNode(l, "lmb-about-line"));
@@ -2931,30 +2924,6 @@ function renderAboutTab(host, state, send) {
   ack.body.appendChild(a);
   host.appendChild(ack.wrap);
 }
-function renderInjection(host, state, send) {
-  const sec = section("Injection");
-  const help = document.createElement("div");
-  help.className = "lmb-help";
-  help.textContent = "Active memories are always sent through an outlet.";
-  sec.body.appendChild(help);
-  const outletField = field("Outlet name");
-  const outletInput = textInput({
-    value: state.settings.memoryOutletName,
-    placeholder: "lumibooks",
-    onBlur: (v) => send({
-      type: "save_settings",
-      patch: { memoryOutletName: v },
-      chatId: state.activeChatId
-    })
-  });
-  outletField.body.appendChild(outletInput);
-  const macro = document.createElement("div");
-  macro.className = "lmb-field-hint";
-  macro.textContent = `Place {{outlet::${state.settings.memoryOutletName || "lumibooks"}}} in your preset where memories should appear.`;
-  outletField.body.appendChild(macro);
-  sec.body.appendChild(outletField.wrap);
-  host.appendChild(sec.wrap);
-}
 function renderNaming(host, state, send) {
   const sec = section("Naming");
   const help = document.createElement("div");
@@ -2964,6 +2933,18 @@ function renderNaming(host, state, send) {
   const saveSetting = (patch) => {
     send({ type: "save_settings", patch, chatId: state.activeChatId });
   };
+  const outletField = field("Outlet name");
+  const outletInput = textInput({
+    value: state.settings.memoryOutletName,
+    placeholder: "lumibooks",
+    onBlur: (v) => saveSetting({ memoryOutletName: v })
+  });
+  outletField.body.appendChild(outletInput);
+  const macro = document.createElement("div");
+  macro.className = "lmb-field-hint";
+  macro.textContent = `Place {{outlet::${state.settings.memoryOutletName || "lumibooks"}}} in your preset where memories should appear.`;
+  outletField.body.appendChild(macro);
+  sec.body.appendChild(outletField.wrap);
   const addTemplate = (label, key, placeholder) => {
     const row = field(label);
     row.body.appendChild(textInput({
@@ -3005,7 +2986,7 @@ function renderExtras(host, state, send) {
     onChange: (v) => send({ type: "set_force_constant", value: v, chatId: state.activeChatId })
   }));
   if (!state.activeChatId) {
-    sec.body.appendChild(textNode("Open a chat to use the visibility tools below", "lmb-empty"));
+    sec.body.appendChild(textNode("Open a chat to use lorebook tools", "lmb-empty"));
     host.appendChild(sec.wrap);
     return;
   }
@@ -3013,16 +2994,7 @@ function renderExtras(host, state, send) {
   const disabled = state.busy.length > 0 || !state.settings.enabled;
   const row = document.createElement("div");
   row.className = "lmb-actions";
-  row.append(makeButton("Re-hide covered", () => send({ type: "resync_hidden", chatId }), {
-    disabled,
-    title: "Re-apply the exclude-from-context flag on every covered message"
-  }), makeButton("Resync visibility", () => send({ type: "resync_visibility", chatId }), {
-    disabled,
-    title: "Unhide messages whose chapter or arc no longer exists, and re-align hidden state with current coverage. Use after editing or deleting entries in the Lorebook drawer."
-  }), makeButton("Import attached lorebook", () => send({ type: "import_attached_lorebooks", chatId }), {
-    disabled,
-    title: "Copy entries with detectable message ranges from other attached lorebooks into LumiBooks."
-  }), makeButton("Adopt existing lorebook", () => send({ type: "prepare_adopt_lorebook", chatId }), {
+  row.append(makeButton("Adopt existing lorebook", () => send({ type: "prepare_adopt_lorebook", chatId }), {
     disabled,
     title: "Add LumiBooks metadata to entries in an attached lorebook in-place."
   }));

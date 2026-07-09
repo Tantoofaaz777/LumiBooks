@@ -635,12 +635,6 @@ function renderContext(host: HTMLElement, profile: LMBProfile, patch: (p: Partia
 function renderBehavior(host: HTMLElement, profile: LMBProfile, patch: (p: Partial<LMBProfile>) => void): void {
   const sec = section("Behavior");
   sec.body.appendChild(checkbox({
-    checked: profile.hideCoveredMessages,
-    label: "Hide messages once filed",
-    hint: "Greys out covered messages in the chat. Enforcement runs in the interceptor either way.",
-    onChange: (v) => patch({ hideCoveredMessages: v }),
-  }));
-  sec.body.appendChild(checkbox({
     checked: profile.showMemoryPreviews,
     label: "Preview before saving",
     hint: "Memoria stages new chapters and arcs in the Books tab for your approval.",
