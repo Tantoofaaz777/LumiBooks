@@ -1,6 +1,7 @@
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 import { formatBookName, formatEntryName, stripGeneratedHeader } from "./naming";
+import { EXTENSION_KEY } from "../shared";
 import { describeError, warn } from "./runtime";
 import { loadSettings } from "./storage";
 import { findBookForChat, invalidateBookCache, listLmbEntries, updateEntry } from "./world-book";
@@ -39,8 +40,16 @@ export async function syncNamingForChat(chatId: string, userId: string): Promise
     });
     const rawContent = entry.raw.content || "";
     const nextContent = settings.includeContentHeaders ? rawContent : stripGeneratedHeader(rawContent);
-    const patch: { comment?: string; content?: string } = {};
-    if (nextComment && nextComment !== entry.raw.comment) patch.comment = nextComment;
+    const patch: { comment?: string; content?: string; extensions?: Record<string, unknown> } = {};
+    if (isLegacyAdoptedEntry(entry.meta)) {
+      const ext = (entry.raw.extensions || {}) as Record<string, unknown>;
+      const nextMeta = { ...entry.meta, preserveComment: true };
+      const repaired = repairLegacyAdoptedComment(entry.raw.comment || "");
+      patch.extensions = { ...ext, [EXTENSION_KEY]: nextMeta };
+      if (repaired && repaired !== entry.raw.comment) patch.comment = repaired;
+    } else if (!entry.meta.preserveComment && nextComment && nextComment !== entry.raw.comment) {
+      patch.comment = nextComment;
+    }
     if (nextContent !== rawContent) patch.content = nextContent;
     if (Object.keys(patch).length === 0) continue;
     await updateEntry(entry.raw.id, patch, userId).catch((err) => {
@@ -48,4 +57,16 @@ export async function syncNamingForChat(chatId: string, userId: string): Promise
     });
   }
   invalidateBookCache(userId, chatId);
+}
+
+function isLegacyAdoptedEntry(meta: { model?: string; connectionId?: string; preserveComment?: boolean }): boolean {
+  return !meta.preserveComment && (meta.model === "adopted" || meta.connectionId === "adopted");
+}
+
+function repairLegacyAdoptedComment(comment: string): string {
+  let next = comment.replace(/\s+\(\d+\)\s*$/, "").trim();
+  const opens = (next.match(/\(/g) ?? []).length;
+  const closes = (next.match(/\)/g) ?? []).length;
+  if (opens > closes) next += ")".repeat(opens - closes);
+  return next;
 }

@@ -229,6 +229,7 @@ function normalizeEntryMeta(raw) {
     presetKey: typeof v.presetKey === "string" ? v.presetKey : undefined,
     sceneNumber: typeof v.sceneNumber === "number" && Number.isFinite(v.sceneNumber) && v.sceneNumber > 0 ? Math.floor(v.sceneNumber) : undefined,
     storyOrder: typeof v.storyOrder === "number" && Number.isFinite(v.storyOrder) && v.storyOrder > 0 ? Math.floor(v.storyOrder) : undefined,
+    preserveComment: v.preserveComment === true ? true : undefined,
     rawOutput: typeof v.rawOutput === "string" ? v.rawOutput : undefined,
     isRoot: v.isRoot === true ? true : undefined,
     rootOrigin: typeof v.rootOrigin === "string" && v.rootOrigin.trim() ? v.rootOrigin : undefined
@@ -4326,8 +4327,16 @@ async function syncNamingForChat(chatId, userId) {
     const rawContent = entry.raw.content || "";
     const nextContent = settings.includeContentHeaders ? rawContent : stripGeneratedHeader(rawContent);
     const patch = {};
-    if (nextComment && nextComment !== entry.raw.comment)
+    if (isLegacyAdoptedEntry(entry.meta)) {
+      const ext = entry.raw.extensions || {};
+      const nextMeta = { ...entry.meta, preserveComment: true };
+      const repaired = repairLegacyAdoptedComment(entry.raw.comment || "");
+      patch.extensions = { ...ext, [EXTENSION_KEY]: nextMeta };
+      if (repaired && repaired !== entry.raw.comment)
+        patch.comment = repaired;
+    } else if (!entry.meta.preserveComment && nextComment && nextComment !== entry.raw.comment) {
       patch.comment = nextComment;
+    }
     if (nextContent !== rawContent)
       patch.content = nextContent;
     if (Object.keys(patch).length === 0)
@@ -4337,6 +4346,17 @@ async function syncNamingForChat(chatId, userId) {
     });
   }
   invalidateBookCache(userId, chatId);
+}
+function isLegacyAdoptedEntry(meta) {
+  return !meta.preserveComment && (meta.model === "adopted" || meta.connectionId === "adopted");
+}
+function repairLegacyAdoptedComment(comment) {
+  let next = comment.replace(/\s+\(\d+\)\s*$/, "").trim();
+  const opens = (next.match(/\(/g) ?? []).length;
+  const closes = (next.match(/\)/g) ?? []).length;
+  if (opens > closes)
+    next += ")".repeat(opens - closes);
+  return next;
 }
 
 // src/backend/import-lorebook.ts
@@ -4536,20 +4556,10 @@ async function confirmAdoptLorebook(chatId, userId, bookId, plan) {
       createdAt: source.created_at || Date.now(),
       title,
       sceneNumber,
-      storyOrder: item.storyOrder
-    };
-    const comment = await formatEntryName(settings, {
-      chatId,
-      userId,
-      tier: tier === 3 ? "volume" : tier === 2 ? "arc" : "chapter",
-      title,
-      sceneNumber,
       storyOrder: item.storyOrder,
-      turnCount: 0,
-      sourceCount: 0
-    });
+      preserveComment: true
+    };
     await spindle.world_books.entries.update(source.id, {
-      comment,
       constant: true,
       position: 8,
       outlet_name: normalizeOutletName(settings.memoryOutletName),
@@ -4589,6 +4599,8 @@ function isValidRange(firstMsgIdx, lastMsgIdx, messageCount) {
   return firstMsgIdx >= 0 && lastMsgIdx >= firstMsgIdx && lastMsgIdx < messageCount;
 }
 function cleanTitle(text, rangeRaw) {
+  if (!rangeRaw)
+    return text.trim();
   return text.replace(rangeRaw, "").replace(/\bmsgs?\s*$/i, "").replace(/\bmessages?\s*$/i, "").replace(/[-\u2013\u2014:#[\]()[\]\s]+$/g, "").replace(/^\s*[-\u2013\u2014:#[\]()[\]\s]+/g, "").trim();
 }
 function rangesOverlap(aFirst, aLast, bFirst, bLast) {

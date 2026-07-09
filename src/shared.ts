@@ -107,6 +107,7 @@ export interface LMBEntryMeta {
   presetKey?: string;
   sceneNumber?: number;
   storyOrder?: number;
+  preserveComment?: boolean;
   rawOutput?: string;
   isRoot?: boolean;
   rootOrigin?: string;
@@ -360,6 +361,7 @@ export function normalizeEntryMeta(raw: unknown): LMBEntryMeta | null {
       typeof v.storyOrder === "number" && Number.isFinite(v.storyOrder) && v.storyOrder > 0
         ? Math.floor(v.storyOrder)
         : undefined,
+    preserveComment: v.preserveComment === true ? true : undefined,
     rawOutput: typeof v.rawOutput === "string" ? v.rawOutput : undefined,
     isRoot: v.isRoot === true ? true : undefined,
     rootOrigin: typeof v.rootOrigin === "string" && v.rootOrigin.trim() ? v.rootOrigin : undefined,

@@ -268,21 +268,11 @@ export async function confirmAdoptLorebook(
       title,
       sceneNumber,
       storyOrder: item.storyOrder,
+      preserveComment: true,
     };
-    const comment = await formatEntryName(settings, {
-      chatId,
-      userId,
-      tier: tier === 3 ? "volume" : tier === 2 ? "arc" : "chapter",
-      title,
-      sceneNumber,
-      storyOrder: item.storyOrder,
-      turnCount: 0,
-      sourceCount: 0,
-    });
     await spindle.world_books.entries.update(
       source.id,
       {
-        comment,
         constant: true,
         position: 8,
         outlet_name: normalizeOutletName(settings.memoryOutletName),
@@ -329,6 +319,7 @@ function isValidRange(firstMsgIdx: number, lastMsgIdx: number, messageCount: num
 }
 
 function cleanTitle(text: string, rangeRaw: string): string {
+  if (!rangeRaw) return text.trim();
   return text
     .replace(rangeRaw, "")
     .replace(/\bmsgs?\s*$/i, "")
