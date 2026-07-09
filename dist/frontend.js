@@ -113,8 +113,8 @@ var STYLES = `
 }
 .lmb-macro-row {
   display: grid;
-  grid-template-columns: minmax(120px, max-content) 1fr;
-  gap: 10px;
+  grid-template-columns: max-content 1fr;
+  gap: 8px;
   align-items: center;
   font-size: 12px;
   line-height: 1.35;
