@@ -86,7 +86,7 @@ function renderChapterPicker(
   const help = document.createElement("div");
   help.className = "lmb-help";
   help.textContent =
-    "Covered messages are already filed and are greyed. Shift+click (or long-press on touch) to select ranges. Use Exclude to pin a message so it's never hidden, replaced, or summarized - it splits compression around it.";
+    "Covered messages are already filed and are greyed. Select one endpoint, then Shift+click (or long-press on touch) another to add the range between them. Use Exclude to pin a message so it's never hidden, replaced, or summarized - it splits compression around it.";
   sec.body.appendChild(help);
 
   const filterRow = document.createElement("div");
@@ -229,8 +229,7 @@ function buildMessageRow(
   const triggerRangeFromAnchor = (): boolean => {
     const anchorId = localState.anchorMessageId;
     if (!anchorId || anchorId === m.id) return false;
-    const newState = !c.selectedMessages.has(m.id);
-    applyRangeSelection(c, anchorId, m.id, newState);
+    applyRangeSelection(c, anchorId, m.id);
     localState.anchorMessageId = m.id;
     c.rerender();
     return true;
@@ -318,7 +317,6 @@ function applyRangeSelection(
   c: MakeTabContext,
   anchorId: string,
   targetId: string,
-  newState: boolean,
 ): void {
   const visible = filterMessages(c);
   const anchorIdx = visible.findIndex((m) => m.id === anchorId);
@@ -328,8 +326,7 @@ function applyRangeSelection(
   for (let i = from; i <= to; i++) {
     const m = visible[i];
     if (!m || m.covered || m.excluded) continue;
-    if (newState) c.selectedMessages.add(m.id);
-    else c.selectedMessages.delete(m.id);
+    c.selectedMessages.add(m.id);
   }
 }
 
