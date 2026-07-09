@@ -1511,7 +1511,7 @@ function renderChapterPicker(host, c, ctx, send) {
   const sec = section("Pick messages for a chapter");
   const help = document.createElement("div");
   help.className = "lmb-help";
-  help.textContent = "Covered messages are already filed and are greyed. Select one endpoint, then Shift+click (or long-press on touch) another to add the range between them. Use Exclude to pin a message so it's never hidden, replaced, or summarized - it splits compression around it.";
+  help.textContent = "Covered messages are already filed and are greyed. Click one endpoint, then click another to add the range between them. Use Exclude to pin a message so it's never hidden, replaced, or summarized - it splits compression around it.";
   sec.body.appendChild(help);
   const filterRow = document.createElement("div");
   filterRow.className = "lmb-message-filter-row";
@@ -1626,7 +1626,7 @@ function buildRows(c, onToggle) {
 function buildMessageRow(m, c, onToggle) {
   const row = document.createElement("label");
   row.className = `lmb-message-row${m.covered ? " covered" : ""}${m.excluded ? " excluded" : ""}${c.selectedMessages.has(m.id) ? " selected" : ""}`;
-  row.title = "Shift+click (or long-press on touch) to select a range";
+  row.title = "Click a second endpoint to select the range";
   const cb = document.createElement("input");
   cb.type = "checkbox";
   cb.checked = c.selectedMessages.has(m.id);
@@ -1695,12 +1695,19 @@ function buildMessageRow(m, c, onToggle) {
     }, LONG_PRESS_MS);
   });
   cb.addEventListener("change", () => {
-    if (cb.checked)
-      c.selectedMessages.add(m.id);
-    else
-      c.selectedMessages.delete(m.id);
-    localState.anchorMessageId = m.id;
-    row.classList.toggle("selected", cb.checked);
+    if (cb.checked) {
+      const anchorId = localState.anchorMessageId;
+      const appliedRange = anchorId && anchorId !== m.id ? applyRangeSelection(c, anchorId, m.id) : false;
+      if (!appliedRange)
+        c.selectedMessages.add(m.id);
+      localState.anchorMessageId = m.id;
+      c.rerender();
+      return;
+    }
+    c.selectedMessages.delete(m.id);
+    if (localState.anchorMessageId === m.id)
+      localState.anchorMessageId = null;
+    row.classList.toggle("selected", false);
     onToggle();
   });
   const idxSpan = document.createElement("span");
@@ -1736,7 +1743,7 @@ function applyRangeSelection(c, anchorId, targetId) {
   const anchorIdx = visible.findIndex((m) => m.id === anchorId);
   const targetIdx = visible.findIndex((m) => m.id === targetId);
   if (anchorIdx === -1 || targetIdx === -1)
-    return;
+    return false;
   const [from, to] = anchorIdx < targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx];
   for (let i = from;i <= to; i++) {
     const m = visible[i];
@@ -1744,6 +1751,7 @@ function applyRangeSelection(c, anchorId, targetId) {
       continue;
     c.selectedMessages.add(m.id);
   }
+  return true;
 }
 function sumSelectedTokens(c) {
   let total = 0;
