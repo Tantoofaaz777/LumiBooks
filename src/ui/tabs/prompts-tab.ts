@@ -228,15 +228,14 @@ function renderCategory(
     }, { small: true }),
     makeButton("Dry run", () => {
       if (!state.activeChatId) return;
-      send(category === "arc"
-        ? { type: "dry_run_arc", chatId: state.activeChatId }
-        : category === "volume"
-          ? { type: "dry_run_volume", chatId: state.activeChatId }
-          : { type: "dry_run_chapter", chatId: state.activeChatId });
+      if (category === "arc") send({ type: "dry_run_arc", chatId: state.activeChatId });
+      else if (category === "volume") send({ type: "dry_run_volume", chatId: state.activeChatId });
     }, {
       small: true,
-      disabled: !state.activeChatId || !state.settings.enabled,
-      title: "Assemble this preset's prompt with all macros resolved and show what would be sent. Does not call the model.",
+      disabled: category === "chapter" || !state.activeChatId || !state.settings.enabled,
+      title: category === "chapter"
+        ? "Chapter dry run needs a selected message range, so use Compress from the Make tab."
+        : "Assemble this preset's prompt with all macros resolved and show what would be sent. Does not call the model.",
     }),
     makeButton("Delete", async () => {
       if (!isUserPreset) return;

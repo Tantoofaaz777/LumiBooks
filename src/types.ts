@@ -37,8 +37,6 @@ export interface CoverageStats {
   coveredMessages: number;
   uncoveredMessages: number;
   approxUncoveredTokens: number;
-  lagSatisfied: boolean;
-  windowAvailable: boolean;
 }
 
 export interface BusyEntry {
@@ -143,8 +141,6 @@ export interface FrontendState {
   customPresets: CustomPreset[];
   regexScripts: RegexScriptOption[];
   pendingPreviews: PendingPreview[];
-  backlogChapters: number;
-  backlogArcs: number;
   rootOrigin: string | null;
   rootOriginName: string | null;
   rootEntryCount: number;
@@ -160,12 +156,8 @@ export type FrontendToBackend =
   | { type: "create_profile"; name: string; chatId?: string | null }
   | { type: "delete_profile"; profileId: string; chatId?: string | null }
   | { type: "set_active_profile"; profileId: string; chatId?: string | null }
-  | { type: "create_chapter"; chatId: string }
   | { type: "create_chapter_range"; chatId: string; messageIds: string[] }
-  | { type: "create_all_chapters"; chatId: string }
-  | { type: "create_arc"; chatId: string }
   | { type: "create_arc_from"; chatId: string; chapterEntryIds: string[] }
-  | { type: "create_all_arcs"; chatId: string }
   | { type: "create_volume_from"; chatId: string; arcEntryIds: string[] }
   | { type: "retry_last_failure"; chatId: string }
   | { type: "delete_entry"; chatId: string; entryId: string }
@@ -177,7 +169,6 @@ export type FrontendToBackend =
   | { type: "confirm_adopt_lorebook"; chatId: string; bookId: string; entries: AdoptLorebookPlanEntry[] }
   | { type: "set_force_constant"; value: boolean; chatId?: string | null }
   | { type: "abort_busy"; chatId: string; kind: "chapter" | "arc" | "volume" }
-  | { type: "dry_run_chapter"; chatId: string }
   | { type: "dry_run_arc"; chatId: string }
   | { type: "dry_run_volume"; chatId: string }
   | { type: "ensure_book"; chatId: string }

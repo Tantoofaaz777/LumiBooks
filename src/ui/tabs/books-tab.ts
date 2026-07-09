@@ -44,7 +44,7 @@ export function renderBooksTab(
   renderStatus(host, state, send);
   renderFailure(host, state, send);
   renderPreviews(host, state, send);
-  renderActions(host, state, send);
+  renderActions(host, state);
   renderEntries(host, state, ctx, send);
 }
 
@@ -198,42 +198,11 @@ function renderPreviewCard(preview: PendingPreview, chatId: string, send: (m: Fr
   return card;
 }
 
-function renderActions(host: HTMLElement, state: FrontendState, send: (m: FrontendToBackend) => void): void {
+function renderActions(host: HTMLElement, state: FrontendState): void {
   if (!state.activeChatId) return;
-  const sec = section("Quick actions");
+  const sec = section("Lorebook");
   const row = document.createElement("div");
   row.className = "lmb-actions";
-  const disabled = state.busy.length > 0 || !state.settings.enabled;
-  const chatId = state.activeChatId;
-  row.append(
-    makeButton("File chapter", () => send({ type: "create_chapter", chatId }), {
-      primary: true,
-      disabled,
-      title: "Compress available uncompressed messages into a new chapter",
-    }),
-  );
-  if (state.backlogChapters > 1) {
-    row.append(
-      makeButton(`File all chapters (${state.backlogChapters})`, () => send({ type: "create_all_chapters", chatId }), {
-        disabled,
-        title: "File available uncompressed messages into chapters",
-      }),
-    );
-  }
-  row.append(
-    makeButton("Bind arc", () => send({ type: "create_arc", chatId }), {
-      disabled,
-      title: "Roll the oldest unsuperseded chapters into a single arc",
-    }),
-  );
-  if (state.backlogArcs > 1) {
-    row.append(
-      makeButton(`File all arcs (${state.backlogArcs})`, () => send({ type: "create_all_arcs", chatId }), {
-        disabled,
-        title: "Bind available chapter groups into arcs",
-      }),
-    );
-  }
   if (!state.bookId) {
     const empty = pill("No book yet", "warn");
     empty.title = "Memoria will create this chat's world book the first time a chapter is filed";

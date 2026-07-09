@@ -2,18 +2,17 @@ declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 import type { ChapterView, ArcView, FrontendState, ConnectionOption, MessageStub, RegexScriptOption, RootSourceOption } from "../types";
 import type { ChatMessage } from "./coverage";
-import type { LMBProfile } from "../shared";
 import { approximateTokensFromChars } from "../shared";
 import { loadSettings } from "./storage";
-import { buildCoverage, computeCoverageStats, countCompressibleEligible } from "./coverage";
-import { findBookForChat, listLmbEntries, listRootCandidates, reassertChatBinding, type LMBEntry } from "./world-book";
+import { buildCoverage, computeCoverageStats } from "./coverage";
+import { findBookForChat, listLmbEntries, listRootCandidates, reassertChatBinding } from "./world-book";
 import { listConnections, resolveConnection } from "./summarizer";
 import { listRegexScripts } from "./regex";
 import { getBusy, getLastFailure, getPendingPreviews } from "./pipeline";
 import { ensureForkAdoption } from "./fork";
 import { describeError, warn } from "./runtime";
 import { BUILTIN_ARC_PRESETS, BUILTIN_CHAPTER_PRESETS, BUILTIN_VOLUME_PRESETS } from "./presets";
-import { storyOrderFromMeta, storyOrderOf } from "./story-order";
+import { storyOrderFromMeta } from "./story-order";
 
 type ChatMessageDTO = ChatMessage;
 
@@ -69,8 +68,6 @@ export async function buildState(userId: string, requestedChatId?: string | null
       coveredMessages: 0,
       uncoveredMessages: 0,
       approxUncoveredTokens: 0,
-      lagSatisfied: false,
-      windowAvailable: false,
     },
     busy: getBusy(userId),
     lastFailure: null,
@@ -81,8 +78,6 @@ export async function buildState(userId: string, requestedChatId?: string | null
     customPresets: settings.customPresets,
     regexScripts,
     pendingPreviews: [],
-    backlogChapters: 0,
-    backlogArcs: 0,
     rootOrigin: null,
     rootOriginName: null,
     rootEntryCount: 0,
@@ -109,13 +104,7 @@ export async function buildState(userId: string, requestedChatId?: string | null
 
   const entries = await listLmbEntries(chat.id, userId).catch(() => []);
   const coverage = await buildCoverage(chat.id, userId, entries);
-  const stats = computeCoverageStats(messages, coverage, activeProfile);
-
-  const compressibleSize = countCompressibleEligible(messages, coverage, activeProfile);
-  const windowDenom = Math.max(1, activeProfile.windowValue);
-  const backlogChapters = Math.max(0, Math.floor(compressibleSize / windowDenom));
-  const activeChapterEntries = coverage.activeEntries.filter((e) => e.meta.tier === 1 && !e.meta.isRoot);
-  const backlogArcs = countArcBacklog(activeChapterEntries, activeProfile);
+  const stats = computeCoverageStats(messages, coverage);
 
   const supersededIds = new Set<string>();
   for (const e of entries) {
@@ -201,40 +190,9 @@ export async function buildState(userId: string, requestedChatId?: string | null
     lastFailure: getLastFailure(userId, chat.id),
     messages: messageStubs,
     pendingPreviews: getPendingPreviews(userId, chat.id),
-    backlogChapters,
-    backlogArcs,
     rootOrigin,
     rootOriginName,
     rootEntryCount: rootEntries.length,
     availableRoots: allRootCandidates.filter((c) => c.chatId !== chat.id),
   };
-}
-
-function countArcBacklog(activeChapters: LMBEntry[], profile: LMBProfile): number {
-  if (profile.arcTrigger === "manual") return 0;
-  const chapters = activeChapters
-    .slice()
-    .sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
-  if (profile.arcTrigger === "chapters") {
-    const compressible = Math.max(0, chapters.length - profile.arcLagChapters);
-    const denom = Math.max(1, profile.arcAfterChapters);
-    return Math.floor(compressible / denom);
-  }
-  let reservedTokens = 0;
-  let cutoff = chapters.length;
-  for (let i = chapters.length - 1; i >= 0 && reservedTokens < profile.arcLagTokens; i--) {
-    reservedTokens += chapters[i]!.meta.tokenCountOutput;
-    cutoff = i;
-  }
-  const compressible = chapters.slice(0, cutoff);
-  let arcs = 0;
-  let acc = 0;
-  for (const ch of compressible) {
-    acc += ch.meta.tokenCountOutput;
-    if (acc >= profile.arcAfterTokens) {
-      arcs++;
-      acc = 0;
-    }
-  }
-  return arcs;
 }

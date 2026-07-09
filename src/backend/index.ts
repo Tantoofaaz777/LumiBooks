@@ -37,24 +37,18 @@ import {
   abortBusy,
   acceptPreview,
   createArcFromChapters,
-  maybeRunArcCheck,
-  createChapterAuto,
   createChapterFromRange,
   createVolumeFromArcs,
-  drainArcBacklog,
-  drainChapterBacklog,
   dropPendingPreview,
   dryRunArc,
-  dryRunChapter,
   dryRunVolume,
   getBusy,
   clearLastFailure,
   getLastFailure,
-  maybeRunPipeline,
   patchPendingPreview,
   registerPipelineCallbacks,
 } from "./pipeline";
-import { buildCoverage, computeCoverageStats, resyncVisibility, syncHiddenForCoveredMessages, unhideCoveredMessages } from "./coverage";
+import { buildCoverage, resyncVisibility, syncHiddenForCoveredMessages, unhideCoveredMessages } from "./coverage";
 import { rebaseRoot, rebuildRoot, detachRoot } from "./rebase";
 import { invalidateConnectionsCache } from "./summarizer";
 import { invalidateRegexCache } from "./regex";
@@ -70,13 +64,8 @@ async function notify(
   userId: string,
   tone: "success" | "info" | "warn" | "error",
   text: string,
-  automation = false,
 ): Promise<void> {
   try {
-    if (automation && tone !== "error") {
-      const settings = await loadSettings(userId).catch(() => null);
-      if (settings && !settings.showAutomationToasts) return;
-    }
     hostToast(userId, tone, text);
     send({ type: "toast", tone, text }, userId);
   } catch (err) {
@@ -144,8 +133,8 @@ registerPipelineCallbacks({
   onBusyChange(userId, entries) {
     send({ type: "busy", entries }, userId);
   },
-  onToast(userId, tone, text, automation) {
-    void notify(userId, tone, text, automation === true);
+  onToast(userId, tone, text) {
+    void notify(userId, tone, text);
   },
   onStateChange(userId, chatId) {
     void pushState(userId, chatId);
@@ -195,12 +184,7 @@ spindle.on("GENERATION_ENDED", async (payload: unknown, hostUserId?: string) => 
   await ensureUserFolders(userId).catch(() => {});
   const settings = await loadSettings(userId).catch(() => null);
   if (!settings?.enabled) return;
-  const profile = settings.profiles.find((x) => x.id === settings.activeProfileId);
-  if (!profile) return;
   await reassertChatBinding(p.chatId, userId).catch(() => {});
-  await maybeRunPipeline(p.chatId, profile, settings, userId).catch((err) => {
-    warn(`pipeline failed: ${describeError(err)}`);
-  });
 });
 
 spindle.on("CHAT_SWITCHED", async (payload: unknown, hostUserId?: string) => {
@@ -289,8 +273,8 @@ async function collectActiveArcIds(chatId: string, userId: string): Promise<stri
 async function retryLastFailure(
   chatId: string,
   userId: string,
-  profile: Parameters<typeof createChapterAuto>[1],
-  settings: Parameters<typeof createChapterAuto>[2],
+  profile: Parameters<typeof createArcFromChapters>[2],
+  settings: Parameters<typeof createArcFromChapters>[3],
 ): Promise<void> {
   const last = getLastFailure(userId, chatId);
   if (last?.kind === "volume") {
@@ -314,8 +298,8 @@ async function retryLastFailure(
     await createArcFromChapters(chatId, ids, profile, settings, userId);
     return;
   }
-  await createChapterAuto(chatId, profile, settings, userId);
-  await maybeRunArcCheck(chatId, profile, settings, userId);
+  clearLastFailure(userId, chatId);
+  await notify(userId, "warn", "Select the chapter messages again to retry that range");
 }
 
 
@@ -437,27 +421,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
         break;
       }
 
-      case "create_chapter": {
-        const cur = await loadSettings(userId);
-        const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
-        if (!profile) break;
-        if (getBusy(userId).some((b) => b.kind === "chapter" && b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "Memoria is already filing a chapter");
-          break;
-        }
-        const chapterMessages = await spindle.chat.getMessages(msg.chatId);
-        const chapterCoverage = await buildCoverage(msg.chatId, userId);
-        const chapterStats = computeCoverageStats(chapterMessages, chapterCoverage, profile);
-        if (!chapterStats.lagSatisfied || !chapterStats.windowAvailable) {
-          await notify(userId, "info", "Your story needs more messages for me to generate a new entry~");
-          break;
-        }
-        await createChapterAuto(msg.chatId, profile, cur, userId);
-        await maybeRunArcCheck(msg.chatId, profile, cur, userId);
-        await pushState(userId, msg.chatId);
-        break;
-      }
-
       case "create_chapter_range": {
         const cur = await loadSettings(userId);
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
@@ -483,35 +446,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
         for (const run of runs) {
           await createChapterFromRange(msg.chatId, run, profile, cur, userId);
         }
-        await maybeRunArcCheck(msg.chatId, profile, cur, userId);
-        await pushState(userId, msg.chatId);
-        break;
-      }
-
-      case "create_all_chapters": {
-        const cur = await loadSettings(userId);
-        const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
-        if (!profile) break;
-        if (getBusy(userId).some((b) => b.kind === "chapter" && b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "Memoria is already filing a chapter");
-          break;
-        }
-        await drainChapterBacklog(msg.chatId, profile, cur, userId);
-        await maybeRunArcCheck(msg.chatId, profile, cur, userId);
-        await pushState(userId, msg.chatId);
-        break;
-      }
-
-      case "create_arc": {
-        const cur = await loadSettings(userId);
-        const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
-        if (!profile) break;
-        if (getBusy(userId).some((b) => b.kind === "arc" && b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "Memoria is already binding an arc");
-          break;
-        }
-        const ids = await collectActiveChapterIds(msg.chatId, userId);
-        await createArcFromChapters(msg.chatId, ids, profile, cur, userId);
         await pushState(userId, msg.chatId);
         break;
       }
@@ -525,19 +459,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
           break;
         }
         await createArcFromChapters(msg.chatId, msg.chapterEntryIds, profile, cur, userId);
-        await pushState(userId, msg.chatId);
-        break;
-      }
-
-      case "create_all_arcs": {
-        const cur = await loadSettings(userId);
-        const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
-        if (!profile) break;
-        if (getBusy(userId).some((b) => b.kind === "arc" && b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "Memoria is already binding an arc");
-          break;
-        }
-        await drainArcBacklog(msg.chatId, profile, cur, userId);
         await pushState(userId, msg.chatId);
         break;
       }
@@ -759,21 +680,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
         break;
       }
 
-      case "dry_run_chapter": {
-        const cur = await loadSettings(userId);
-        const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
-        if (!profile) break;
-        try {
-          const result = await dryRunChapter(msg.chatId, profile, cur, userId);
-          send({ type: "dry_run_result", kind: "chapter", messages: result.messages, diagnostics: result.diagnostics }, userId);
-        } catch (err) {
-          const text = describeError(err);
-          warn(`dry_run_chapter failed: ${text}`);
-          await notify(userId, "error", `Dry run failed: ${text}`);
-        }
-        break;
-      }
-
       case "dry_run_arc": {
         const cur = await loadSettings(userId);
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
@@ -951,13 +857,11 @@ spindle.onFrontendMessage(async (raw, userId) => {
           await pushState(userId, msg.chatId);
           break;
         }
-        await notify(userId, "success", `Memoria rebuilt onto ${result.count} inherited memor${result.count === 1 ? "y" : "ies"} and is re-summarizing this chat`);
+        await notify(userId, "success", `Memoria rebuilt onto ${result.count} inherited memor${result.count === 1 ? "y" : "ies"}`);
         await pushState(userId, msg.chatId);
         const cur = await loadSettings(userId);
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
         if (profile) {
-          await drainChapterBacklog(msg.chatId, profile, cur, userId).catch((err) => warn(`rebuild re-summarize failed: ${describeError(err)}`));
-          await maybeRunArcCheck(msg.chatId, profile, cur, userId).catch(() => {});
           await resyncVisibility(msg.chatId, userId, profile.hideCoveredMessages).catch((err) => warn(`rebuild visibility resync failed: ${describeError(err)}`));
           await pushState(userId, msg.chatId);
         }

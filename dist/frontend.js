@@ -1171,7 +1171,7 @@ function renderBooksTab(host, state, ctx, send) {
   renderStatus(host, state, send);
   renderFailure(host, state, send);
   renderPreviews(host, state, send);
-  renderActions(host, state, send);
+  renderActions(host, state);
   renderEntries(host, state, ctx, send);
 }
 function renderStatus(host, state, send) {
@@ -1301,35 +1301,12 @@ function renderPreviewCard(preview, chatId, send) {
   card.appendChild(actions);
   return card;
 }
-function renderActions(host, state, send) {
+function renderActions(host, state) {
   if (!state.activeChatId)
     return;
-  const sec = section("Quick actions");
+  const sec = section("Lorebook");
   const row = document.createElement("div");
   row.className = "lmb-actions";
-  const disabled = state.busy.length > 0 || !state.settings.enabled;
-  const chatId = state.activeChatId;
-  row.append(makeButton("File chapter", () => send({ type: "create_chapter", chatId }), {
-    primary: true,
-    disabled,
-    title: "Compress available uncompressed messages into a new chapter"
-  }));
-  if (state.backlogChapters > 1) {
-    row.append(makeButton(`File all chapters (${state.backlogChapters})`, () => send({ type: "create_all_chapters", chatId }), {
-      disabled,
-      title: "File available uncompressed messages into chapters"
-    }));
-  }
-  row.append(makeButton("Bind arc", () => send({ type: "create_arc", chatId }), {
-    disabled,
-    title: "Roll the oldest unsuperseded chapters into a single arc"
-  }));
-  if (state.backlogArcs > 1) {
-    row.append(makeButton(`File all arcs (${state.backlogArcs})`, () => send({ type: "create_all_arcs", chatId }), {
-      disabled,
-      title: "Bind available chapter groups into arcs"
-    }));
-  }
   if (!state.bookId) {
     const empty = pill("No book yet", "warn");
     empty.title = "Memoria will create this chat's world book the first time a chapter is filed";
@@ -2036,10 +2013,6 @@ function makeDefaultProfile(id, name) {
   return {
     id,
     name,
-    lagUnit: "messages",
-    lagValue: 65,
-    windowUnit: "messages",
-    windowValue: 18,
     chapterTargetUnit: "percent",
     chapterTargetPercent: 15,
     chapterTargetTokens: 800,
@@ -2049,11 +2022,6 @@ function makeDefaultProfile(id, name) {
     volumeTargetUnit: "percent",
     volumeTargetPercent: 25,
     volumeTargetTokens: 3000,
-    arcTrigger: "chapters",
-    arcAfterChapters: 6,
-    arcAfterTokens: 8000,
-    arcLagChapters: 7,
-    arcLagTokens: 2000,
     chapterPresetKey: "summary",
     arcPresetKey: "arc_default",
     volumePresetKey: "volume_default",
@@ -2062,9 +2030,6 @@ function makeDefaultProfile(id, name) {
     regexIncomingScriptIds: [],
     connectionId: null,
     samplers: { ...DEFAULT_SAMPLERS },
-    autoCreate: true,
-    autoCreateChapter: true,
-    autoCreateArc: true,
     hideCoveredMessages: true,
     showMemoryPreviews: false,
     retryCount: 3,
@@ -2081,7 +2046,6 @@ var DEFAULT_SETTINGS = {
   customPresets: [],
   debugLog: false,
   forceConstantEntries: true,
-  showAutomationToasts: true,
   memoryInjectionMode: "outlet",
   memoryOutletName: "lumibooks",
   bookNameTemplate: `${WORLD_BOOK_NAME_PREFIX} - {{chat}}`,
@@ -2530,11 +2494,14 @@ function renderCategory(host, state, ctx, send, category, selectedKey, setKey) {
   }, { small: true }), makeButton("Dry run", () => {
     if (!state.activeChatId)
       return;
-    send(category === "arc" ? { type: "dry_run_arc", chatId: state.activeChatId } : category === "volume" ? { type: "dry_run_volume", chatId: state.activeChatId } : { type: "dry_run_chapter", chatId: state.activeChatId });
+    if (category === "arc")
+      send({ type: "dry_run_arc", chatId: state.activeChatId });
+    else if (category === "volume")
+      send({ type: "dry_run_volume", chatId: state.activeChatId });
   }, {
     small: true,
-    disabled: !state.activeChatId || !state.settings.enabled,
-    title: "Assemble this preset's prompt with all macros resolved and show what would be sent. Does not call the model."
+    disabled: category === "chapter" || !state.activeChatId || !state.settings.enabled,
+    title: category === "chapter" ? "Chapter dry run needs a selected message range, so use Compress from the Make tab." : "Assemble this preset's prompt with all macros resolved and show what would be sent. Does not call the model."
   }), makeButton("Delete", async () => {
     if (!isUserPreset)
       return;

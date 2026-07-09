@@ -6,9 +6,7 @@ export const STORAGE_VERSION = 4 as const;
 export const SETTINGS_PATH = "settings.json" as const;
 export const CHAT_STATE_DIR = "chats" as const;
 
-export type CompressionUnit = "messages" | "tokens";
 export type CompressionTargetUnit = "percent" | "tokens";
-export type ArcTriggerMode = "chapters" | "tokens" | "manual";
 export type MemoryInjectionMode = "chat_history" | "outlet";
 
 export interface SamplerSet {
@@ -24,10 +22,6 @@ export interface SamplerSet {
 export interface LMBProfile {
   id: string;
   name: string;
-  lagUnit: CompressionUnit;
-  lagValue: number;
-  windowUnit: CompressionUnit;
-  windowValue: number;
   chapterTargetUnit: CompressionTargetUnit;
   chapterTargetPercent: number;
   chapterTargetTokens: number;
@@ -37,11 +31,6 @@ export interface LMBProfile {
   volumeTargetUnit: CompressionTargetUnit;
   volumeTargetPercent: number;
   volumeTargetTokens: number;
-  arcTrigger: ArcTriggerMode;
-  arcAfterChapters: number;
-  arcAfterTokens: number;
-  arcLagChapters: number;
-  arcLagTokens: number;
   chapterPresetKey: string;
   arcPresetKey: string;
   volumePresetKey: string;
@@ -50,9 +39,6 @@ export interface LMBProfile {
   regexIncomingScriptIds: string[];
   connectionId: string | null;
   samplers: SamplerSet;
-  autoCreate: boolean;
-  autoCreateChapter: boolean;
-  autoCreateArc: boolean;
   hideCoveredMessages: boolean;
   showMemoryPreviews: boolean;
   retryCount: number;
@@ -77,7 +63,6 @@ export interface LMBSettings {
   customPresets: CustomPreset[];
   debugLog: boolean;
   forceConstantEntries: boolean;
-  showAutomationToasts: boolean;
   memoryInjectionMode: MemoryInjectionMode;
   memoryOutletName: string;
   bookNameTemplate: string;
@@ -137,10 +122,6 @@ export function makeDefaultProfile(id: string, name: string): LMBProfile {
   return {
     id,
     name,
-    lagUnit: "messages",
-    lagValue: 65,
-    windowUnit: "messages",
-    windowValue: 18,
     chapterTargetUnit: "percent",
     chapterTargetPercent: 15,
     chapterTargetTokens: 800,
@@ -150,11 +131,6 @@ export function makeDefaultProfile(id: string, name: string): LMBProfile {
     volumeTargetUnit: "percent",
     volumeTargetPercent: 25,
     volumeTargetTokens: 3000,
-    arcTrigger: "chapters",
-    arcAfterChapters: 6,
-    arcAfterTokens: 8000,
-    arcLagChapters: 7,
-    arcLagTokens: 2000,
     chapterPresetKey: "summary",
     arcPresetKey: "arc_default",
     volumePresetKey: "volume_default",
@@ -163,9 +139,6 @@ export function makeDefaultProfile(id: string, name: string): LMBProfile {
     regexIncomingScriptIds: [],
     connectionId: null,
     samplers: { ...DEFAULT_SAMPLERS },
-    autoCreate: true,
-    autoCreateChapter: true,
-    autoCreateArc: true,
     hideCoveredMessages: true,
     showMemoryPreviews: false,
     retryCount: 3,
@@ -183,7 +156,6 @@ export const DEFAULT_SETTINGS: LMBSettings = {
   customPresets: [],
   debugLog: false,
   forceConstantEntries: true,
-  showAutomationToasts: true,
   memoryInjectionMode: "outlet",
   memoryOutletName: "lumibooks",
   bookNameTemplate: `${WORLD_BOOK_NAME_PREFIX} - {{chat}}`,
@@ -225,7 +197,6 @@ export function normalizeSettings(raw: Partial<LMBSettings> | null | undefined):
     customPresets,
     debugLog: typeof v.debugLog === "boolean" ? v.debugLog : fallback.debugLog,
     forceConstantEntries: typeof v.forceConstantEntries === "boolean" ? v.forceConstantEntries : fallback.forceConstantEntries,
-    showAutomationToasts: typeof v.showAutomationToasts === "boolean" ? v.showAutomationToasts : fallback.showAutomationToasts,
     memoryInjectionMode: "outlet",
     memoryOutletName: normalizeOutletName(v.memoryOutletName, fallback.memoryOutletName),
     bookNameTemplate: normalizeTemplate(v.bookNameTemplate, fallback.bookNameTemplate),
@@ -251,10 +222,6 @@ export function normalizeProfile(raw: unknown): LMBProfile | null {
   const base = makeDefaultProfile(id, typeof v.name === "string" && v.name.trim() ? v.name : "Untitled");
   return {
     ...base,
-    lagUnit: v.lagUnit === "tokens" ? "tokens" : "messages",
-    lagValue: clampInt(v.lagValue, 0, v.lagUnit === "tokens" ? 1000000 : 100000, base.lagValue),
-    windowUnit: v.windowUnit === "tokens" ? "tokens" : "messages",
-    windowValue: clampInt(v.windowValue, 1, v.windowUnit === "tokens" ? 1000000 : 100000, base.windowValue),
     chapterTargetUnit: v.chapterTargetUnit === "tokens" ? "tokens" : "percent",
     chapterTargetPercent: clampInt(v.chapterTargetPercent, 2, 90, base.chapterTargetPercent),
     chapterTargetTokens: clampInt(v.chapterTargetTokens, 50, 1000000, base.chapterTargetTokens),
@@ -264,11 +231,6 @@ export function normalizeProfile(raw: unknown): LMBProfile | null {
     volumeTargetUnit: v.volumeTargetUnit === "tokens" ? "tokens" : "percent",
     volumeTargetPercent: clampInt(v.volumeTargetPercent, 5, 95, base.volumeTargetPercent),
     volumeTargetTokens: clampInt(v.volumeTargetTokens, 50, 1000000, base.volumeTargetTokens),
-    arcTrigger: v.arcTrigger === "tokens" || v.arcTrigger === "manual" ? v.arcTrigger : "chapters",
-    arcAfterChapters: clampInt(v.arcAfterChapters, 2, 100, base.arcAfterChapters),
-    arcAfterTokens: clampInt(v.arcAfterTokens, 500, 200000, base.arcAfterTokens),
-    arcLagChapters: clampInt(v.arcLagChapters, 0, 100, base.arcLagChapters),
-    arcLagTokens: clampInt(v.arcLagTokens, 0, 200000, base.arcLagTokens),
     chapterPresetKey: typeof v.chapterPresetKey === "string" && v.chapterPresetKey.trim() ? v.chapterPresetKey : base.chapterPresetKey,
     arcPresetKey: typeof v.arcPresetKey === "string" && v.arcPresetKey.trim() ? v.arcPresetKey : base.arcPresetKey,
     volumePresetKey: typeof v.volumePresetKey === "string" && v.volumePresetKey.trim() ? v.volumePresetKey : base.volumePresetKey,
@@ -281,9 +243,6 @@ export function normalizeProfile(raw: unknown): LMBProfile | null {
       : base.regexIncomingScriptIds,
     connectionId: typeof v.connectionId === "string" && v.connectionId.trim() ? v.connectionId : null,
     samplers: normalizeSamplers(v.samplers),
-    autoCreate: typeof v.autoCreate === "boolean" ? v.autoCreate : base.autoCreate,
-    autoCreateChapter: typeof v.autoCreateChapter === "boolean" ? v.autoCreateChapter : base.autoCreateChapter,
-    autoCreateArc: typeof v.autoCreateArc === "boolean" ? v.autoCreateArc : base.autoCreateArc,
     hideCoveredMessages: typeof v.hideCoveredMessages === "boolean" ? v.hideCoveredMessages : base.hideCoveredMessages,
     showMemoryPreviews: typeof v.showMemoryPreviews === "boolean" ? v.showMemoryPreviews : base.showMemoryPreviews,
     retryCount: clampInt(v.retryCount, 0, 10, base.retryCount),

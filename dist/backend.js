@@ -29,10 +29,6 @@ function makeDefaultProfile(id, name) {
   return {
     id,
     name,
-    lagUnit: "messages",
-    lagValue: 65,
-    windowUnit: "messages",
-    windowValue: 18,
     chapterTargetUnit: "percent",
     chapterTargetPercent: 15,
     chapterTargetTokens: 800,
@@ -42,11 +38,6 @@ function makeDefaultProfile(id, name) {
     volumeTargetUnit: "percent",
     volumeTargetPercent: 25,
     volumeTargetTokens: 3000,
-    arcTrigger: "chapters",
-    arcAfterChapters: 6,
-    arcAfterTokens: 8000,
-    arcLagChapters: 7,
-    arcLagTokens: 2000,
     chapterPresetKey: "summary",
     arcPresetKey: "arc_default",
     volumePresetKey: "volume_default",
@@ -55,9 +46,6 @@ function makeDefaultProfile(id, name) {
     regexIncomingScriptIds: [],
     connectionId: null,
     samplers: { ...DEFAULT_SAMPLERS },
-    autoCreate: true,
-    autoCreateChapter: true,
-    autoCreateArc: true,
     hideCoveredMessages: true,
     showMemoryPreviews: false,
     retryCount: 3,
@@ -74,7 +62,6 @@ var DEFAULT_SETTINGS = {
   customPresets: [],
   debugLog: false,
   forceConstantEntries: true,
-  showAutomationToasts: true,
   memoryInjectionMode: "outlet",
   memoryOutletName: "lumibooks",
   bookNameTemplate: `${WORLD_BOOK_NAME_PREFIX} - {{chat}}`,
@@ -107,7 +94,6 @@ function normalizeSettings(raw) {
     customPresets,
     debugLog: typeof v.debugLog === "boolean" ? v.debugLog : fallback.debugLog,
     forceConstantEntries: typeof v.forceConstantEntries === "boolean" ? v.forceConstantEntries : fallback.forceConstantEntries,
-    showAutomationToasts: typeof v.showAutomationToasts === "boolean" ? v.showAutomationToasts : fallback.showAutomationToasts,
     memoryInjectionMode: "outlet",
     memoryOutletName: normalizeOutletName(v.memoryOutletName, fallback.memoryOutletName),
     bookNameTemplate: normalizeTemplate(v.bookNameTemplate, fallback.bookNameTemplate),
@@ -135,10 +121,6 @@ function normalizeProfile(raw) {
   const base = makeDefaultProfile(id, typeof v.name === "string" && v.name.trim() ? v.name : "Untitled");
   return {
     ...base,
-    lagUnit: v.lagUnit === "tokens" ? "tokens" : "messages",
-    lagValue: clampInt(v.lagValue, 0, v.lagUnit === "tokens" ? 1e6 : 1e5, base.lagValue),
-    windowUnit: v.windowUnit === "tokens" ? "tokens" : "messages",
-    windowValue: clampInt(v.windowValue, 1, v.windowUnit === "tokens" ? 1e6 : 1e5, base.windowValue),
     chapterTargetUnit: v.chapterTargetUnit === "tokens" ? "tokens" : "percent",
     chapterTargetPercent: clampInt(v.chapterTargetPercent, 2, 90, base.chapterTargetPercent),
     chapterTargetTokens: clampInt(v.chapterTargetTokens, 50, 1e6, base.chapterTargetTokens),
@@ -148,11 +130,6 @@ function normalizeProfile(raw) {
     volumeTargetUnit: v.volumeTargetUnit === "tokens" ? "tokens" : "percent",
     volumeTargetPercent: clampInt(v.volumeTargetPercent, 5, 95, base.volumeTargetPercent),
     volumeTargetTokens: clampInt(v.volumeTargetTokens, 50, 1e6, base.volumeTargetTokens),
-    arcTrigger: v.arcTrigger === "tokens" || v.arcTrigger === "manual" ? v.arcTrigger : "chapters",
-    arcAfterChapters: clampInt(v.arcAfterChapters, 2, 100, base.arcAfterChapters),
-    arcAfterTokens: clampInt(v.arcAfterTokens, 500, 200000, base.arcAfterTokens),
-    arcLagChapters: clampInt(v.arcLagChapters, 0, 100, base.arcLagChapters),
-    arcLagTokens: clampInt(v.arcLagTokens, 0, 200000, base.arcLagTokens),
     chapterPresetKey: typeof v.chapterPresetKey === "string" && v.chapterPresetKey.trim() ? v.chapterPresetKey : base.chapterPresetKey,
     arcPresetKey: typeof v.arcPresetKey === "string" && v.arcPresetKey.trim() ? v.arcPresetKey : base.arcPresetKey,
     volumePresetKey: typeof v.volumePresetKey === "string" && v.volumePresetKey.trim() ? v.volumePresetKey : base.volumePresetKey,
@@ -161,9 +138,6 @@ function normalizeProfile(raw) {
     regexIncomingScriptIds: Array.isArray(v.regexIncomingScriptIds) ? v.regexIncomingScriptIds.filter((x) => typeof x === "string") : base.regexIncomingScriptIds,
     connectionId: typeof v.connectionId === "string" && v.connectionId.trim() ? v.connectionId : null,
     samplers: normalizeSamplers(v.samplers),
-    autoCreate: typeof v.autoCreate === "boolean" ? v.autoCreate : base.autoCreate,
-    autoCreateChapter: typeof v.autoCreateChapter === "boolean" ? v.autoCreateChapter : base.autoCreateChapter,
-    autoCreateArc: typeof v.autoCreateArc === "boolean" ? v.autoCreateArc : base.autoCreateArc,
     hideCoveredMessages: typeof v.hideCoveredMessages === "boolean" ? v.hideCoveredMessages : base.hideCoveredMessages,
     showMemoryPreviews: typeof v.showMemoryPreviews === "boolean" ? v.showMemoryPreviews : base.showMemoryPreviews,
     retryCount: clampInt(v.retryCount, 0, 10, base.retryCount),
@@ -981,31 +955,7 @@ function isExcluded(m) {
   const md = m.metadata;
   return !!(md && md["lmb_excluded"] === true);
 }
-function isEligibleForCount(m, _profile) {
-  if (isExcluded(m))
-    return false;
-  const role = m.role;
-  if (role === "system" || m.is_system)
-    return false;
-  return true;
-}
-function countEligible(messages, profile) {
-  let n = 0;
-  for (const m of messages)
-    if (isEligibleForCount(m, profile))
-      n++;
-  return n;
-}
-function sumEligibleTokens(messages, profile) {
-  let n = 0;
-  for (const m of messages) {
-    if (!isEligibleForCount(m, profile))
-      continue;
-    n += approximateTokensFromChars((m.content || "").length);
-  }
-  return n;
-}
-function computeCoverageStats(messages, coverage, profile) {
+function computeCoverageStats(messages, coverage) {
   const totalMessages = messages.length;
   let coveredMessages = 0;
   let approxUncoveredTokens = 0;
@@ -1017,113 +967,12 @@ function computeCoverageStats(messages, coverage, profile) {
     }
   }
   const uncoveredMessages = totalMessages - coveredMessages;
-  const uncoveredTail = pickUncoveredTail(messages, coverage);
-  const tailCounted = profile.lagUnit === "tokens" ? sumEligibleTokens(uncoveredTail, profile) : countEligible(uncoveredTail, profile);
-  const lagSatisfied = tailCounted >= profile.lagValue;
-  const compressible = trimLagFromTail(uncoveredTail, profile);
-  const headRoom = profile.windowUnit === "tokens" ? sumEligibleTokens(compressible, profile) : countEligible(compressible, profile);
-  const windowAvailable = headRoom >= profile.windowValue;
   return {
     totalMessages,
     coveredMessages,
     uncoveredMessages,
-    approxUncoveredTokens,
-    lagSatisfied,
-    windowAvailable
+    approxUncoveredTokens
   };
-}
-function countCompressibleEligible(messages, coverage, profile) {
-  const tail = pickUncoveredTail(messages, coverage);
-  const compressible = trimLagFromTail(tail, profile);
-  return profile.windowUnit === "tokens" ? sumEligibleTokens(compressible, profile) : countEligible(compressible, profile);
-}
-function trimLagFromTail(uncoveredTail, profile) {
-  if (uncoveredTail.length === 0)
-    return [];
-  if (profile.lagValue <= 0)
-    return uncoveredTail.slice();
-  if (profile.lagUnit === "messages") {
-    let counted = 0;
-    let cutoffIdx2 = uncoveredTail.length;
-    for (let i = uncoveredTail.length - 1;i >= 0; i--) {
-      if (isEligibleForCount(uncoveredTail[i], profile)) {
-        counted++;
-        if (counted >= profile.lagValue) {
-          cutoffIdx2 = i;
-          break;
-        }
-      }
-    }
-    if (counted < profile.lagValue)
-      return [];
-    return uncoveredTail.slice(0, cutoffIdx2);
-  }
-  let lagged = 0;
-  let cutoffIdx = 0;
-  for (let i = uncoveredTail.length - 1;i >= 0; i--) {
-    if (isEligibleForCount(uncoveredTail[i], profile)) {
-      lagged += approximateTokensFromChars((uncoveredTail[i].content || "").length);
-    }
-    cutoffIdx = i;
-    if (lagged >= profile.lagValue)
-      break;
-  }
-  if (lagged < profile.lagValue)
-    return [];
-  return uncoveredTail.slice(0, cutoffIdx);
-}
-function pickUncoveredTail(messages, coverage) {
-  const out = [];
-  for (let i = messages.length - 1;i >= 0; i--) {
-    const m = messages[i];
-    if (coverage.coveredBy.has(m.id))
-      break;
-    out.push(m);
-  }
-  out.reverse();
-  return out;
-}
-function selectNextChapterWindow(uncoveredTail, profile) {
-  const compressible = trimLagFromTail(uncoveredTail, profile);
-  if (compressible.length === 0)
-    return [];
-  if (profile.windowUnit === "messages") {
-    const out = [];
-    let counted = 0;
-    for (const m of compressible) {
-      if (isExcluded(m)) {
-        if (out.length > 0)
-          break;
-        continue;
-      }
-      out.push(m);
-      if (isEligibleForCount(m, profile)) {
-        counted++;
-        if (counted >= profile.windowValue)
-          break;
-      }
-    }
-    return out;
-  }
-  return takeUntilTokens(compressible, profile.windowValue, profile);
-}
-function takeUntilTokens(messages, maxTokens, profile) {
-  const out = [];
-  let acc = 0;
-  for (const m of messages) {
-    if (isExcluded(m)) {
-      if (out.length > 0)
-        break;
-      continue;
-    }
-    out.push(m);
-    if (isEligibleForCount(m, profile)) {
-      acc += approximateTokensFromChars((m.content || "").length);
-    }
-    if (acc >= maxTokens)
-      break;
-  }
-  return out;
 }
 async function syncHiddenForCoveredMessages(chatId, messages, coverage, userId, desiredHidden, hideThroughIdx) {
   const toFlip = [];
@@ -2024,53 +1873,6 @@ async function resolveMacrosWithDiagnostics(text, chatId, userId, diagnostics) {
     return text;
   }
 }
-async function assembleChapterPrompt(profile, customPresets, chatId, messages, previousMemories, userId, opener) {
-  const conn = await resolveConnection(profile, userId);
-  if (!conn)
-    throw new FatalSummarizerError("No connection available for Memoria");
-  const presetText = findPresetText(profile, customPresets, "chapter");
-  if (!presetText)
-    throw new Error("Chapter preset missing");
-  const transcript = renderTranscript(messages, true);
-  if (!transcript.trim())
-    throw new Error("Empty transcript");
-  const { targetTokens, targetPercent, inputTokens: transcriptTokens } = await resolveTargets(profile.chapterTargetUnit, profile.chapterTargetPercent, profile.chapterTargetTokens, transcript, conn.model, userId);
-  const built = buildMessages({
-    systemPromptTemplate: presetText,
-    targetTokens,
-    targetPercent,
-    previousMemoriesBlock: buildPreviousMemoriesBlock(previousMemories),
-    bodyHeading: `<<SCENE TO SUMMARIZE (target ~${targetTokens} tokens)>>`,
-    body: transcript,
-    shortCommentRulesOverride: profile.shortCommentRulesOverride,
-    personaOverride: profile.memoriaPersonaOverride,
-    opener
-  });
-  const samplerParams = buildSamplerParameters(profile);
-  const diagnostics = [
-    { message: `Connection: ${conn.name} (${conn.provider}/${conn.model})` },
-    { message: `Window: ${messages.length} message(s)` },
-    { message: `Transcript tokens (model tokenizer): ${transcriptTokens}` },
-    { message: `Target tokens: ${targetTokens} (${profile.chapterTargetUnit === "tokens" ? `fixed budget, ~${targetPercent}% of input` : profile.chapterTargetPercent + "% of input"})` },
-    { message: `Target words (shown to model): ${Math.max(1, Math.round(targetTokens / 1.4))}` },
-    { message: `Previous memories included: ${previousMemories.length}` },
-    { message: `Opener: ${opener}` },
-    { message: `Preset key: ${profile.chapterPresetKey}` },
-    { message: `Sampler parameters being sent on the wire: ${JSON.stringify(samplerParams)}` }
-  ];
-  const resolvedSystem = await resolveMacrosWithDiagnostics(built.system, chatId, userId, diagnostics);
-  const outgoingUser = await applySelectedRegex(built.user, profile.regexOutgoingScriptIds, userId);
-  if (profile.regexOutgoingScriptIds.length > 0) {
-    diagnostics.push({ message: `Outgoing regex applied: ${profile.regexOutgoingScriptIds.length} script(s)` });
-  }
-  return {
-    messages: [
-      { role: "system", content: resolvedSystem },
-      { role: "user", content: outgoingUser }
-    ],
-    diagnostics
-  };
-}
 async function assembleArcPrompt(profile, customPresets, chatId, chapters, userId, opener) {
   const conn = await resolveConnection(profile, userId);
   if (!conn)
@@ -2532,273 +2334,8 @@ function publishVolumeCreated(userId, event) {
   }
 }
 
-// src/backend/book-copy.ts
-async function copyLmbEntries(targetBookId, sourceEntries, userId, transform) {
-  const idMap = new Map;
-  const clonedMeta = new Map;
-  const ctx = { idMap, clonedMeta };
-  const chapters = sourceEntries.filter((e) => e.meta.tier === 1);
-  const arcs = sourceEntries.filter((e) => e.meta.tier === 2);
-  const volumes = sourceEntries.filter((e) => e.meta.tier === 3);
-  for (const ch of chapters) {
-    const o = transform(ch, ctx);
-    if (!o)
-      continue;
-    const meta = {
-      ...ch.meta,
-      msgIds: o.msgIds,
-      firstMsgIdx: o.firstMsgIdx,
-      lastMsgIdx: o.lastMsgIdx,
-      supersededByEntryId: null,
-      ...o.extra
-    };
-    const created = await createClone(targetBookId, ch.raw, meta, userId, o.comment);
-    idMap.set(ch.raw.id, created.id);
-    clonedMeta.set(ch.raw.id, meta);
-  }
-  for (const group of [arcs, volumes]) {
-    for (const entry of group) {
-      const o = transform(entry, ctx);
-      if (!o)
-        continue;
-      const sourceChapterEntryIds = (entry.meta.sourceChapterEntryIds ?? []).map((oldId) => idMap.get(oldId)).filter((x) => typeof x === "string");
-      const meta = {
-        ...entry.meta,
-        msgIds: o.msgIds,
-        sourceChapterEntryIds,
-        firstMsgIdx: o.firstMsgIdx,
-        lastMsgIdx: o.lastMsgIdx,
-        supersededByEntryId: null,
-        ...o.extra
-      };
-      const created = await createClone(targetBookId, entry.raw, meta, userId, o.comment);
-      idMap.set(entry.raw.id, created.id);
-      clonedMeta.set(entry.raw.id, meta);
-    }
-  }
-  for (const src of [...chapters, ...arcs]) {
-    const newId = idMap.get(src.raw.id);
-    if (!newId)
-      continue;
-    const oldSuperId = src.meta.supersededByEntryId;
-    if (!oldSuperId)
-      continue;
-    const newSuperId = idMap.get(oldSuperId);
-    if (!newSuperId)
-      continue;
-    const baseMeta = clonedMeta.get(src.raw.id);
-    if (!baseMeta)
-      continue;
-    const ext = src.raw.extensions || {};
-    try {
-      await spindle.world_books.entries.update(newId, { extensions: { ...ext, [EXTENSION_KEY]: { ...baseMeta, supersededByEntryId: newSuperId } } }, userId);
-    } catch (err) {
-      warn(`copyLmbEntries: failed to re-point entry ${newId.slice(0, 8)}: ${describeError(err)}`);
-    }
-  }
-  return idMap;
-}
-async function createClone(bookId, source, meta, userId, commentOverride) {
-  const ext = source.extensions || {};
-  return spindle.world_books.entries.create(bookId, {
-    content: source.content,
-    comment: commentOverride ?? source.comment,
-    disabled: source.disabled,
-    constant: source.constant,
-    key: source.key ?? [],
-    keysecondary: source.keysecondary ?? [],
-    vectorized: source.vectorized ?? false,
-    extensions: { ...ext, [EXTENSION_KEY]: meta }
-  }, userId);
-}
-
-// src/backend/fork.ts
-var FORK_ADOPTED_FLAG = "lumibooks_fork_adopted";
-var MAX_ANCESTRY_HOPS = 100;
-var checked = new Set;
-var inflight = new Map;
-function key(userId, chatId) {
-  return `${userId}::${chatId}`;
-}
-async function ensureForkAdoption(chatId, userId) {
-  const k = key(userId, chatId);
-  if (checked.has(k))
-    return;
-  const existing = inflight.get(k);
-  if (existing)
-    return existing;
-  const p = (async () => {
-    try {
-      await doForkAdoption(chatId, userId);
-      checked.add(k);
-    } catch (err) {
-      warn(`fork adoption failed for ${chatId.slice(0, 8)}: ${describeError(err)}`);
-    } finally {
-      inflight.delete(k);
-    }
-  })();
-  inflight.set(k, p);
-  return p;
-}
-async function doForkAdoption(forkChatId, userId) {
-  const chat = await spindle.chats.get(forkChatId, userId).catch(() => null);
-  if (!chat)
-    return;
-  const meta = chat.metadata && typeof chat.metadata === "object" ? chat.metadata : null;
-  const branchedFrom = meta && typeof meta["branched_from"] === "string" ? meta["branched_from"] : null;
-  if (!branchedFrom)
-    return;
-  if (meta && meta[FORK_ADOPTED_FLAG] === true)
-    return;
-  const owned = await findBookForChat(forkChatId, userId).catch(() => null);
-  if (owned)
-    return;
-  const ancestor = await findAncestorBook(branchedFrom, userId);
-  if (!ancestor)
-    return;
-  await cloneShelfForFork(forkChatId, chat.name ?? null, ancestor.chatId, userId);
-}
-async function findAncestorBook(startChatId, userId) {
-  const seen = new Set;
-  let cur = startChatId;
-  let hops = 0;
-  while (cur && hops < MAX_ANCESTRY_HOPS) {
-    const chatId = cur;
-    if (seen.has(chatId))
-      break;
-    seen.add(chatId);
-    hops++;
-    const bookId = await findBookForChat(chatId, userId).catch(() => null);
-    if (bookId)
-      return { chatId, bookId };
-    const chat = await spindle.chats.get(chatId, userId).catch(() => null);
-    const meta = chat && chat.metadata && typeof chat.metadata === "object" ? chat.metadata : null;
-    cur = meta && typeof meta["branched_from"] === "string" ? meta["branched_from"] : null;
-  }
-  return null;
-}
-async function cloneShelfForFork(forkChatId, forkChatName, parentChatId, userId) {
-  const parentEntries = await listLmbEntries(parentChatId, userId);
-  if (parentEntries.length === 0)
-    return;
-  const [forkMsgs, parentMsgs] = await Promise.all([
-    spindle.chat.getMessages(forkChatId),
-    spindle.chat.getMessages(parentChatId)
-  ]);
-  const parentIdxById = new Map;
-  for (const m of parentMsgs)
-    parentIdxById.set(m.id, m.index_in_chat);
-  const forkIdByIdx = new Map;
-  for (const m of forkMsgs) {
-    if (forkIdByIdx.has(m.index_in_chat)) {
-      warn(`fork adoption: duplicate index_in_chat ${m.index_in_chat} in fork ${forkChatId.slice(0, 8)}; remap may be imprecise`);
-      continue;
-    }
-    forkIdByIdx.set(m.index_in_chat, m.id);
-  }
-  const remap = (msgIds) => {
-    const ids = [];
-    let first = Number.POSITIVE_INFINITY;
-    let last = -1;
-    for (const id of msgIds) {
-      const idx = parentIdxById.get(id);
-      if (idx === undefined)
-        continue;
-      const forkId = forkIdByIdx.get(idx);
-      if (forkId === undefined)
-        continue;
-      ids.push(forkId);
-      if (idx < first)
-        first = idx;
-      if (idx > last)
-        last = idx;
-    }
-    return {
-      ids,
-      first: first === Number.POSITIVE_INFINITY ? undefined : first,
-      last: last === -1 ? undefined : last
-    };
-  };
-  const forkTransform = (entry, ctx) => {
-    if (entry.meta.isRoot) {
-      return {
-        msgIds: entry.meta.msgIds.slice(),
-        firstMsgIdx: entry.meta.firstMsgIdx,
-        lastMsgIdx: entry.meta.lastMsgIdx,
-        extra: { chatId: forkChatId }
-      };
-    }
-    const { ids, first, last } = remap(entry.meta.msgIds);
-    if (entry.meta.tier === 1) {
-      if (ids.length === 0)
-        return null;
-      return { msgIds: ids, firstMsgIdx: first, lastMsgIdx: last, extra: { chatId: forkChatId } };
-    }
-    const survived = (entry.meta.sourceChapterEntryIds ?? []).map((oldId) => ctx.idMap.get(oldId)).filter((x) => typeof x === "string");
-    if (ids.length === 0 && survived.length === 0)
-      return null;
-    let firstIdx = first;
-    let lastIdx = last;
-    if (firstIdx === undefined || lastIdx === undefined) {
-      for (const oldId of entry.meta.sourceChapterEntryIds ?? []) {
-        const cm = ctx.clonedMeta.get(oldId);
-        if (!cm)
-          continue;
-        if (cm.firstMsgIdx !== undefined)
-          firstIdx = firstIdx === undefined ? cm.firstMsgIdx : Math.min(firstIdx, cm.firstMsgIdx);
-        if (cm.lastMsgIdx !== undefined)
-          lastIdx = lastIdx === undefined ? cm.lastMsgIdx : Math.max(lastIdx, cm.lastMsgIdx);
-      }
-    }
-    return { msgIds: ids, firstMsgIdx: firstIdx, lastMsgIdx: lastIdx, extra: { chatId: forkChatId } };
-  };
-  const settings = await loadSettings(userId);
-  const newBookName = await formatBookName(settings, forkChatId, userId, forkChatName);
-  const newBook = await spindle.world_books.create({
-    name: newBookName,
-    description: "Memoria's shelf for this chat. Chapters and arcs live here.",
-    metadata: {
-      lumibooks_chat_id: forkChatId,
-      lumibooks_created_at: Date.now(),
-      lumibooks_forked_from: parentChatId
-    }
-  }, userId);
-  let cloned = 0;
-  try {
-    const idMap = await copyLmbEntries(newBook.id, parentEntries, userId, forkTransform);
-    cloned = idMap.size;
-    await rebindForkShelf(forkChatId, newBook.id, userId);
-  } catch (err) {
-    await spindle.world_books.delete(newBook.id, userId).catch(() => {});
-    throw err;
-  }
-  invalidateBookCache(userId, forkChatId);
-  try {
-    const profile = settings.profiles.find((p) => p.id === settings.activeProfileId);
-    const desiredHidden = profile ? profile.hideCoveredMessages : true;
-    await resyncVisibility(forkChatId, userId, desiredHidden);
-  } catch (err) {
-    warn(`fork adoption: visibility resync failed: ${describeError(err)}`);
-  }
-  info(`adopted fork ${forkChatId.slice(0, 8)} from ${parentChatId.slice(0, 8)} (${cloned} entries cloned)`);
-}
-async function rebindForkShelf(forkChatId, newBookId, userId) {
-  const chat = await spindle.chats.get(forkChatId, userId).catch(() => null);
-  if (!chat)
-    return;
-  const metadata = chat.metadata && typeof chat.metadata === "object" ? { ...chat.metadata } : {};
-  const inheritedBookId = typeof metadata["lumibooks_book_id"] === "string" ? metadata["lumibooks_book_id"] : null;
-  const existing = Array.isArray(metadata["chat_world_book_ids"]) ? metadata["chat_world_book_ids"].filter((x) => typeof x === "string") : [];
-  const nextBookIds = existing.filter((id) => id !== inheritedBookId && id !== newBookId);
-  nextBookIds.push(newBookId);
-  metadata["chat_world_book_ids"] = nextBookIds;
-  metadata["lumibooks_book_id"] = newBookId;
-  metadata[FORK_ADOPTED_FLAG] = true;
-  await spindle.chats.update(forkChatId, { metadata }, userId);
-}
-
 // src/backend/pipeline.ts
-var inflight2 = new Map;
+var inflight = new Map;
 var busyByUser = new Map;
 var aborters = new Map;
 var progressLastPush = new Map;
@@ -2811,16 +2348,16 @@ var committingDrafts = new Set;
 var PROGRESS_PUSH_INTERVAL_MS = 250;
 var commitChain = new Map;
 function withCommitMutex(userId, chatId, tier, fn) {
-  const key2 = `${userId}::${chatId}::t${tier}`;
-  const prev = commitChain.get(key2) ?? Promise.resolve();
+  const key = `${userId}::${chatId}::t${tier}`;
+  const prev = commitChain.get(key) ?? Promise.resolve();
   const tail = prev.then(fn, fn);
   const guarded = tail.catch(() => {
     return;
   });
-  commitChain.set(key2, guarded);
+  commitChain.set(key, guarded);
   guarded.then(() => {
-    if (commitChain.get(key2) === guarded)
-      commitChain.delete(key2);
+    if (commitChain.get(key) === guarded)
+      commitChain.delete(key);
   });
   return tail;
 }
@@ -2845,12 +2382,12 @@ function registerPipelineCallbacks(c) {
   cb = c;
 }
 function setBusy(userId, chatId, kind, label) {
-  const key2 = busyKey(userId, chatId, kind);
-  if (inflight2.has(key2))
+  const key = busyKey(userId, chatId, kind);
+  if (inflight.has(key))
     return false;
   const entry = { kind, chatId, label, startedAt: Date.now() };
-  inflight2.set(key2, entry);
-  progressState.set(key2, { kind, chars: 0, thinkingChars: 0, userId, chatId });
+  inflight.set(key, entry);
+  progressState.set(key, { kind, chars: 0, thinkingChars: 0, userId, chatId });
   const list = busyByUser.get(userId) ?? [];
   list.push(entry);
   busyByUser.set(userId, list);
@@ -2859,16 +2396,16 @@ function setBusy(userId, chatId, kind, label) {
   return true;
 }
 function clearBusy(userId, chatId, kind) {
-  const key2 = busyKey(userId, chatId, kind);
-  inflight2.delete(key2);
-  aborters.delete(key2);
-  progressLastPush.delete(key2);
-  progressState.delete(key2);
+  const key = busyKey(userId, chatId, kind);
+  inflight.delete(key);
+  aborters.delete(key);
+  progressLastPush.delete(key);
+  progressState.delete(key);
   const fresh = [];
-  for (const k of inflight2.keys()) {
+  for (const k of inflight.keys()) {
     if (!k.startsWith(`${userId}::`))
       continue;
-    const found = inflight2.get(k);
+    const found = inflight.get(k);
     if (found)
       fresh.push(found);
   }
@@ -2948,8 +2485,8 @@ function ensureHeartbeat() {
       return;
     }
     const touched = new Set;
-    for (const [key2, ps] of progressState) {
-      const entry = inflight2.get(key2);
+    for (const [key, ps] of progressState) {
+      const entry = inflight.get(key);
       if (!entry)
         continue;
       const elapsed = Date.now() - entry.startedAt;
@@ -2963,20 +2500,20 @@ function ensureHeartbeat() {
   }, HEARTBEAT_INTERVAL_MS);
 }
 function updateProgressNumbers(userId, chatId, kind, chars, thinkingChars) {
-  const key2 = busyKey(userId, chatId, kind);
-  const ps = progressState.get(key2);
+  const key = busyKey(userId, chatId, kind);
+  const ps = progressState.get(key);
   if (!ps)
     return;
   ps.chars = chars;
   ps.thinkingChars = thinkingChars;
-  const entry = inflight2.get(key2);
+  const entry = inflight.get(key);
   if (!entry)
     return;
   const now = Date.now();
-  const last = progressLastPush.get(key2) ?? 0;
+  const last = progressLastPush.get(key) ?? 0;
   if (now - last < PROGRESS_PUSH_INTERVAL_MS)
     return;
-  progressLastPush.set(key2, now);
+  progressLastPush.set(key, now);
   entry.label = formatBusyLabel(ps, now - entry.startedAt);
   const list = busyByUser.get(userId) ?? [];
   cb?.onBusyChange(userId, list.slice());
@@ -3001,8 +2538,8 @@ function dropPendingPreview(userId, chatId, draftId) {
   previewsByChat.set(chatKey(userId, chatId), list.filter((p) => p.draftId !== draftId));
 }
 function patchPendingPreview(userId, chatId, draftId, patch) {
-  const key2 = chatKey(userId, chatId);
-  const list = previewsByChat.get(key2) ?? [];
+  const key = chatKey(userId, chatId);
+  const list = previewsByChat.get(key) ?? [];
   const idx = list.findIndex((p) => p.draftId === draftId);
   if (idx === -1)
     return;
@@ -3012,17 +2549,17 @@ function patchPendingPreview(userId, chatId, draftId, patch) {
     title: patch.title !== undefined ? patch.title : old.title,
     content: patch.content !== undefined ? patch.content : old.content
   };
-  previewsByChat.set(key2, list);
+  previewsByChat.set(key, list);
 }
 function pushPreview(userId, chatId, preview) {
-  const key2 = chatKey(userId, chatId);
-  const existing = previewsByChat.get(key2);
+  const key = chatKey(userId, chatId);
+  const existing = previewsByChat.get(key);
   if (existing) {
-    previewsByChat.delete(key2);
+    previewsByChat.delete(key);
     existing.push(preview);
-    previewsByChat.set(key2, existing);
+    previewsByChat.set(key, existing);
   } else {
-    previewsByChat.set(key2, [preview]);
+    previewsByChat.set(key, [preview]);
   }
   capMap(previewsByChat, PREVIEW_MAP_CAP);
 }
@@ -3045,10 +2582,10 @@ async function runWithRetry(attempts, fn, onRetry) {
   return { ok: false, err: lastErr, retries: tries - 1 };
 }
 function recordFailure(userId, chatId, kind, retries, err) {
-  const key2 = chatKey(userId, chatId);
-  if (failureByChat.has(key2))
-    failureByChat.delete(key2);
-  failureByChat.set(key2, {
+  const key = chatKey(userId, chatId);
+  if (failureByChat.has(key))
+    failureByChat.delete(key);
+  failureByChat.set(key, {
     kind,
     message: describeError(err),
     retriedTimes: retries,
@@ -3056,11 +2593,11 @@ function recordFailure(userId, chatId, kind, retries, err) {
   });
   capMap(failureByChat, FAILURE_MAP_CAP);
 }
-function nyaaToast(userId, kind, automation) {
+function nyaaToast(userId, kind) {
   if (!cb)
     return;
   const tone = kind === "retry" ? "warn" : kind === "success" || kind === "arc_success" || kind === "volume_success" ? "success" : "info";
-  cb.onToast(userId, tone, pickPhrase(kind), automation);
+  cb.onToast(userId, tone, pickPhrase(kind));
 }
 function shortErrorText(err) {
   const raw = describeError(err).replace(/\s+/g, " ").trim();
@@ -3071,26 +2608,6 @@ function shortErrorText(err) {
 function failToast(userId, kind, err) {
   const noun = kind === "arc" ? "bind the arc" : kind === "volume" ? "press the volume" : "file the chapter";
   cb?.onToast(userId, "error", `Memoria couldn't ${noun}: ${shortErrorText(err)}`);
-}
-async function createChapterAuto(chatId, profile, settings, userId, automation = false) {
-  if (!setBusy(userId, chatId, "chapter", "Memoria is filing a chapter"))
-    return null;
-  try {
-    const messages = await spindle.chat.getMessages(chatId);
-    if (!messages || messages.length === 0)
-      return null;
-    const coverage = await buildCoverage(chatId, userId);
-    const stats = computeCoverageStats(messages, coverage, profile);
-    if (!stats.lagSatisfied || !stats.windowAvailable)
-      return null;
-    const uncoveredTail = pickUncoveredTail(messages, coverage);
-    const window = selectNextChapterWindow(uncoveredTail, profile);
-    if (window.length === 0)
-      return null;
-    return await runChapter(chatId, profile, settings, userId, messages, window, { automation });
-  } finally {
-    clearBusy(userId, chatId, "chapter");
-  }
 }
 async function createChapterFromRange(chatId, messageIds, profile, settings, userId, opts = {}) {
   if (!setBusy(userId, chatId, "chapter", "Memoria is filing a chapter"))
@@ -3110,8 +2627,7 @@ async function createChapterFromRange(chatId, messageIds, profile, settings, use
 }
 async function runChapter(chatId, profile, settings, userId, allMessages, window, opts = {}) {
   const { replacesEntryId } = opts;
-  const automation = opts.automation === true;
-  nyaaToast(userId, "fire", automation);
+  nyaaToast(userId, "fire");
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
   const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && typeof e.meta.firstMsgIdx === "number").sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
@@ -3131,7 +2647,7 @@ async function runChapter(chatId, profile, settings, userId, allMessages, window
     }
   }, (n, err) => {
     warn(`chapter attempt ${n} failed: ${describeError(err)}`);
-    nyaaToast(userId, "retry", automation);
+    nyaaToast(userId, "retry");
   });
   if (!outcome.ok) {
     if (outcome.err instanceof AbortedSummarizerError) {
@@ -3156,7 +2672,7 @@ async function runChapter(chatId, profile, settings, userId, allMessages, window
   }
   try {
     const entryId = await commitChapter(chatId, profile, userId, window, result, firstIdx, lastIdx, allMessages, false, replacesEntryId);
-    nyaaToast(userId, "success", automation);
+    nyaaToast(userId, "success");
     return entryId;
   } catch (err) {
     warn(`commitChapter failed: ${describeError(err)}`);
@@ -3262,52 +2778,6 @@ async function commitChapter(chatId, profile, userId, window, result, firstIdx, 
     return entry.id;
   });
 }
-async function createArcAuto(chatId, profile, settings, userId, automation = false) {
-  if (!setBusy(userId, chatId, "arc", "Memoria is binding an arc"))
-    return null;
-  try {
-    const entries = await listLmbEntries(chatId, userId);
-    const coverage = await buildCoverage(chatId, userId, entries);
-    const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && !e.meta.isRoot).sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
-    if (chapters.length === 0)
-      return null;
-    let selected = [];
-    if (profile.arcTrigger === "chapters") {
-      const compressible = Math.max(0, chapters.length - profile.arcLagChapters);
-      if (compressible < profile.arcAfterChapters)
-        return null;
-      selected = chapters.slice(0, compressible).slice(0, profile.arcAfterChapters);
-    } else if (profile.arcTrigger === "tokens") {
-      const reservedFromTail = [];
-      let reservedTokens = 0;
-      for (let i = chapters.length - 1;i >= 0 && reservedTokens < profile.arcLagTokens; i--) {
-        reservedFromTail.unshift(chapters[i]);
-        reservedTokens += chapters[i].meta.tokenCountOutput;
-      }
-      const reservedSet = new Set(reservedFromTail.map((c) => c.raw.id));
-      const compressible = chapters.filter((c) => !reservedSet.has(c.raw.id));
-      const compressibleTokens = compressible.reduce((a, c) => a + c.meta.tokenCountOutput, 0);
-      if (compressibleTokens < profile.arcAfterTokens)
-        return null;
-      const take = [];
-      let acc = 0;
-      for (const ch of compressible) {
-        take.push(ch);
-        acc += ch.meta.tokenCountOutput;
-        if (acc >= profile.arcAfterTokens)
-          break;
-      }
-      selected = take;
-    } else {
-      return null;
-    }
-    if (selected.length === 0)
-      return null;
-    return await runArc(chatId, profile, settings, userId, selected, { automation });
-  } finally {
-    clearBusy(userId, chatId, "arc");
-  }
-}
 async function createArcFromChapters(chatId, chapterEntryIds, profile, settings, userId, opts = {}) {
   if (!setBusy(userId, chatId, "arc", "Memoria is binding an arc"))
     return null;
@@ -3326,8 +2796,7 @@ async function createArcFromChapters(chatId, chapterEntryIds, profile, settings,
 }
 async function runArc(chatId, profile, settings, userId, selected, opts = {}) {
   const { replacesEntryId } = opts;
-  const automation = opts.automation === true;
-  nyaaToast(userId, "arc_fire", automation);
+  nyaaToast(userId, "arc_fire");
   const totalTurns = selected.reduce((acc, c) => acc + c.meta.msgIds.length, 0);
   const provisionalSceneNumber = await nextSceneNumber(chatId, 2, userId);
   const opener = buildArcHeader(provisionalSceneNumber, selected.length, totalTurns);
@@ -3344,7 +2813,7 @@ async function runArc(chatId, profile, settings, userId, selected, opts = {}) {
     }
   }, (n, err) => {
     warn(`arc attempt ${n} failed: ${describeError(err)}`);
-    nyaaToast(userId, "retry", automation);
+    nyaaToast(userId, "retry");
   });
   if (!outcome.ok) {
     if (outcome.err instanceof AbortedSummarizerError) {
@@ -3370,8 +2839,8 @@ async function runArc(chatId, profile, settings, userId, selected, opts = {}) {
     return null;
   }
   try {
-    const entryId = await commitArc(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId, automation);
-    nyaaToast(userId, "arc_success", automation);
+    const entryId = await commitArc(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId);
+    nyaaToast(userId, "arc_success");
     return entryId;
   } catch (err) {
     warn(`commitArc failed: ${describeError(err)}`);
@@ -3381,7 +2850,7 @@ async function runArc(chatId, profile, settings, userId, selected, opts = {}) {
     return null;
   }
 }
-async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId, automation = false) {
+async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId) {
   return withCommitMutex(userId, chatId, 2, async () => {
     const freshEntries = await listLmbEntries(chatId, userId);
     const entriesForCoverage = replacesEntryId ? freshEntries.filter((e) => e.raw.id !== replacesEntryId) : freshEntries;
@@ -3467,7 +2936,7 @@ async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, re
       }
     }
     if (failedSupersedes.length > 0) {
-      cb?.onToast(userId, "warn", `The arc saved but ${failedSupersedes.length} chapter${failedSupersedes.length === 1 ? "" : "s"} couldn't be marked superseded`, automation);
+      cb?.onToast(userId, "warn", `The arc saved but ${failedSupersedes.length} chapter${failedSupersedes.length === 1 ? "" : "s"} couldn't be marked superseded`);
     }
     invalidateBookCache(userId, chatId);
     if (replacesEntryId) {
@@ -3509,7 +2978,7 @@ async function createVolumeFromArcs(chatId, arcEntryIds, profile, settings, user
   }
 }
 async function runVolume(chatId, profile, settings, userId, selected, replacesEntryId) {
-  nyaaToast(userId, "volume_fire", false);
+  nyaaToast(userId, "volume_fire");
   const totalTurns = selected.reduce((acc, a) => acc + a.meta.msgIds.length, 0);
   const provisionalSceneNumber = await nextSceneNumber(chatId, 3, userId);
   const opener = buildVolumeHeader(provisionalSceneNumber, selected.length, totalTurns);
@@ -3526,7 +2995,7 @@ async function runVolume(chatId, profile, settings, userId, selected, replacesEn
     }
   }, (n, err) => {
     warn(`volume attempt ${n} failed: ${describeError(err)}`);
-    nyaaToast(userId, "retry", false);
+    nyaaToast(userId, "retry");
   });
   if (!outcome.ok) {
     if (outcome.err instanceof AbortedSummarizerError) {
@@ -3553,7 +3022,7 @@ async function runVolume(chatId, profile, settings, userId, selected, replacesEn
   }
   try {
     const entryId = await commitVolume(chatId, userId, selected, result, firstIdx, lastIdx, replacesEntryId);
-    nyaaToast(userId, "volume_success", false);
+    nyaaToast(userId, "volume_success");
     return entryId;
   } catch (err) {
     warn(`commitVolume failed: ${describeError(err)}`);
@@ -3716,7 +3185,7 @@ async function acceptPreview(chatId, draftId, profile, userId) {
       try {
         const entryId = await commitChapter(chatId, profile, userId, window, fakeResult2, firstIdx, lastIdx, messages, true, preview.replacesEntryId);
         dropPendingPreview(userId, chatId, draftId);
-        nyaaToast(userId, "success", false);
+        nyaaToast(userId, "success");
         cb?.onStateChange(userId, chatId);
         return entryId;
       } catch (err) {
@@ -3755,7 +3224,7 @@ async function acceptPreview(chatId, draftId, profile, userId) {
     try {
       const entryId = isVolume ? await commitVolume(chatId, userId, selected, fakeResult, preview.firstMsgIdx ?? 0, preview.lastMsgIdx ?? 0, preview.replacesEntryId) : await commitArc(chatId, userId, selected, fakeResult, preview.firstMsgIdx ?? 0, preview.lastMsgIdx ?? 0, preview.replacesEntryId);
       dropPendingPreview(userId, chatId, draftId);
-      nyaaToast(userId, isVolume ? "volume_success" : "arc_success", false);
+      nyaaToast(userId, isVolume ? "volume_success" : "arc_success");
       cb?.onStateChange(userId, chatId);
       return entryId;
     } catch (err) {
@@ -3767,38 +3236,6 @@ async function acceptPreview(chatId, draftId, profile, userId) {
   } finally {
     committingDrafts.delete(guardKey);
   }
-}
-var CHAPTER_BACKLOG_CAP = 500;
-var ARC_BACKLOG_CAP = 100;
-async function drainChapterBacklog(chatId, profile, settings, userId, automation = false) {
-  let made = 0;
-  for (let i = 0;i < CHAPTER_BACKLOG_CAP; i++) {
-    const created = await createChapterAuto(chatId, profile, settings, userId, automation).catch((err) => {
-      warn(`createChapterAuto failed: ${describeError(err)}`);
-      return null;
-    });
-    if (!created)
-      break;
-    made++;
-  }
-  return made;
-}
-async function dryRunChapter(chatId, profile, settings, userId) {
-  const messages = await spindle.chat.getMessages(chatId);
-  if (!messages || messages.length === 0)
-    throw new Error("Chat has no messages");
-  const entries = await listLmbEntries(chatId, userId);
-  const coverage = await buildCoverage(chatId, userId, entries);
-  const uncoveredTail = pickUncoveredTail(messages, coverage);
-  const window = selectNextChapterWindow(uncoveredTail, profile);
-  if (window.length === 0) {
-    throw new Error("No window available, lower the lag or window thresholds");
-  }
-  const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && typeof e.meta.firstMsgIdx === "number").sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
-  const previousMemories = profile.previousMemoriesCount > 0 ? chapters.slice(-profile.previousMemoriesCount) : [];
-  const provisionalSceneNumber = await nextSceneNumber(chatId, 1, userId);
-  const opener = buildChapterHeader(provisionalSceneNumber, window.length);
-  return assembleChapterPrompt(profile, settings.customPresets, chatId, window, previousMemories, userId, opener);
 }
 async function dryRunArc(chatId, profile, settings, userId) {
   const entries = await listLmbEntries(chatId, userId);
@@ -3821,39 +3258,6 @@ async function dryRunVolume(chatId, profile, settings, userId) {
   const provisionalSceneNumber = await nextSceneNumber(chatId, 3, userId);
   const opener = buildVolumeHeader(provisionalSceneNumber, arcs.length, totalTurns);
   return assembleVolumePrompt(profile, settings.customPresets, chatId, arcs, userId, opener);
-}
-async function drainArcBacklog(chatId, profile, settings, userId, automation = false) {
-  if (profile.arcTrigger === "manual")
-    return 0;
-  let made = 0;
-  for (let i = 0;i < ARC_BACKLOG_CAP; i++) {
-    const created = await createArcAuto(chatId, profile, settings, userId, automation).catch((err) => {
-      warn(`createArcAuto failed: ${describeError(err)}`);
-      return null;
-    });
-    if (!created)
-      break;
-    made++;
-  }
-  return made;
-}
-async function maybeRunPipeline(chatId, profile, settings, userId) {
-  if (!profile.autoCreate)
-    return;
-  await ensureForkAdoption(chatId, userId).catch(() => {});
-  if (profile.autoCreateChapter) {
-    await drainChapterBacklog(chatId, profile, settings, userId, true);
-  }
-  await maybeRunArcCheck(chatId, profile, settings, userId, true);
-}
-async function maybeRunArcCheck(chatId, profile, settings, userId, automation = false) {
-  if (!profile.autoCreate)
-    return;
-  if (!profile.autoCreateArc)
-    return;
-  if (profile.arcTrigger === "manual")
-    return;
-  await drainArcBacklog(chatId, profile, settings, userId, automation);
 }
 async function nextSceneNumber(chatId, tier, userId) {
   const entries = await listLmbEntries(chatId, userId).catch(() => []);
@@ -3921,6 +3325,86 @@ function makeGroupPreview(kind, selected, result, firstIdx, lastIdx, replacesEnt
   };
 }
 
+// src/backend/book-copy.ts
+async function copyLmbEntries(targetBookId, sourceEntries, userId, transform) {
+  const idMap = new Map;
+  const clonedMeta = new Map;
+  const ctx = { idMap, clonedMeta };
+  const chapters = sourceEntries.filter((e) => e.meta.tier === 1);
+  const arcs = sourceEntries.filter((e) => e.meta.tier === 2);
+  const volumes = sourceEntries.filter((e) => e.meta.tier === 3);
+  for (const ch of chapters) {
+    const o = transform(ch, ctx);
+    if (!o)
+      continue;
+    const meta = {
+      ...ch.meta,
+      msgIds: o.msgIds,
+      firstMsgIdx: o.firstMsgIdx,
+      lastMsgIdx: o.lastMsgIdx,
+      supersededByEntryId: null,
+      ...o.extra
+    };
+    const created = await createClone(targetBookId, ch.raw, meta, userId, o.comment);
+    idMap.set(ch.raw.id, created.id);
+    clonedMeta.set(ch.raw.id, meta);
+  }
+  for (const group of [arcs, volumes]) {
+    for (const entry of group) {
+      const o = transform(entry, ctx);
+      if (!o)
+        continue;
+      const sourceChapterEntryIds = (entry.meta.sourceChapterEntryIds ?? []).map((oldId) => idMap.get(oldId)).filter((x) => typeof x === "string");
+      const meta = {
+        ...entry.meta,
+        msgIds: o.msgIds,
+        sourceChapterEntryIds,
+        firstMsgIdx: o.firstMsgIdx,
+        lastMsgIdx: o.lastMsgIdx,
+        supersededByEntryId: null,
+        ...o.extra
+      };
+      const created = await createClone(targetBookId, entry.raw, meta, userId, o.comment);
+      idMap.set(entry.raw.id, created.id);
+      clonedMeta.set(entry.raw.id, meta);
+    }
+  }
+  for (const src of [...chapters, ...arcs]) {
+    const newId = idMap.get(src.raw.id);
+    if (!newId)
+      continue;
+    const oldSuperId = src.meta.supersededByEntryId;
+    if (!oldSuperId)
+      continue;
+    const newSuperId = idMap.get(oldSuperId);
+    if (!newSuperId)
+      continue;
+    const baseMeta = clonedMeta.get(src.raw.id);
+    if (!baseMeta)
+      continue;
+    const ext = src.raw.extensions || {};
+    try {
+      await spindle.world_books.entries.update(newId, { extensions: { ...ext, [EXTENSION_KEY]: { ...baseMeta, supersededByEntryId: newSuperId } } }, userId);
+    } catch (err) {
+      warn(`copyLmbEntries: failed to re-point entry ${newId.slice(0, 8)}: ${describeError(err)}`);
+    }
+  }
+  return idMap;
+}
+async function createClone(bookId, source, meta, userId, commentOverride) {
+  const ext = source.extensions || {};
+  return spindle.world_books.entries.create(bookId, {
+    content: source.content,
+    comment: commentOverride ?? source.comment,
+    disabled: source.disabled,
+    constant: source.constant,
+    key: source.key ?? [],
+    keysecondary: source.keysecondary ?? [],
+    vectorized: source.vectorized ?? false,
+    extensions: { ...ext, [EXTENSION_KEY]: meta }
+  }, userId);
+}
+
 // src/backend/rebase.ts
 var inFlight = new Set;
 function lockKey(userId, chatId) {
@@ -3962,10 +3446,10 @@ async function seedRoot(targetChatId, sourceChatId, sourceEntries, existingRoots
 async function rebaseRoot(targetChatId, sourceChatId, userId) {
   if (sourceChatId === targetChatId)
     return { ok: false, reason: "same_chat" };
-  const key2 = lockKey(userId, targetChatId);
-  if (inFlight.has(key2))
+  const key = lockKey(userId, targetChatId);
+  if (inFlight.has(key))
     return { ok: false, reason: "busy" };
-  inFlight.add(key2);
+  inFlight.add(key);
   try {
     const targetEntries = await listLmbEntries(targetChatId, userId);
     if (ownEntries(targetEntries).some((e) => !e.raw.disabled))
@@ -3977,16 +3461,16 @@ async function rebaseRoot(targetChatId, sourceChatId, userId) {
     const { count } = await seedRoot(targetChatId, sourceChatId, sourceEntries, existingRoots, userId);
     return { ok: true, count };
   } finally {
-    inFlight.delete(key2);
+    inFlight.delete(key);
   }
 }
 async function rebuildRoot(targetChatId, sourceChatId, userId) {
   if (sourceChatId === targetChatId)
     return { ok: false, reason: "same_chat" };
-  const key2 = lockKey(userId, targetChatId);
-  if (inFlight.has(key2))
+  const key = lockKey(userId, targetChatId);
+  if (inFlight.has(key))
     return { ok: false, reason: "busy" };
-  inFlight.add(key2);
+  inFlight.add(key);
   try {
     const sourceEntries = (await listLmbEntries(sourceChatId, userId)).filter((e) => !e.raw.disabled);
     if (sourceEntries.length === 0)
@@ -4011,7 +3495,7 @@ async function rebuildRoot(targetChatId, sourceChatId, userId) {
     invalidateRootCandidates(userId);
     return { ok: true, count };
   } finally {
-    inFlight.delete(key2);
+    inFlight.delete(key);
   }
 }
 async function detachRoot(targetChatId, userId) {
@@ -4025,6 +3509,191 @@ async function detachRoot(targetChatId, userId) {
     invalidateRootCandidates(userId);
   }
   return roots.length;
+}
+
+// src/backend/fork.ts
+var FORK_ADOPTED_FLAG = "lumibooks_fork_adopted";
+var MAX_ANCESTRY_HOPS = 100;
+var checked = new Set;
+var inflight2 = new Map;
+function key(userId, chatId) {
+  return `${userId}::${chatId}`;
+}
+async function ensureForkAdoption(chatId, userId) {
+  const k = key(userId, chatId);
+  if (checked.has(k))
+    return;
+  const existing = inflight2.get(k);
+  if (existing)
+    return existing;
+  const p = (async () => {
+    try {
+      await doForkAdoption(chatId, userId);
+      checked.add(k);
+    } catch (err) {
+      warn(`fork adoption failed for ${chatId.slice(0, 8)}: ${describeError(err)}`);
+    } finally {
+      inflight2.delete(k);
+    }
+  })();
+  inflight2.set(k, p);
+  return p;
+}
+async function doForkAdoption(forkChatId, userId) {
+  const chat = await spindle.chats.get(forkChatId, userId).catch(() => null);
+  if (!chat)
+    return;
+  const meta = chat.metadata && typeof chat.metadata === "object" ? chat.metadata : null;
+  const branchedFrom = meta && typeof meta["branched_from"] === "string" ? meta["branched_from"] : null;
+  if (!branchedFrom)
+    return;
+  if (meta && meta[FORK_ADOPTED_FLAG] === true)
+    return;
+  const owned = await findBookForChat(forkChatId, userId).catch(() => null);
+  if (owned)
+    return;
+  const ancestor = await findAncestorBook(branchedFrom, userId);
+  if (!ancestor)
+    return;
+  await cloneShelfForFork(forkChatId, chat.name ?? null, ancestor.chatId, userId);
+}
+async function findAncestorBook(startChatId, userId) {
+  const seen = new Set;
+  let cur = startChatId;
+  let hops = 0;
+  while (cur && hops < MAX_ANCESTRY_HOPS) {
+    const chatId = cur;
+    if (seen.has(chatId))
+      break;
+    seen.add(chatId);
+    hops++;
+    const bookId = await findBookForChat(chatId, userId).catch(() => null);
+    if (bookId)
+      return { chatId, bookId };
+    const chat = await spindle.chats.get(chatId, userId).catch(() => null);
+    const meta = chat && chat.metadata && typeof chat.metadata === "object" ? chat.metadata : null;
+    cur = meta && typeof meta["branched_from"] === "string" ? meta["branched_from"] : null;
+  }
+  return null;
+}
+async function cloneShelfForFork(forkChatId, forkChatName, parentChatId, userId) {
+  const parentEntries = await listLmbEntries(parentChatId, userId);
+  if (parentEntries.length === 0)
+    return;
+  const [forkMsgs, parentMsgs] = await Promise.all([
+    spindle.chat.getMessages(forkChatId),
+    spindle.chat.getMessages(parentChatId)
+  ]);
+  const parentIdxById = new Map;
+  for (const m of parentMsgs)
+    parentIdxById.set(m.id, m.index_in_chat);
+  const forkIdByIdx = new Map;
+  for (const m of forkMsgs) {
+    if (forkIdByIdx.has(m.index_in_chat)) {
+      warn(`fork adoption: duplicate index_in_chat ${m.index_in_chat} in fork ${forkChatId.slice(0, 8)}; remap may be imprecise`);
+      continue;
+    }
+    forkIdByIdx.set(m.index_in_chat, m.id);
+  }
+  const remap = (msgIds) => {
+    const ids = [];
+    let first = Number.POSITIVE_INFINITY;
+    let last = -1;
+    for (const id of msgIds) {
+      const idx = parentIdxById.get(id);
+      if (idx === undefined)
+        continue;
+      const forkId = forkIdByIdx.get(idx);
+      if (forkId === undefined)
+        continue;
+      ids.push(forkId);
+      if (idx < first)
+        first = idx;
+      if (idx > last)
+        last = idx;
+    }
+    return {
+      ids,
+      first: first === Number.POSITIVE_INFINITY ? undefined : first,
+      last: last === -1 ? undefined : last
+    };
+  };
+  const forkTransform = (entry, ctx) => {
+    if (entry.meta.isRoot) {
+      return {
+        msgIds: entry.meta.msgIds.slice(),
+        firstMsgIdx: entry.meta.firstMsgIdx,
+        lastMsgIdx: entry.meta.lastMsgIdx,
+        extra: { chatId: forkChatId }
+      };
+    }
+    const { ids, first, last } = remap(entry.meta.msgIds);
+    if (entry.meta.tier === 1) {
+      if (ids.length === 0)
+        return null;
+      return { msgIds: ids, firstMsgIdx: first, lastMsgIdx: last, extra: { chatId: forkChatId } };
+    }
+    const survived = (entry.meta.sourceChapterEntryIds ?? []).map((oldId) => ctx.idMap.get(oldId)).filter((x) => typeof x === "string");
+    if (ids.length === 0 && survived.length === 0)
+      return null;
+    let firstIdx = first;
+    let lastIdx = last;
+    if (firstIdx === undefined || lastIdx === undefined) {
+      for (const oldId of entry.meta.sourceChapterEntryIds ?? []) {
+        const cm = ctx.clonedMeta.get(oldId);
+        if (!cm)
+          continue;
+        if (cm.firstMsgIdx !== undefined)
+          firstIdx = firstIdx === undefined ? cm.firstMsgIdx : Math.min(firstIdx, cm.firstMsgIdx);
+        if (cm.lastMsgIdx !== undefined)
+          lastIdx = lastIdx === undefined ? cm.lastMsgIdx : Math.max(lastIdx, cm.lastMsgIdx);
+      }
+    }
+    return { msgIds: ids, firstMsgIdx: firstIdx, lastMsgIdx: lastIdx, extra: { chatId: forkChatId } };
+  };
+  const settings = await loadSettings(userId);
+  const newBookName = await formatBookName(settings, forkChatId, userId, forkChatName);
+  const newBook = await spindle.world_books.create({
+    name: newBookName,
+    description: "Memoria's shelf for this chat. Chapters and arcs live here.",
+    metadata: {
+      lumibooks_chat_id: forkChatId,
+      lumibooks_created_at: Date.now(),
+      lumibooks_forked_from: parentChatId
+    }
+  }, userId);
+  let cloned = 0;
+  try {
+    const idMap = await copyLmbEntries(newBook.id, parentEntries, userId, forkTransform);
+    cloned = idMap.size;
+    await rebindForkShelf(forkChatId, newBook.id, userId);
+  } catch (err) {
+    await spindle.world_books.delete(newBook.id, userId).catch(() => {});
+    throw err;
+  }
+  invalidateBookCache(userId, forkChatId);
+  try {
+    const profile = settings.profiles.find((p) => p.id === settings.activeProfileId);
+    const desiredHidden = profile ? profile.hideCoveredMessages : true;
+    await resyncVisibility(forkChatId, userId, desiredHidden);
+  } catch (err) {
+    warn(`fork adoption: visibility resync failed: ${describeError(err)}`);
+  }
+  info(`adopted fork ${forkChatId.slice(0, 8)} from ${parentChatId.slice(0, 8)} (${cloned} entries cloned)`);
+}
+async function rebindForkShelf(forkChatId, newBookId, userId) {
+  const chat = await spindle.chats.get(forkChatId, userId).catch(() => null);
+  if (!chat)
+    return;
+  const metadata = chat.metadata && typeof chat.metadata === "object" ? { ...chat.metadata } : {};
+  const inheritedBookId = typeof metadata["lumibooks_book_id"] === "string" ? metadata["lumibooks_book_id"] : null;
+  const existing = Array.isArray(metadata["chat_world_book_ids"]) ? metadata["chat_world_book_ids"].filter((x) => typeof x === "string") : [];
+  const nextBookIds = existing.filter((id) => id !== inheritedBookId && id !== newBookId);
+  nextBookIds.push(newBookId);
+  metadata["chat_world_book_ids"] = nextBookIds;
+  metadata["lumibooks_book_id"] = newBookId;
+  metadata[FORK_ADOPTED_FLAG] = true;
+  await spindle.chats.update(forkChatId, { metadata }, userId);
 }
 
 // src/backend/state.ts
@@ -4075,9 +3744,7 @@ async function buildState(userId, requestedChatId) {
       totalMessages: 0,
       coveredMessages: 0,
       uncoveredMessages: 0,
-      approxUncoveredTokens: 0,
-      lagSatisfied: false,
-      windowAvailable: false
+      approxUncoveredTokens: 0
     },
     busy: getBusy(userId),
     lastFailure: null,
@@ -4088,8 +3755,6 @@ async function buildState(userId, requestedChatId) {
     customPresets: settings.customPresets,
     regexScripts,
     pendingPreviews: [],
-    backlogChapters: 0,
-    backlogArcs: 0,
     rootOrigin: null,
     rootOriginName: null,
     rootEntryCount: 0,
@@ -4111,12 +3776,7 @@ async function buildState(userId, requestedChatId) {
   }
   const entries = await listLmbEntries(chat.id, userId).catch(() => []);
   const coverage = await buildCoverage(chat.id, userId, entries);
-  const stats = computeCoverageStats(messages, coverage, activeProfile);
-  const compressibleSize = countCompressibleEligible(messages, coverage, activeProfile);
-  const windowDenom = Math.max(1, activeProfile.windowValue);
-  const backlogChapters = Math.max(0, Math.floor(compressibleSize / windowDenom));
-  const activeChapterEntries = coverage.activeEntries.filter((e) => e.meta.tier === 1 && !e.meta.isRoot);
-  const backlogArcs = countArcBacklog(activeChapterEntries, activeProfile);
+  const stats = computeCoverageStats(messages, coverage);
   const supersededIds = new Set;
   for (const e of entries) {
     if (e.meta.tier !== 1 && !e.raw.disabled && Array.isArray(e.meta.sourceChapterEntryIds)) {
@@ -4195,40 +3855,11 @@ async function buildState(userId, requestedChatId) {
     lastFailure: getLastFailure(userId, chat.id),
     messages: messageStubs,
     pendingPreviews: getPendingPreviews(userId, chat.id),
-    backlogChapters,
-    backlogArcs,
     rootOrigin,
     rootOriginName,
     rootEntryCount: rootEntries.length,
     availableRoots: allRootCandidates.filter((c) => c.chatId !== chat.id)
   };
-}
-function countArcBacklog(activeChapters, profile) {
-  if (profile.arcTrigger === "manual")
-    return 0;
-  const chapters = activeChapters.slice().sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
-  if (profile.arcTrigger === "chapters") {
-    const compressible2 = Math.max(0, chapters.length - profile.arcLagChapters);
-    const denom = Math.max(1, profile.arcAfterChapters);
-    return Math.floor(compressible2 / denom);
-  }
-  let reservedTokens = 0;
-  let cutoff = chapters.length;
-  for (let i = chapters.length - 1;i >= 0 && reservedTokens < profile.arcLagTokens; i--) {
-    reservedTokens += chapters[i].meta.tokenCountOutput;
-    cutoff = i;
-  }
-  const compressible = chapters.slice(0, cutoff);
-  let arcs = 0;
-  let acc = 0;
-  for (const ch of compressible) {
-    acc += ch.meta.tokenCountOutput;
-    if (acc >= profile.arcAfterTokens) {
-      arcs++;
-      acc = 0;
-    }
-  }
-  return arcs;
 }
 
 // src/backend/projection.ts
@@ -4459,13 +4090,8 @@ function cleanTitle(text) {
 }
 
 // src/backend/index.ts
-async function notify(userId, tone, text, automation = false) {
+async function notify(userId, tone, text) {
   try {
-    if (automation && tone !== "error") {
-      const settings = await loadSettings(userId).catch(() => null);
-      if (settings && !settings.showAutomationToasts)
-        return;
-    }
     hostToast(userId, tone, text);
     send({ type: "toast", tone, text }, userId);
   } catch (err) {
@@ -4534,8 +4160,8 @@ registerPipelineCallbacks({
   onBusyChange(userId, entries) {
     send({ type: "busy", entries }, userId);
   },
-  onToast(userId, tone, text, automation) {
-    notify(userId, tone, text, automation === true);
+  onToast(userId, tone, text) {
+    notify(userId, tone, text);
   },
   onStateChange(userId, chatId) {
     pushState(userId, chatId);
@@ -4590,13 +4216,7 @@ spindle.on("GENERATION_ENDED", async (payload, hostUserId) => {
   const settings = await loadSettings(userId).catch(() => null);
   if (!settings?.enabled)
     return;
-  const profile = settings.profiles.find((x) => x.id === settings.activeProfileId);
-  if (!profile)
-    return;
   await reassertChatBinding(p.chatId, userId).catch(() => {});
-  await maybeRunPipeline(p.chatId, profile, settings, userId).catch((err) => {
-    warn(`pipeline failed: ${describeError(err)}`);
-  });
 });
 spindle.on("CHAT_SWITCHED", async (payload, hostUserId) => {
   const p = payload;
@@ -4705,8 +4325,8 @@ async function retryLastFailure(chatId, userId, profile, settings) {
     await createArcFromChapters(chatId, ids, profile, settings, userId);
     return;
   }
-  await createChapterAuto(chatId, profile, settings, userId);
-  await maybeRunArcCheck(chatId, profile, settings, userId);
+  clearLastFailure(userId, chatId);
+  await notify(userId, "warn", "Select the chapter messages again to retry that range");
 }
 spindle.onFrontendMessage(async (raw, userId) => {
   setLastFrontendUserId(userId);
@@ -4815,27 +4435,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
         await pushState(userId, msg.chatId);
         break;
       }
-      case "create_chapter": {
-        const cur = await loadSettings(userId);
-        const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
-        if (!profile)
-          break;
-        if (getBusy(userId).some((b) => b.kind === "chapter" && b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "Memoria is already filing a chapter");
-          break;
-        }
-        const chapterMessages = await spindle.chat.getMessages(msg.chatId);
-        const chapterCoverage = await buildCoverage(msg.chatId, userId);
-        const chapterStats = computeCoverageStats(chapterMessages, chapterCoverage, profile);
-        if (!chapterStats.lagSatisfied || !chapterStats.windowAvailable) {
-          await notify(userId, "info", "Your story needs more messages for me to generate a new entry~");
-          break;
-        }
-        await createChapterAuto(msg.chatId, profile, cur, userId);
-        await maybeRunArcCheck(msg.chatId, profile, cur, userId);
-        await pushState(userId, msg.chatId);
-        break;
-      }
       case "create_chapter_range": {
         const cur = await loadSettings(userId);
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
@@ -4860,35 +4459,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
         for (const run of runs) {
           await createChapterFromRange(msg.chatId, run, profile, cur, userId);
         }
-        await maybeRunArcCheck(msg.chatId, profile, cur, userId);
-        await pushState(userId, msg.chatId);
-        break;
-      }
-      case "create_all_chapters": {
-        const cur = await loadSettings(userId);
-        const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
-        if (!profile)
-          break;
-        if (getBusy(userId).some((b) => b.kind === "chapter" && b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "Memoria is already filing a chapter");
-          break;
-        }
-        await drainChapterBacklog(msg.chatId, profile, cur, userId);
-        await maybeRunArcCheck(msg.chatId, profile, cur, userId);
-        await pushState(userId, msg.chatId);
-        break;
-      }
-      case "create_arc": {
-        const cur = await loadSettings(userId);
-        const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
-        if (!profile)
-          break;
-        if (getBusy(userId).some((b) => b.kind === "arc" && b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "Memoria is already binding an arc");
-          break;
-        }
-        const ids = await collectActiveChapterIds(msg.chatId, userId);
-        await createArcFromChapters(msg.chatId, ids, profile, cur, userId);
         await pushState(userId, msg.chatId);
         break;
       }
@@ -4902,19 +4472,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
           break;
         }
         await createArcFromChapters(msg.chatId, msg.chapterEntryIds, profile, cur, userId);
-        await pushState(userId, msg.chatId);
-        break;
-      }
-      case "create_all_arcs": {
-        const cur = await loadSettings(userId);
-        const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
-        if (!profile)
-          break;
-        if (getBusy(userId).some((b) => b.kind === "arc" && b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "Memoria is already binding an arc");
-          break;
-        }
-        await drainArcBacklog(msg.chatId, profile, cur, userId);
         await pushState(userId, msg.chatId);
         break;
       }
@@ -5112,21 +4669,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
         await pushState(userId, msg.chatId);
         break;
       }
-      case "dry_run_chapter": {
-        const cur = await loadSettings(userId);
-        const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
-        if (!profile)
-          break;
-        try {
-          const result = await dryRunChapter(msg.chatId, profile, cur, userId);
-          send({ type: "dry_run_result", kind: "chapter", messages: result.messages, diagnostics: result.diagnostics }, userId);
-        } catch (err) {
-          const text = describeError(err);
-          warn(`dry_run_chapter failed: ${text}`);
-          await notify(userId, "error", `Dry run failed: ${text}`);
-        }
-        break;
-      }
       case "dry_run_arc": {
         const cur = await loadSettings(userId);
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
@@ -5288,13 +4830,11 @@ spindle.onFrontendMessage(async (raw, userId) => {
           await pushState(userId, msg.chatId);
           break;
         }
-        await notify(userId, "success", `Memoria rebuilt onto ${result.count} inherited memor${result.count === 1 ? "y" : "ies"} and is re-summarizing this chat`);
+        await notify(userId, "success", `Memoria rebuilt onto ${result.count} inherited memor${result.count === 1 ? "y" : "ies"}`);
         await pushState(userId, msg.chatId);
         const cur = await loadSettings(userId);
         const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
         if (profile) {
-          await drainChapterBacklog(msg.chatId, profile, cur, userId).catch((err) => warn(`rebuild re-summarize failed: ${describeError(err)}`));
-          await maybeRunArcCheck(msg.chatId, profile, cur, userId).catch(() => {});
           await resyncVisibility(msg.chatId, userId, profile.hideCoveredMessages).catch((err) => warn(`rebuild visibility resync failed: ${describeError(err)}`));
           await pushState(userId, msg.chatId);
         }

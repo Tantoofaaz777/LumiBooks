@@ -1,6 +1,5 @@
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
-import type { LMBProfile } from "../shared";
 import type { CoverageStats } from "../types";
 import { approximateTokensFromChars } from "../shared";
 import { listLmbEntries, type LMBEntry } from "./world-book";
@@ -98,33 +97,9 @@ export function isExcluded(m: ChatMessageDTO): boolean {
   return !!(md && md["lmb_excluded"] === true);
 }
 
-export function isEligibleForCount(m: ChatMessageDTO, _profile: LMBProfile): boolean {
-  void _profile;
-  if (isExcluded(m)) return false;
-  const role = (m as { role?: string }).role;
-  if (role === "system" || (m as { is_system?: boolean }).is_system) return false;
-  return true;
-}
-
-function countEligible(messages: ChatMessageDTO[], profile: LMBProfile): number {
-  let n = 0;
-  for (const m of messages) if (isEligibleForCount(m, profile)) n++;
-  return n;
-}
-
-function sumEligibleTokens(messages: ChatMessageDTO[], profile: LMBProfile): number {
-  let n = 0;
-  for (const m of messages) {
-    if (!isEligibleForCount(m, profile)) continue;
-    n += approximateTokensFromChars((m.content || "").length);
-  }
-  return n;
-}
-
 export function computeCoverageStats(
   messages: ChatMessageDTO[],
   coverage: CoverageMap,
-  profile: LMBProfile,
 ): CoverageStats {
   const totalMessages = messages.length;
   let coveredMessages = 0;
@@ -137,131 +112,13 @@ export function computeCoverageStats(
     }
   }
   const uncoveredMessages = totalMessages - coveredMessages;
-  const uncoveredTail = pickUncoveredTail(messages, coverage);
-
-  const tailCounted =
-    profile.lagUnit === "tokens"
-      ? sumEligibleTokens(uncoveredTail, profile)
-      : countEligible(uncoveredTail, profile);
-  const lagSatisfied = tailCounted >= profile.lagValue;
-
-  const compressible = trimLagFromTail(uncoveredTail, profile);
-  const headRoom =
-    profile.windowUnit === "tokens"
-      ? sumEligibleTokens(compressible, profile)
-      : countEligible(compressible, profile);
-  const windowAvailable = headRoom >= profile.windowValue;
 
   return {
     totalMessages,
     coveredMessages,
     uncoveredMessages,
     approxUncoveredTokens,
-    lagSatisfied,
-    windowAvailable,
   };
-}
-
-export function countCompressibleEligible(
-  messages: ChatMessageDTO[],
-  coverage: CoverageMap,
-  profile: LMBProfile,
-): number {
-  const tail = pickUncoveredTail(messages, coverage);
-  const compressible = trimLagFromTail(tail, profile);
-  return profile.windowUnit === "tokens"
-    ? sumEligibleTokens(compressible, profile)
-    : countEligible(compressible, profile);
-}
-
-function trimLagFromTail(uncoveredTail: ChatMessageDTO[], profile: LMBProfile): ChatMessageDTO[] {
-  if (uncoveredTail.length === 0) return [];
-  if (profile.lagValue <= 0) return uncoveredTail.slice();
-  if (profile.lagUnit === "messages") {
-    let counted = 0;
-    let cutoffIdx = uncoveredTail.length;
-    for (let i = uncoveredTail.length - 1; i >= 0; i--) {
-      if (isEligibleForCount(uncoveredTail[i]!, profile)) {
-        counted++;
-        if (counted >= profile.lagValue) {
-          cutoffIdx = i;
-          break;
-        }
-      }
-    }
-    if (counted < profile.lagValue) return [];
-    return uncoveredTail.slice(0, cutoffIdx);
-  }
-  let lagged = 0;
-  let cutoffIdx = 0;
-  for (let i = uncoveredTail.length - 1; i >= 0; i--) {
-    if (isEligibleForCount(uncoveredTail[i]!, profile)) {
-      lagged += approximateTokensFromChars((uncoveredTail[i]!.content || "").length);
-    }
-    cutoffIdx = i;
-    if (lagged >= profile.lagValue) break;
-  }
-  if (lagged < profile.lagValue) return [];
-  return uncoveredTail.slice(0, cutoffIdx);
-}
-
-export function pickUncoveredTail(messages: ChatMessageDTO[], coverage: CoverageMap): ChatMessageDTO[] {
-  const out: ChatMessageDTO[] = [];
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i]!;
-    if (coverage.coveredBy.has(m.id)) break;
-    out.push(m);
-  }
-  out.reverse();
-  return out;
-}
-
-export function sumApproxTokens(messages: ChatMessageDTO[]): number {
-  let total = 0;
-  for (const m of messages) total += approximateTokensFromChars((m.content || "").length);
-  return total;
-}
-
-export function selectNextChapterWindow(
-  uncoveredTail: ChatMessageDTO[],
-  profile: LMBProfile,
-): ChatMessageDTO[] {
-  const compressible = trimLagFromTail(uncoveredTail, profile);
-  if (compressible.length === 0) return [];
-  if (profile.windowUnit === "messages") {
-    const out: ChatMessageDTO[] = [];
-    let counted = 0;
-    for (const m of compressible) {
-      if (isExcluded(m)) {
-        if (out.length > 0) break;
-        continue;
-      }
-      out.push(m);
-      if (isEligibleForCount(m, profile)) {
-        counted++;
-        if (counted >= profile.windowValue) break;
-      }
-    }
-    return out;
-  }
-  return takeUntilTokens(compressible, profile.windowValue, profile);
-}
-
-function takeUntilTokens(messages: ChatMessageDTO[], maxTokens: number, profile: LMBProfile): ChatMessageDTO[] {
-  const out: ChatMessageDTO[] = [];
-  let acc = 0;
-  for (const m of messages) {
-    if (isExcluded(m)) {
-      if (out.length > 0) break;
-      continue;
-    }
-    out.push(m);
-    if (isEligibleForCount(m, profile)) {
-      acc += approximateTokensFromChars((m.content || "").length);
-    }
-    if (acc >= maxTokens) break;
-  }
-  return out;
 }
 
 export async function syncHiddenForCoveredMessages(
