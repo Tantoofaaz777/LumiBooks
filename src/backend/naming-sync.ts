@@ -30,6 +30,7 @@ export async function syncNamingForChat(chatId: string, userId: string): Promise
       tier,
       title: entry.meta.title ?? "",
       sceneNumber: entry.meta.sceneNumber ?? 1,
+      storyOrder: entry.meta.storyOrder,
       firstMsgIdx: entry.meta.firstMsgIdx,
       lastMsgIdx: entry.meta.lastMsgIdx,
       sourceCount: entry.meta.sourceChapterEntryIds?.length,

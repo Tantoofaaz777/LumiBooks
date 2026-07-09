@@ -75,14 +75,17 @@ var DEFAULT_SETTINGS = {
   debugLog: false,
   forceConstantEntries: true,
   showAutomationToasts: true,
-  memoryInjectionMode: "chat_history",
+  memoryInjectionMode: "outlet",
   memoryOutletName: "lumibooks",
   bookNameTemplate: `${WORLD_BOOK_NAME_PREFIX} - {{chat}}`,
-  chapterNameTemplate: "#{{sceneNumber}} - {{title}} (msgs {{scene}})",
-  arcNameTemplate: "{{rootPrefix}}Arc #{{sceneNumber}} - {{title}} (msgs {{scene}})",
-  volumeNameTemplate: "{{rootPrefix}}Volume #{{sceneNumber}} - {{title}} (msgs {{scene}})",
+  chapterNameTemplate: "#{{storyOrder}} - {{title}} (msgs {{scene}})",
+  arcNameTemplate: "{{rootPrefix}}Arc {{sceneNumberPadded}} - {{title}}",
+  volumeNameTemplate: "{{rootPrefix}}Volume {{sceneNumberPadded}} - {{title}}",
   includeContentHeaders: false
 };
+var LEGACY_CHAPTER_NAME_TEMPLATE = "#{{sceneNumber}} - {{title}} (msgs {{scene}})";
+var LEGACY_ARC_NAME_TEMPLATE = "{{rootPrefix}}Arc #{{sceneNumber}} - {{title}} (msgs {{scene}})";
+var LEGACY_VOLUME_NAME_TEMPLATE = "{{rootPrefix}}Volume #{{sceneNumber}} - {{title}} (msgs {{scene}})";
 function diskVersionFor(raw) {
   const v = raw && typeof raw === "object" ? raw : {};
   return typeof v.version === "number" ? v.version : 1;
@@ -105,19 +108,21 @@ function normalizeSettings(raw) {
     debugLog: typeof v.debugLog === "boolean" ? v.debugLog : fallback.debugLog,
     forceConstantEntries: typeof v.forceConstantEntries === "boolean" ? v.forceConstantEntries : fallback.forceConstantEntries,
     showAutomationToasts: typeof v.showAutomationToasts === "boolean" ? v.showAutomationToasts : fallback.showAutomationToasts,
-    memoryInjectionMode: v.memoryInjectionMode === "outlet" ? "outlet" : "chat_history",
+    memoryInjectionMode: "outlet",
     memoryOutletName: normalizeOutletName(v.memoryOutletName, fallback.memoryOutletName),
     bookNameTemplate: normalizeTemplate(v.bookNameTemplate, fallback.bookNameTemplate),
-    chapterNameTemplate: normalizeTemplate(v.chapterNameTemplate, fallback.chapterNameTemplate),
-    arcNameTemplate: normalizeTemplate(v.arcNameTemplate, fallback.arcNameTemplate),
-    volumeNameTemplate: normalizeTemplate(v.volumeNameTemplate, fallback.volumeNameTemplate),
+    chapterNameTemplate: normalizeTemplate(v.chapterNameTemplate, fallback.chapterNameTemplate, LEGACY_CHAPTER_NAME_TEMPLATE),
+    arcNameTemplate: normalizeTemplate(v.arcNameTemplate, fallback.arcNameTemplate, LEGACY_ARC_NAME_TEMPLATE),
+    volumeNameTemplate: normalizeTemplate(v.volumeNameTemplate, fallback.volumeNameTemplate, LEGACY_VOLUME_NAME_TEMPLATE),
     includeContentHeaders: typeof v.includeContentHeaders === "boolean" ? v.includeContentHeaders : fallback.includeContentHeaders
   };
 }
-function normalizeTemplate(raw, fallback) {
+function normalizeTemplate(raw, fallback, legacyDefault) {
   if (typeof raw !== "string")
     return fallback;
   const trimmed = raw.trim();
+  if (legacyDefault && trimmed === legacyDefault)
+    return fallback;
   return trimmed || fallback;
 }
 function normalizeProfile(raw) {
@@ -223,6 +228,7 @@ function normalizeEntryMeta(raw) {
     shortComment: typeof v.shortComment === "string" ? v.shortComment : undefined,
     presetKey: typeof v.presetKey === "string" ? v.presetKey : undefined,
     sceneNumber: typeof v.sceneNumber === "number" && Number.isFinite(v.sceneNumber) && v.sceneNumber > 0 ? Math.floor(v.sceneNumber) : undefined,
+    storyOrder: typeof v.storyOrder === "number" && Number.isFinite(v.storyOrder) && v.storyOrder > 0 ? Math.floor(v.storyOrder) : undefined,
     rawOutput: typeof v.rawOutput === "string" ? v.rawOutput : undefined,
     isRoot: v.isRoot === true ? true : undefined,
     rootOrigin: typeof v.rootOrigin === "string" && v.rootOrigin.trim() ? v.rootOrigin : undefined
@@ -476,6 +482,9 @@ function applyLocalMacros(template, ctx) {
   const values = {
     scene: range || String(ctx.sceneNumber),
     scenenumber: String(ctx.sceneNumber),
+    scenenumberpadded: pad3(ctx.sceneNumber),
+    storyorder: typeof ctx.storyOrder === "number" ? String(ctx.storyOrder) : String(ctx.sceneNumber),
+    storyorderpadded: pad3(typeof ctx.storyOrder === "number" ? ctx.storyOrder : ctx.sceneNumber),
     title: ctx.title.trim() || fallbackTitle(ctx),
     tier: ctx.tier,
     chat: chatLabel,
@@ -506,6 +515,9 @@ function fallbackTitle(ctx) {
   if (ctx.tier === "arc")
     return "Arc";
   return "Chapter";
+}
+function pad3(n) {
+  return String(Math.max(0, Math.floor(n))).padStart(3, "0");
 }
 
 // src/backend/world-book.ts
@@ -734,8 +746,8 @@ async function listLmbEntries(chatId, userId) {
 }
 async function createChapterEntry(bookId, meta, content, comment, userId, keys = [], constant = true) {
   const settings = await loadSettings(userId);
-  const orderValue = typeof meta.firstMsgIdx === "number" ? meta.firstMsgIdx + 1 : meta.isRoot ? 0 : meta.sceneNumber ?? 100;
-  const placement = settings.enabled && settings.memoryInjectionMode === "outlet" ? {
+  const orderValue = typeof meta.storyOrder === "number" ? meta.storyOrder : typeof meta.sceneNumber === "number" ? meta.sceneNumber : 100;
+  const placement = settings.enabled ? {
     position: 8,
     outlet_name: normalizeOutletName(settings.memoryOutletName),
     order_value: orderValue
@@ -1096,12 +1108,13 @@ function takeUntilTokens(messages, maxTokens, profile) {
   }
   return out;
 }
-async function syncHiddenForCoveredMessages(chatId, messages, coverage, userId, desiredHidden) {
+async function syncHiddenForCoveredMessages(chatId, messages, coverage, userId, desiredHidden, hideThroughIdx) {
   const toFlip = [];
   for (const m of messages) {
     if (isExcluded(m))
       continue;
-    const isCovered = coverage.coveredBy.has(m.id);
+    const idx = typeof m.index_in_chat === "number" ? m.index_in_chat : messages.indexOf(m);
+    const isCovered = typeof hideThroughIdx === "number" ? idx <= hideThroughIdx : coverage.coveredBy.has(m.id);
     if (!isCovered)
       continue;
     const currentlyHidden = !!(m.extra && m.extra.hidden);
@@ -1178,133 +1191,80 @@ async function resyncVisibility(chatId, userId, desiredHiddenForCovered) {
   return { unhidden: unhiddenAfter, hidden: desiredHiddenForCovered ? hiddenBefore : 0 };
 }
 
+// src/backend/story-order.ts
+function storyOrderOf(entry) {
+  return storyOrderFromMeta(entry.meta, entry.raw.order_value);
+}
+function storyOrderFromMeta(meta, fallback = 1e6) {
+  if (typeof meta.storyOrder === "number")
+    return meta.storyOrder;
+  if (typeof meta.sceneNumber === "number")
+    return meta.sceneNumber;
+  if (typeof meta.firstMsgIdx === "number")
+    return meta.firstMsgIdx + 1;
+  return fallback;
+}
+function nextStoryOrder(entries) {
+  let max = 0;
+  for (const entry of entries) {
+    const n = storyOrderFromMeta(entry.meta, entry.raw.order_value);
+    if (Number.isFinite(n) && n > max && n < 1e6)
+      max = n;
+  }
+  return max + 1;
+}
+function inheritedStoryOrder(sources, fallbackEntries = []) {
+  const values = sources.map(storyOrderOf).filter((n) => Number.isFinite(n) && n > 0);
+  if (values.length)
+    return Math.min(...values);
+  return nextStoryOrder(fallbackEntries);
+}
+async function syncStoryOrderForChat(chatId, userId) {
+  const entries = await listLmbEntries(chatId, userId).catch(() => []);
+  if (entries.length === 0)
+    return;
+  let next = nextStoryOrder(entries.filter((entry) => typeof entry.meta.storyOrder === "number"));
+  const metaById = new Map(entries.map((entry) => [entry.raw.id, entry.meta]));
+  const sorted = entries.slice().sort((a, b) => {
+    const ao = storyOrderFromMeta(a.meta, a.raw.order_value);
+    const bo = storyOrderFromMeta(b.meta, b.raw.order_value);
+    if (ao !== bo)
+      return ao - bo;
+    if (a.meta.tier !== b.meta.tier)
+      return a.meta.tier - b.meta.tier;
+    return (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0);
+  });
+  let touched = false;
+  for (const entry of sorted) {
+    const hadStoryOrder = typeof entry.meta.storyOrder === "number";
+    let storyOrder = entry.meta.storyOrder;
+    if (typeof storyOrder !== "number") {
+      const sourceOrders = (entry.meta.sourceChapterEntryIds ?? []).map((id) => metaById.get(id)?.storyOrder).filter((n) => typeof n === "number");
+      storyOrder = sourceOrders.length ? Math.min(...sourceOrders) : next++;
+      entry.meta.storyOrder = storyOrder;
+      metaById.set(entry.raw.id, entry.meta);
+    }
+    if (hadStoryOrder && entry.raw.order_value === storyOrder)
+      continue;
+    const ext = entry.raw.extensions || {};
+    try {
+      await spindle.world_books.entries.update(entry.raw.id, {
+        order_value: storyOrder,
+        extensions: { ...ext, [EXTENSION_KEY]: { ...entry.meta, storyOrder } }
+      }, userId);
+      touched = true;
+    } catch (err) {
+      warn(`storyOrder sync failed for ${entry.raw.id}: ${describeError(err)}`);
+    }
+  }
+  if (touched)
+    invalidateBookCache(userId, chatId);
+}
+
 // src/backend/injection.ts
 var injectionAnomalyCb = null;
 function registerInjectionAnomalyCallback(cb) {
   injectionAnomalyCb = cb;
-}
-function isAssembledHistory(lm) {
-  return lm["__isChatHistory"] === true;
-}
-function sourceMessageId(lm) {
-  const v = lm["sourceMessageId"];
-  return typeof v === "string" && v ? v : undefined;
-}
-function orderEntries(coverage, msgIdToIdx) {
-  const ordered = [];
-  for (const entry of coverage.activeEntries) {
-    let firstIdx = Number.POSITIVE_INFINITY;
-    let lastIdx = -1;
-    for (const msgId of entry.meta.msgIds) {
-      const idx = msgIdToIdx.get(msgId);
-      if (typeof idx !== "number")
-        continue;
-      if (idx < firstIdx)
-        firstIdx = idx;
-      if (idx > lastIdx)
-        lastIdx = idx;
-    }
-    const haveIdx = firstIdx !== Number.POSITIVE_INFINITY;
-    const resolvedFirst = haveIdx ? firstIdx : typeof entry.meta.firstMsgIdx === "number" ? entry.meta.firstMsgIdx : 0;
-    const resolvedLast = haveIdx ? lastIdx : typeof entry.meta.lastMsgIdx === "number" ? entry.meta.lastMsgIdx : resolvedFirst;
-    const tierName = entry.meta.tier === 3 ? "Volume" : entry.meta.tier === 2 ? "Arc" : "Chapter";
-    const label = entry.raw.comment || (haveIdx ? `${tierName} msgs ${firstIdx + 1}-${lastIdx + 1}` : tierName);
-    ordered.push({ entry, label, firstIdx: resolvedFirst, lastIdx: resolvedLast, emitted: false });
-  }
-  ordered.sort((a, b) => a.firstIdx - b.firstIdx);
-  return ordered;
-}
-async function buildInjection(chatId, llmMessages, userId) {
-  const [activated, allEntries, attachedBookIds] = await Promise.all([
-    spindle.world_books.getActivated(chatId, userId).catch(() => null),
-    listLmbEntries(chatId, userId),
-    getChatAttachedBookIds(chatId, userId).catch(() => null)
-  ]);
-  if (allEntries.length === 0)
-    return null;
-  const ourBookId = allEntries[0].raw.world_book_id;
-  const activatedIds = activated ? new Set(activated.map((a) => a.id)) : null;
-  const anyOursActivated = !!activatedIds && allEntries.some((e) => activatedIds.has(e.raw.id));
-  const hostScanningOurBook = anyOursActivated || !!attachedBookIds && attachedBookIds.includes(ourBookId);
-  const entriesForCoverage = activatedIds && hostScanningOurBook ? allEntries.filter((e) => activatedIds.has(e.raw.id)) : allEntries.filter((e) => !e.raw.disabled);
-  const coverage = await buildCoverage(chatId, userId, entriesForCoverage);
-  if (coverage.activeEntries.length === 0)
-    return null;
-  const chatMessages = await spindle.chat.getMessages(chatId).catch(() => null);
-  if (!chatMessages || chatMessages.length === 0)
-    return null;
-  const msgIdToIdx = new Map;
-  for (let i = 0;i < chatMessages.length; i++)
-    msgIdToIdx.set(chatMessages[i].id, i);
-  const ordered = orderEntries(coverage, msgIdToIdx);
-  if (ordered.length === 0)
-    return null;
-  const hasVisibleMessage = chatMessages.some((m) => !(m.extra && m.extra.hidden));
-  const historyMsgs = llmMessages.filter(isAssembledHistory);
-  if (historyMsgs.length === 0) {
-    if (hasVisibleMessage) {
-      error(`injection: no "__isChatHistory" messages on ${llmMessages.length} assembled message(s) despite ` + `visible chat messages. The host most likely clipped all history because max context is too small, skipping injection.`);
-      injectionAnomalyCb?.(userId, "Memoria can't see any chat history, your max context is likely too small");
-    }
-    return null;
-  }
-  const plan = [];
-  for (const m of historyMsgs) {
-    const id = sourceMessageId(m);
-    if (id === undefined) {
-      error(`injection: a "__isChatHistory" message is missing sourceMessageId. Host identity contract ` + `looks inconsistent, skipping injection.`);
-      return null;
-    }
-    const idx = msgIdToIdx.get(id);
-    if (idx === undefined) {
-      error(`injection: sourceMessageId "${id}" is not in the chat, skipping injection.`);
-      return null;
-    }
-    const md = chatMessages[idx]?.metadata;
-    const excluded = !!(md && md["lmb_excluded"] === true);
-    plan.push({ idx, covered: excluded ? false : coverage.coveredBy.has(id) });
-  }
-  const out = [];
-  const injectedLabels = new Map;
-  const flushAt = (index, beforePos) => {
-    const block = [];
-    for (const o of ordered) {
-      if (o.emitted || o.lastIdx >= beforePos)
-        continue;
-      o.emitted = true;
-      const msg = { role: "assistant", content: formatEntryForInjection(o.entry) };
-      injectedLabels.set(msg, o.label);
-      block.push(msg);
-    }
-    if (block.length)
-      out.splice(index, 0, ...block);
-  };
-  let hp = 0;
-  let histEnd = -1;
-  for (const lm of llmMessages) {
-    if (!isAssembledHistory(lm)) {
-      out.push(lm);
-      continue;
-    }
-    const { idx, covered } = plan[hp++];
-    flushAt(out.length, idx);
-    if (!covered)
-      out.push(lm);
-    histEnd = out.length;
-  }
-  flushAt(histEnd < 0 ? out.length : histEnd, Number.POSITIVE_INFINITY);
-  if (injectedLabels.size === 0)
-    return null;
-  const breakdown = [];
-  for (let i = 0;i < out.length; i++) {
-    const label = injectedLabels.get(out[i]);
-    if (label !== undefined)
-      breakdown.push({ messageIndex: i, name: label });
-  }
-  return { messages: out, breakdown };
-}
-function formatEntryForInjection(entry) {
-  return entry.raw.content;
 }
 
 // src/backend/regex.ts
@@ -3143,7 +3103,7 @@ async function runChapter(chatId, profile, settings, userId, allMessages, window
   nyaaToast(userId, "fire", automation);
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
-  const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && typeof e.meta.firstMsgIdx === "number").sort((a, b) => a.meta.firstMsgIdx - b.meta.firstMsgIdx);
+  const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && typeof e.meta.firstMsgIdx === "number").sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
   const previousMemories = profile.previousMemoriesCount > 0 ? chapters.slice(-profile.previousMemoriesCount) : [];
   const provisionalSceneNumber = await nextSceneNumber(chatId, 1, userId);
   const opener = buildChapterHeader(provisionalSceneNumber, window.length);
@@ -3219,14 +3179,18 @@ async function commitChapter(chatId, profile, userId, window, result, firstIdx, 
     const book = await ensureBookForChat(chatId, userId);
     const replacedEntry = replacesEntryId ? freshEntries.find((e) => e.raw.id === replacesEntryId) : undefined;
     const sceneNumber = typeof replacedEntry?.meta.sceneNumber === "number" ? replacedEntry.meta.sceneNumber : await nextSceneNumber(chatId, 1, userId);
+    const storyOrder = typeof replacedEntry?.meta.storyOrder === "number" ? replacedEntry.meta.storyOrder : nextStoryOrder(entriesForCoverage);
     const title = fromPreview ? result.title?.trim() || `Chapter ${firstIdx + 1}-${lastIdx + 1}` : deriveTitle(result);
     const msgIds = window.map((m) => m.id);
+    const windowIdxs = window.map(chatMessageIndex).filter((n) => typeof n === "number");
+    const firstMsgIdx = windowIdxs.length ? Math.min(...windowIdxs) : firstIdx;
+    const lastMsgIdx = windowIdxs.length ? Math.max(...windowIdxs) : lastIdx;
     const meta = {
       tier: 1,
       chatId,
       msgIds,
-      firstMsgIdx: firstIdx >= 0 ? firstIdx : undefined,
-      lastMsgIdx: lastIdx >= 0 ? lastIdx : undefined,
+      firstMsgIdx: firstMsgIdx >= 0 ? firstMsgIdx : undefined,
+      lastMsgIdx: lastMsgIdx >= 0 ? lastMsgIdx : undefined,
       tokenCountInput: window.reduce((acc, m) => acc + approximateTokensFromChars((m.content || "").length), 0),
       tokenCountOutput: result.usageCompletionTokens || approximateTokensFromChars(result.content.length),
       model: result.model,
@@ -3236,6 +3200,7 @@ async function commitChapter(chatId, profile, userId, window, result, firstIdx, 
       shortComment: result.shortComment,
       presetKey: result.presetKey,
       sceneNumber,
+      storyOrder,
       rawOutput: result.rawOutput
     };
     const settings = await loadSettings(userId);
@@ -3245,6 +3210,7 @@ async function commitChapter(chatId, profile, userId, window, result, firstIdx, 
       tier: "chapter",
       title: meta.title ?? "",
       sceneNumber,
+      storyOrder,
       firstMsgIdx: meta.firstMsgIdx,
       lastMsgIdx: meta.lastMsgIdx,
       turnCount: msgIds.length
@@ -3261,18 +3227,16 @@ async function commitChapter(chatId, profile, userId, window, result, firstIdx, 
         warn(`regen: failed to delete replaced chapter ${replacesEntryId}: ${describeError(err)}`);
       }
     }
-    if (profile.hideCoveredMessages) {
-      try {
-        await syncHiddenForCoveredMessages(chatId, allMessages, {
-          coveredBy: new Map(window.map((m) => [m.id, entry.id])),
-          activeEntries: [],
-          volumes: [],
-          arcs: [],
-          chapters: []
-        }, userId, true);
-      } catch (err) {
-        warn(`setMessagesHidden failed: ${describeError(err)}`);
-      }
+    try {
+      await syncHiddenForCoveredMessages(chatId, allMessages, {
+        coveredBy: new Map(window.map((m) => [m.id, entry.id])),
+        activeEntries: [],
+        volumes: [],
+        arcs: [],
+        chapters: []
+      }, userId, true, meta.lastMsgIdx);
+    } catch (err) {
+      warn(`setMessagesHidden failed: ${describeError(err)}`);
     }
     publishChapterCreated(userId, {
       chatId,
@@ -3293,7 +3257,7 @@ async function createArcAuto(chatId, profile, settings, userId, automation = fal
   try {
     const entries = await listLmbEntries(chatId, userId);
     const coverage = await buildCoverage(chatId, userId, entries);
-    const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && !e.meta.isRoot).sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
+    const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && !e.meta.isRoot).sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
     if (chapters.length === 0)
       return null;
     let selected = [];
@@ -3341,7 +3305,7 @@ async function createArcFromChapters(chatId, chapterEntryIds, profile, settings,
     const entriesForSelection = opts.replacesEntryId ? entries.filter((e) => e.raw.id !== opts.replacesEntryId) : entries;
     const coverage = await buildCoverage(chatId, userId, entriesForSelection);
     const wanted = new Set(chapterEntryIds);
-    const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && wanted.has(e.raw.id)).sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
+    const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && wanted.has(e.raw.id)).sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
     if (chapters.length === 0)
       return null;
     return await runArc(chatId, profile, settings, userId, chapters, { replacesEntryId: opts.replacesEntryId });
@@ -3426,6 +3390,7 @@ async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, re
     const book = await ensureBookForChat(chatId, userId);
     const replacedArc = replacesEntryId ? freshEntries.find((e) => e.raw.id === replacesEntryId) : undefined;
     const sceneNumber = typeof replacedArc?.meta.sceneNumber === "number" ? replacedArc.meta.sceneNumber : await nextSceneNumber(chatId, 2, userId);
+    const storyOrder = typeof replacedArc?.meta.storyOrder === "number" ? replacedArc.meta.storyOrder : inheritedStoryOrder(selected, entriesForCoverage);
     const msgIds = selected.flatMap((c) => c.meta.msgIds);
     const sourceChapterEntryIds = selected.map((c) => c.raw.id);
     const isRootArc = selected.length > 0 && selected.every((c) => c.meta.isRoot);
@@ -3460,6 +3425,7 @@ async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, re
       shortComment: result.shortComment,
       presetKey: result.presetKey,
       sceneNumber,
+      storyOrder,
       rawOutput: result.rawOutput,
       ...isRootArc ? { isRoot: true, rootOrigin } : {}
     };
@@ -3470,6 +3436,7 @@ async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, re
       tier: "arc",
       title: meta.title ?? "",
       sceneNumber,
+      storyOrder,
       firstMsgIdx: meta.firstMsgIdx,
       lastMsgIdx: meta.lastMsgIdx,
       sourceCount: sourceChapterEntryIds.length,
@@ -3522,7 +3489,7 @@ async function createVolumeFromArcs(chatId, arcEntryIds, profile, settings, user
     const entriesForSelection = opts.replacesEntryId ? entries.filter((e) => e.raw.id !== opts.replacesEntryId) : entries;
     const coverage = await buildCoverage(chatId, userId, entriesForSelection);
     const wanted = new Set(arcEntryIds);
-    const arcs = coverage.activeEntries.filter((e) => e.meta.tier === 2 && wanted.has(e.raw.id)).sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
+    const arcs = coverage.activeEntries.filter((e) => e.meta.tier === 2 && wanted.has(e.raw.id)).sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
     if (arcs.length === 0)
       return null;
     return await runVolume(chatId, profile, settings, userId, arcs, opts.replacesEntryId);
@@ -3605,6 +3572,7 @@ async function commitVolume(chatId, userId, selected, result, firstIdx, lastIdx,
     const book = await ensureBookForChat(chatId, userId);
     const replacedVolume = replacesEntryId ? freshEntries.find((e) => e.raw.id === replacesEntryId) : undefined;
     const sceneNumber = typeof replacedVolume?.meta.sceneNumber === "number" ? replacedVolume.meta.sceneNumber : await nextSceneNumber(chatId, 3, userId);
+    const storyOrder = typeof replacedVolume?.meta.storyOrder === "number" ? replacedVolume.meta.storyOrder : inheritedStoryOrder(selected, entriesForCoverage);
     const msgIds = selected.flatMap((a) => a.meta.msgIds);
     const sourceArcEntryIds = selected.map((a) => a.raw.id);
     const isRootVolume = selected.length > 0 && selected.every((a) => a.meta.isRoot);
@@ -3639,6 +3607,7 @@ async function commitVolume(chatId, userId, selected, result, firstIdx, lastIdx,
       shortComment: result.shortComment,
       presetKey: result.presetKey,
       sceneNumber,
+      storyOrder,
       rawOutput: result.rawOutput,
       ...isRootVolume ? { isRoot: true, rootOrigin } : {}
     };
@@ -3649,6 +3618,7 @@ async function commitVolume(chatId, userId, selected, result, firstIdx, lastIdx,
       tier: "volume",
       title: meta.title ?? "",
       sceneNumber,
+      storyOrder,
       firstMsgIdx: meta.firstMsgIdx,
       lastMsgIdx: meta.lastMsgIdx,
       sourceCount: sourceArcEntryIds.length,
@@ -3813,7 +3783,7 @@ async function dryRunChapter(chatId, profile, settings, userId) {
   if (window.length === 0) {
     throw new Error("No window available, lower the lag or window thresholds");
   }
-  const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && typeof e.meta.firstMsgIdx === "number").sort((a, b) => a.meta.firstMsgIdx - b.meta.firstMsgIdx);
+  const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && typeof e.meta.firstMsgIdx === "number").sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
   const previousMemories = profile.previousMemoriesCount > 0 ? chapters.slice(-profile.previousMemoriesCount) : [];
   const provisionalSceneNumber = await nextSceneNumber(chatId, 1, userId);
   const opener = buildChapterHeader(provisionalSceneNumber, window.length);
@@ -3822,7 +3792,7 @@ async function dryRunChapter(chatId, profile, settings, userId) {
 async function dryRunArc(chatId, profile, settings, userId) {
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
-  const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && !e.meta.isRoot).sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
+  const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && !e.meta.isRoot).sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
   if (chapters.length === 0)
     throw new Error("No chapters to bind yet");
   const totalTurns = chapters.reduce((acc, c) => acc + c.meta.msgIds.length, 0);
@@ -3833,7 +3803,7 @@ async function dryRunArc(chatId, profile, settings, userId) {
 async function dryRunVolume(chatId, profile, settings, userId) {
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
-  const arcs = coverage.activeEntries.filter((e) => e.meta.tier === 2 && !e.meta.isRoot).sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
+  const arcs = coverage.activeEntries.filter((e) => e.meta.tier === 2 && !e.meta.isRoot).sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
   if (arcs.length === 0)
     throw new Error("No arcs to press yet");
   const totalTurns = arcs.reduce((acc, a) => acc + a.meta.msgIds.length, 0);
@@ -3897,6 +3867,10 @@ function deriveTitle(result) {
   if (trimmed)
     return `${trimmed}${trimmed.length === 60 ? "..." : ""}`;
   return "Compressed";
+}
+function chatMessageIndex(message) {
+  const idx = message.index_in_chat;
+  return typeof idx === "number" && Number.isFinite(idx) ? idx : undefined;
 }
 function makePreview(kind, chatId, window, result, firstIdx, lastIdx, replacesEntryId) {
   return {
@@ -4163,9 +4137,9 @@ async function buildState(userId, requestedChatId) {
       chapters.push(view);
     }
   }
-  chapters.sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
-  arcs.sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
-  volumes.sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
+  chapters.sort((a, b) => storyOrderFromMeta(a.meta) - storyOrderFromMeta(b.meta));
+  arcs.sort((a, b) => storyOrderFromMeta(a.meta) - storyOrderFromMeta(b.meta));
+  volumes.sort((a, b) => storyOrderFromMeta(a.meta) - storyOrderFromMeta(b.meta));
   const messageStubs = messages.map((m) => {
     const covered = coverage.coveredBy.get(m.id) ?? null;
     const hidden = !!(m.extra && m.extra.hidden);
@@ -4221,7 +4195,7 @@ async function buildState(userId, requestedChatId) {
 function countArcBacklog(activeChapters, profile) {
   if (profile.arcTrigger === "manual")
     return 0;
-  const chapters = activeChapters.slice().sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
+  const chapters = activeChapters.slice().sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
   if (profile.arcTrigger === "chapters") {
     const compressible2 = Math.max(0, chapters.length - profile.arcLagChapters);
     const denom = Math.max(1, profile.arcAfterChapters);
@@ -4255,11 +4229,7 @@ function isProjection(entry, chatId) {
 function orderValueFor(meta, fallback) {
   if (!meta)
     return fallback;
-  if (typeof meta.firstMsgIdx === "number")
-    return meta.firstMsgIdx + 1;
-  if (meta.isRoot)
-    return 0;
-  return meta.sceneNumber ?? fallback;
+  return storyOrderFromMeta(meta, fallback);
 }
 async function updateEntry2(entry, patch, userId) {
   await spindle.world_books.entries.update(entry.id, patch, userId);
@@ -4270,7 +4240,7 @@ async function syncProjectionEntry(chatId, userId) {
     if (!bookId)
       return;
     const settings = await loadSettings(userId);
-    const outletMode = settings.enabled && settings.memoryInjectionMode === "outlet";
+    const outletMode = settings.enabled;
     const outletName = normalizeOutletName(settings.memoryOutletName);
     const entries = await listAllEntries(bookId, userId);
     let touched = false;
@@ -4337,6 +4307,7 @@ async function syncNamingForChat(chatId, userId) {
       tier,
       title: entry.meta.title ?? "",
       sceneNumber: entry.meta.sceneNumber ?? 1,
+      storyOrder: entry.meta.storyOrder,
       firstMsgIdx: entry.meta.firstMsgIdx,
       lastMsgIdx: entry.meta.lastMsgIdx,
       sourceCount: entry.meta.sourceChapterEntryIds?.length,
@@ -4382,6 +4353,7 @@ async function importAttachedLorebooks(chatId, userId) {
   let skippedDuplicate = 0;
   let skippedInvalidRange = 0;
   let scannedBooks = 0;
+  let hideThroughIdx;
   const details = [];
   for (const bookId of sourceBookIds) {
     const book = await spindle.world_books.get(bookId, userId).catch(() => null);
@@ -4440,10 +4412,12 @@ async function importAttachedLorebooks(chatId, userId) {
       return max;
     return Math.max(max, entry.meta.sceneNumber ?? 0);
   }, 0);
+  const firstStoryOrder = nextStoryOrder(existing);
   let imported = 0;
   for (const candidate of candidates) {
     const msgIds = messages.slice(candidate.firstMsgIdx, candidate.lastMsgIdx + 1).map((message) => message.id);
     const sceneNumber = maxScene + imported + 1;
+    const storyOrder = firstStoryOrder + imported;
     const meta = {
       tier: 1,
       chatId,
@@ -4456,7 +4430,8 @@ async function importAttachedLorebooks(chatId, userId) {
       connectionId: "imported",
       createdAt: candidate.source.created_at || Date.now(),
       title: candidate.title,
-      sceneNumber
+      sceneNumber,
+      storyOrder
     };
     const comment = await formatEntryName(settings, {
       chatId,
@@ -4464,16 +4439,18 @@ async function importAttachedLorebooks(chatId, userId) {
       tier: "chapter",
       title: meta.title ?? "",
       sceneNumber,
+      storyOrder,
       firstMsgIdx: meta.firstMsgIdx,
       lastMsgIdx: meta.lastMsgIdx,
       turnCount: msgIds.length
     });
     await createChapterEntry(targetBook.id, meta, candidate.source.content || "", comment, userId, candidate.source.key ?? [], settings.forceConstantEntries);
+    hideThroughIdx = hideThroughIdx === undefined ? candidate.lastMsgIdx : Math.max(hideThroughIdx, candidate.lastMsgIdx);
     imported++;
   }
   if (imported > 0)
     invalidateBookCache(userId, chatId);
-  return { imported, skippedNoRange, skippedDuplicate, skippedInvalidRange, scannedBooks, details };
+  return { imported, skippedNoRange, skippedDuplicate, skippedInvalidRange, scannedBooks, details, hideThroughIdx };
 }
 function parseRange(text) {
   for (const pattern of RANGE_PATTERNS) {
@@ -4551,6 +4528,9 @@ async function doPushState(userId, chatId) {
       const active = await spindle.chats.getActive(userId).catch(() => null);
       if (active && active.id !== chatId)
         return;
+      await syncStoryOrderForChat(chatId, userId).catch((err) => {
+        warn(`story order sync before state failed: ${describeError(err)}`);
+      });
       await syncNamingForChat(chatId, userId).catch((err) => {
         warn(`naming sync before state failed: ${describeError(err)}`);
       });
@@ -4610,7 +4590,7 @@ registerPipelineCallbacks({
 spindle.registerWorldInfoInterceptor(async (ctx) => {
   const userId = ctx.userId ?? resolveUserId(ctx.chatId) ?? getBootstrapUserId();
   const settings = userId ? await loadSettings(userId).catch(() => null) : null;
-  const outletMode = !!settings?.enabled && settings.memoryInjectionMode === "outlet";
+  const outletMode = !!settings?.enabled;
   let activeOutletIds = null;
   if (outletMode && userId && ctx.chatId) {
     const allEntries = await listLmbEntries(ctx.chatId, userId).catch(() => []);
@@ -4656,12 +4636,7 @@ spindle.registerInterceptor(async (messages, context) => {
     const settings = await loadSettings(userId);
     if (!settings.enabled)
       return messages;
-    if (settings.memoryInjectionMode === "outlet")
-      return messages;
-    const result = await buildInjection(chatId, messages, userId);
-    if (!result)
-      return messages;
-    return { messages: result.messages, breakdown: result.breakdown };
+    return messages;
   } catch (err) {
     warn(`interceptor failed: ${describeError(err)}`);
     return messages;
@@ -5178,10 +5153,10 @@ spindle.onFrontendMessage(async (raw, userId) => {
         if (result.imported > 0) {
           const settings = await loadSettings(userId);
           const profile = settings.profiles.find((p) => p.id === settings.activeProfileId);
-          if (profile?.hideCoveredMessages) {
+          if (profile?.hideCoveredMessages || typeof result.hideThroughIdx === "number") {
             const messages = await spindle.chat.getMessages(msg.chatId);
             const coverage = await buildCoverage(msg.chatId, userId);
-            await syncHiddenForCoveredMessages(msg.chatId, messages, coverage, userId, true);
+            await syncHiddenForCoveredMessages(msg.chatId, messages, coverage, userId, true, result.hideThroughIdx);
           }
         }
         const skipped = result.skippedDuplicate + result.skippedInvalidRange + result.skippedNoRange;

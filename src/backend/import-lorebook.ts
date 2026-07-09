@@ -13,6 +13,7 @@ import {
   listAllEntries,
   listLmbEntries,
 } from "./world-book";
+import { nextStoryOrder } from "./story-order";
 
 export interface ImportAttachedLorebooksResult {
   imported: number;
@@ -21,6 +22,7 @@ export interface ImportAttachedLorebooksResult {
   skippedInvalidRange: number;
   scannedBooks: number;
   details: string[];
+  hideThroughIdx?: number;
 }
 
 interface ImportCandidate {
@@ -66,6 +68,7 @@ export async function importAttachedLorebooks(chatId: string, userId: string): P
   let skippedDuplicate = 0;
   let skippedInvalidRange = 0;
   let scannedBooks = 0;
+  let hideThroughIdx: number | undefined;
   const details: string[] = [];
 
   for (const bookId of sourceBookIds) {
@@ -123,6 +126,7 @@ export async function importAttachedLorebooks(chatId: string, userId: string): P
     if (entry.meta.tier !== 1 || entry.meta.isRoot) return max;
     return Math.max(max, entry.meta.sceneNumber ?? 0);
   }, 0);
+  const firstStoryOrder = nextStoryOrder(existing);
 
   let imported = 0;
   for (const candidate of candidates) {
@@ -130,6 +134,7 @@ export async function importAttachedLorebooks(chatId: string, userId: string): P
       .slice(candidate.firstMsgIdx, candidate.lastMsgIdx + 1)
       .map((message) => message.id);
     const sceneNumber = maxScene + imported + 1;
+    const storyOrder = firstStoryOrder + imported;
     const meta: LMBEntryMeta = {
       tier: 1,
       chatId,
@@ -143,6 +148,7 @@ export async function importAttachedLorebooks(chatId: string, userId: string): P
       createdAt: candidate.source.created_at || Date.now(),
       title: candidate.title,
       sceneNumber,
+      storyOrder,
     };
     const comment = await formatEntryName(settings, {
       chatId,
@@ -150,6 +156,7 @@ export async function importAttachedLorebooks(chatId: string, userId: string): P
       tier: "chapter",
       title: meta.title ?? "",
       sceneNumber,
+      storyOrder,
       firstMsgIdx: meta.firstMsgIdx,
       lastMsgIdx: meta.lastMsgIdx,
       turnCount: msgIds.length,
@@ -163,11 +170,14 @@ export async function importAttachedLorebooks(chatId: string, userId: string): P
       candidate.source.key ?? [],
       settings.forceConstantEntries,
     );
+    hideThroughIdx = hideThroughIdx === undefined
+      ? candidate.lastMsgIdx
+      : Math.max(hideThroughIdx, candidate.lastMsgIdx);
     imported++;
   }
 
   if (imported > 0) invalidateBookCache(userId, chatId);
-  return { imported, skippedNoRange, skippedDuplicate, skippedInvalidRange, scannedBooks, details };
+  return { imported, skippedNoRange, skippedDuplicate, skippedInvalidRange, scannedBooks, details, hideThroughIdx };
 }
 
 function parseRange(text: string): { start: number; end: number; raw: string } | null {

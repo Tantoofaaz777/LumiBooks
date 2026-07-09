@@ -306,12 +306,12 @@ export async function createChapterEntry(
   constant: boolean = true,
 ): Promise<WorldBookEntryDTO> {
   const settings = await loadSettings(userId);
-  const orderValue = typeof meta.firstMsgIdx === "number"
-    ? meta.firstMsgIdx + 1
-    : meta.isRoot
-      ? 0
-      : meta.sceneNumber ?? 100;
-  const placement = settings.enabled && settings.memoryInjectionMode === "outlet"
+  const orderValue = typeof meta.storyOrder === "number"
+    ? meta.storyOrder
+    : typeof meta.sceneNumber === "number"
+      ? meta.sceneNumber
+      : 100;
+  const placement = settings.enabled
     ? {
         position: 8,
         outlet_name: normalizeOutletName(settings.memoryOutletName),

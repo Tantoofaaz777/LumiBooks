@@ -13,6 +13,7 @@ import { getBusy, getLastFailure, getPendingPreviews } from "./pipeline";
 import { ensureForkAdoption } from "./fork";
 import { describeError, warn } from "./runtime";
 import { BUILTIN_ARC_PRESETS, BUILTIN_CHAPTER_PRESETS, BUILTIN_VOLUME_PRESETS } from "./presets";
+import { storyOrderFromMeta, storyOrderOf } from "./story-order";
 
 type ChatMessageDTO = ChatMessage;
 
@@ -147,9 +148,9 @@ export async function buildState(userId: string, requestedChatId?: string | null
       chapters.push(view);
     }
   }
-  chapters.sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
-  arcs.sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
-  volumes.sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
+  chapters.sort((a, b) => storyOrderFromMeta(a.meta) - storyOrderFromMeta(b.meta));
+  arcs.sort((a, b) => storyOrderFromMeta(a.meta) - storyOrderFromMeta(b.meta));
+  volumes.sort((a, b) => storyOrderFromMeta(a.meta) - storyOrderFromMeta(b.meta));
 
   const messageStubs: MessageStub[] = messages.map((m) => {
     const covered = coverage.coveredBy.get(m.id) ?? null;
@@ -213,7 +214,7 @@ function countArcBacklog(activeChapters: LMBEntry[], profile: LMBProfile): numbe
   if (profile.arcTrigger === "manual") return 0;
   const chapters = activeChapters
     .slice()
-    .sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
+    .sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
   if (profile.arcTrigger === "chapters") {
     const compressible = Math.max(0, chapters.length - profile.arcLagChapters);
     const denom = Math.max(1, profile.arcAfterChapters);

@@ -106,6 +106,7 @@ export interface LMBEntryMeta {
   shortComment?: string;
   presetKey?: string;
   sceneNumber?: number;
+  storyOrder?: number;
   rawOutput?: string;
   isRoot?: boolean;
   rootOrigin?: string;
@@ -182,14 +183,18 @@ export const DEFAULT_SETTINGS: LMBSettings = {
   debugLog: false,
   forceConstantEntries: true,
   showAutomationToasts: true,
-  memoryInjectionMode: "chat_history",
+  memoryInjectionMode: "outlet",
   memoryOutletName: "lumibooks",
   bookNameTemplate: `${WORLD_BOOK_NAME_PREFIX} - {{chat}}`,
-  chapterNameTemplate: "#{{sceneNumber}} - {{title}} (msgs {{scene}})",
-  arcNameTemplate: "{{rootPrefix}}Arc #{{sceneNumber}} - {{title}} (msgs {{scene}})",
-  volumeNameTemplate: "{{rootPrefix}}Volume #{{sceneNumber}} - {{title}} (msgs {{scene}})",
+  chapterNameTemplate: "#{{storyOrder}} - {{title}} (msgs {{scene}})",
+  arcNameTemplate: "{{rootPrefix}}Arc {{sceneNumberPadded}} - {{title}}",
+  volumeNameTemplate: "{{rootPrefix}}Volume {{sceneNumberPadded}} - {{title}}",
   includeContentHeaders: false,
 };
+
+const LEGACY_CHAPTER_NAME_TEMPLATE = "#{{sceneNumber}} - {{title}} (msgs {{scene}})";
+const LEGACY_ARC_NAME_TEMPLATE = "{{rootPrefix}}Arc #{{sceneNumber}} - {{title}} (msgs {{scene}})";
+const LEGACY_VOLUME_NAME_TEMPLATE = "{{rootPrefix}}Volume #{{sceneNumber}} - {{title}} (msgs {{scene}})";
 
 export function diskVersionFor(raw: Partial<LMBSettings> | null | undefined): number {
   const v = raw && typeof raw === "object" ? raw : {};
@@ -220,19 +225,20 @@ export function normalizeSettings(raw: Partial<LMBSettings> | null | undefined):
     debugLog: typeof v.debugLog === "boolean" ? v.debugLog : fallback.debugLog,
     forceConstantEntries: typeof v.forceConstantEntries === "boolean" ? v.forceConstantEntries : fallback.forceConstantEntries,
     showAutomationToasts: typeof v.showAutomationToasts === "boolean" ? v.showAutomationToasts : fallback.showAutomationToasts,
-    memoryInjectionMode: v.memoryInjectionMode === "outlet" ? "outlet" : "chat_history",
+    memoryInjectionMode: "outlet",
     memoryOutletName: normalizeOutletName(v.memoryOutletName, fallback.memoryOutletName),
     bookNameTemplate: normalizeTemplate(v.bookNameTemplate, fallback.bookNameTemplate),
-    chapterNameTemplate: normalizeTemplate(v.chapterNameTemplate, fallback.chapterNameTemplate),
-    arcNameTemplate: normalizeTemplate(v.arcNameTemplate, fallback.arcNameTemplate),
-    volumeNameTemplate: normalizeTemplate(v.volumeNameTemplate, fallback.volumeNameTemplate),
+    chapterNameTemplate: normalizeTemplate(v.chapterNameTemplate, fallback.chapterNameTemplate, LEGACY_CHAPTER_NAME_TEMPLATE),
+    arcNameTemplate: normalizeTemplate(v.arcNameTemplate, fallback.arcNameTemplate, LEGACY_ARC_NAME_TEMPLATE),
+    volumeNameTemplate: normalizeTemplate(v.volumeNameTemplate, fallback.volumeNameTemplate, LEGACY_VOLUME_NAME_TEMPLATE),
     includeContentHeaders: typeof v.includeContentHeaders === "boolean" ? v.includeContentHeaders : fallback.includeContentHeaders,
   };
 }
 
-export function normalizeTemplate(raw: unknown, fallback: string): string {
+export function normalizeTemplate(raw: unknown, fallback: string, legacyDefault?: string): string {
   if (typeof raw !== "string") return fallback;
   const trimmed = raw.trim();
+  if (legacyDefault && trimmed === legacyDefault) return fallback;
   return trimmed || fallback;
 }
 
@@ -349,6 +355,10 @@ export function normalizeEntryMeta(raw: unknown): LMBEntryMeta | null {
     sceneNumber:
       typeof v.sceneNumber === "number" && Number.isFinite(v.sceneNumber) && v.sceneNumber > 0
         ? Math.floor(v.sceneNumber)
+        : undefined,
+    storyOrder:
+      typeof v.storyOrder === "number" && Number.isFinite(v.storyOrder) && v.storyOrder > 0
+        ? Math.floor(v.storyOrder)
         : undefined,
     rawOutput: typeof v.rawOutput === "string" ? v.rawOutput : undefined,
     isRoot: v.isRoot === true ? true : undefined,

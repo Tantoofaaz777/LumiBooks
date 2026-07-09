@@ -15,6 +15,7 @@ import {
 import { createChapterEntry, deleteEntry, ensureBookForChat, invalidateBookCache, listLmbEntries, patchEntryMeta, type LMBEntry } from "./world-book";
 import { loadSettings } from "./storage";
 import { formatEntryName, savedMemoryContent } from "./naming";
+import { inheritedStoryOrder, nextStoryOrder, storyOrderOf } from "./story-order";
 import {
   AbortedSummarizerError,
   FatalSummarizerError,
@@ -399,7 +400,7 @@ async function runChapter(
   const coverage = await buildCoverage(chatId, userId, entries);
   const chapters = coverage.activeEntries
     .filter((e) => e.meta.tier === 1 && typeof e.meta.firstMsgIdx === "number")
-    .sort((a, b) => (a.meta.firstMsgIdx as number) - (b.meta.firstMsgIdx as number));
+    .sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
   const previousMemories = profile.previousMemoriesCount > 0
     ? chapters.slice(-profile.previousMemoriesCount)
     : [];
@@ -500,16 +501,22 @@ async function commitChapter(
   const sceneNumber = typeof replacedEntry?.meta.sceneNumber === "number"
     ? replacedEntry.meta.sceneNumber
     : await nextSceneNumber(chatId, 1, userId);
+  const storyOrder = typeof replacedEntry?.meta.storyOrder === "number"
+    ? replacedEntry.meta.storyOrder
+    : nextStoryOrder(entriesForCoverage);
   const title = fromPreview
     ? (result.title?.trim() || `Chapter ${firstIdx + 1}-${lastIdx + 1}`)
     : deriveTitle(result);
   const msgIds = window.map((m) => m.id);
+  const windowIdxs = window.map(chatMessageIndex).filter((n): n is number => typeof n === "number");
+  const firstMsgIdx = windowIdxs.length ? Math.min(...windowIdxs) : firstIdx;
+  const lastMsgIdx = windowIdxs.length ? Math.max(...windowIdxs) : lastIdx;
   const meta: LMBEntryMeta = {
     tier: 1,
     chatId,
     msgIds,
-    firstMsgIdx: firstIdx >= 0 ? firstIdx : undefined,
-    lastMsgIdx: lastIdx >= 0 ? lastIdx : undefined,
+    firstMsgIdx: firstMsgIdx >= 0 ? firstMsgIdx : undefined,
+    lastMsgIdx: lastMsgIdx >= 0 ? lastMsgIdx : undefined,
     tokenCountInput: window.reduce((acc, m) => acc + approximateTokensFromChars((m.content || "").length), 0),
     tokenCountOutput: result.usageCompletionTokens || approximateTokensFromChars(result.content.length),
     model: result.model,
@@ -519,6 +526,7 @@ async function commitChapter(
     shortComment: result.shortComment,
     presetKey: result.presetKey,
     sceneNumber,
+    storyOrder,
     rawOutput: result.rawOutput,
   };
   const settings = await loadSettings(userId);
@@ -528,6 +536,7 @@ async function commitChapter(
     tier: "chapter",
     title: meta.title ?? "",
     sceneNumber,
+    storyOrder,
     firstMsgIdx: meta.firstMsgIdx,
     lastMsgIdx: meta.lastMsgIdx,
     turnCount: msgIds.length,
@@ -546,24 +555,23 @@ async function commitChapter(
     }
   }
 
-  if (profile.hideCoveredMessages) {
-    try {
-      await syncHiddenForCoveredMessages(
-        chatId,
-        allMessages,
-        {
-          coveredBy: new Map(window.map((m) => [m.id, entry.id])),
-          activeEntries: [],
-          volumes: [],
-          arcs: [],
-          chapters: [],
-        },
-        userId,
-        true,
-      );
-    } catch (err) {
-      warn(`setMessagesHidden failed: ${describeError(err)}`);
-    }
+  try {
+    await syncHiddenForCoveredMessages(
+      chatId,
+      allMessages,
+      {
+        coveredBy: new Map(window.map((m) => [m.id, entry.id])),
+        activeEntries: [],
+        volumes: [],
+        arcs: [],
+        chapters: [],
+      },
+      userId,
+      true,
+      meta.lastMsgIdx,
+    );
+  } catch (err) {
+    warn(`setMessagesHidden failed: ${describeError(err)}`);
   }
   publishChapterCreated(userId, {
     chatId,
@@ -592,7 +600,7 @@ export async function createArcAuto(
     const coverage = await buildCoverage(chatId, userId, entries);
     const chapters = coverage.activeEntries
       .filter((e) => e.meta.tier === 1 && !e.meta.isRoot)
-      .sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
+      .sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
     if (chapters.length === 0) return null;
     let selected: LMBEntry[] = [];
     if (profile.arcTrigger === "chapters") {
@@ -646,7 +654,7 @@ export async function createArcFromChapters(
     const wanted = new Set(chapterEntryIds);
     const chapters = coverage.activeEntries
       .filter((e) => e.meta.tier === 1 && wanted.has(e.raw.id))
-      .sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
+      .sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
     if (chapters.length === 0) return null;
     return await runArc(chatId, profile, settings, userId, chapters, { replacesEntryId: opts.replacesEntryId });
   } finally {
@@ -759,6 +767,9 @@ async function commitArc(
   const sceneNumber = typeof replacedArc?.meta.sceneNumber === "number"
     ? replacedArc.meta.sceneNumber
     : await nextSceneNumber(chatId, 2, userId);
+  const storyOrder = typeof replacedArc?.meta.storyOrder === "number"
+    ? replacedArc.meta.storyOrder
+    : inheritedStoryOrder(selected, entriesForCoverage);
   const msgIds = selected.flatMap((c) => c.meta.msgIds);
   const sourceChapterEntryIds = selected.map((c) => c.raw.id);
   const isRootArc = selected.length > 0 && selected.every((c) => c.meta.isRoot);
@@ -791,6 +802,7 @@ async function commitArc(
     shortComment: result.shortComment,
     presetKey: result.presetKey,
     sceneNumber,
+    storyOrder,
     rawOutput: result.rawOutput,
     ...(isRootArc ? { isRoot: true, rootOrigin } : {}),
   };
@@ -801,6 +813,7 @@ async function commitArc(
     tier: "arc",
     title: meta.title ?? "",
     sceneNumber,
+    storyOrder,
     firstMsgIdx: meta.firstMsgIdx,
     lastMsgIdx: meta.lastMsgIdx,
     sourceCount: sourceChapterEntryIds.length,
@@ -869,7 +882,7 @@ export async function createVolumeFromArcs(
     const wanted = new Set(arcEntryIds);
     const arcs = coverage.activeEntries
       .filter((e) => e.meta.tier === 2 && wanted.has(e.raw.id))
-      .sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
+      .sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
     if (arcs.length === 0) return null;
     return await runVolume(chatId, profile, settings, userId, arcs, opts.replacesEntryId);
   } finally {
@@ -979,6 +992,9 @@ async function commitVolume(
   const sceneNumber = typeof replacedVolume?.meta.sceneNumber === "number"
     ? replacedVolume.meta.sceneNumber
     : await nextSceneNumber(chatId, 3, userId);
+  const storyOrder = typeof replacedVolume?.meta.storyOrder === "number"
+    ? replacedVolume.meta.storyOrder
+    : inheritedStoryOrder(selected, entriesForCoverage);
   const msgIds = selected.flatMap((a) => a.meta.msgIds);
   const sourceArcEntryIds = selected.map((a) => a.raw.id);
   const isRootVolume = selected.length > 0 && selected.every((a) => a.meta.isRoot);
@@ -1011,6 +1027,7 @@ async function commitVolume(
     shortComment: result.shortComment,
     presetKey: result.presetKey,
     sceneNumber,
+    storyOrder,
     rawOutput: result.rawOutput,
     ...(isRootVolume ? { isRoot: true, rootOrigin } : {}),
   };
@@ -1021,6 +1038,7 @@ async function commitVolume(
     tier: "volume",
     title: meta.title ?? "",
     sceneNumber,
+    storyOrder,
     firstMsgIdx: meta.firstMsgIdx,
     lastMsgIdx: meta.lastMsgIdx,
     sourceCount: sourceArcEntryIds.length,
@@ -1224,7 +1242,7 @@ export async function dryRunChapter(
   }
   const chapters = coverage.activeEntries
     .filter((e) => e.meta.tier === 1 && typeof e.meta.firstMsgIdx === "number")
-    .sort((a, b) => (a.meta.firstMsgIdx as number) - (b.meta.firstMsgIdx as number));
+    .sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
   const previousMemories = profile.previousMemoriesCount > 0
     ? chapters.slice(-profile.previousMemoriesCount)
     : [];
@@ -1243,7 +1261,7 @@ export async function dryRunArc(
   const coverage = await buildCoverage(chatId, userId, entries);
   const chapters = coverage.activeEntries
     .filter((e) => e.meta.tier === 1 && !e.meta.isRoot)
-    .sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
+    .sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
   if (chapters.length === 0) throw new Error("No chapters to bind yet");
   const totalTurns = chapters.reduce((acc, c) => acc + c.meta.msgIds.length, 0);
   const provisionalSceneNumber = await nextSceneNumber(chatId, 2, userId);
@@ -1261,7 +1279,7 @@ export async function dryRunVolume(
   const coverage = await buildCoverage(chatId, userId, entries);
   const arcs = coverage.activeEntries
     .filter((e) => e.meta.tier === 2 && !e.meta.isRoot)
-    .sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
+    .sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
   if (arcs.length === 0) throw new Error("No arcs to press yet");
   const totalTurns = arcs.reduce((acc, a) => acc + a.meta.msgIds.length, 0);
   const provisionalSceneNumber = await nextSceneNumber(chatId, 3, userId);
@@ -1335,6 +1353,11 @@ function deriveTitle(result: SummarizationResult): string {
   const trimmed = firstSentence.slice(0, 60).trim();
   if (trimmed) return `${trimmed}${trimmed.length === 60 ? "..." : ""}`;
   return "Compressed";
+}
+
+function chatMessageIndex(message: ChatMessageDTO): number | undefined {
+  const idx = (message as { index_in_chat?: number }).index_in_chat;
+  return typeof idx === "number" && Number.isFinite(idx) ? idx : undefined;
 }
 
 function makePreview(

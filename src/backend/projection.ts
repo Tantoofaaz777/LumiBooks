@@ -5,6 +5,7 @@ import { EXTENSION_KEY, PROJECTION_KEY, normalizeEntryMeta, normalizeOutletName 
 import { findBookForChat, invalidateBookCache, listAllEntries } from "./world-book";
 import { loadSettings } from "./storage";
 import { describeError, warn } from "./runtime";
+import { storyOrderFromMeta } from "./story-order";
 
 interface ProjectionMeta {
   chatId: string;
@@ -19,9 +20,7 @@ function isProjection(entry: WorldBookEntryDTO, chatId: string): boolean {
 
 function orderValueFor(meta: ReturnType<typeof normalizeEntryMeta>, fallback: number): number {
   if (!meta) return fallback;
-  if (typeof meta.firstMsgIdx === "number") return meta.firstMsgIdx + 1;
-  if (meta.isRoot) return 0;
-  return meta.sceneNumber ?? fallback;
+  return storyOrderFromMeta(meta, fallback);
 }
 
 async function updateEntry(entry: WorldBookEntryDTO, patch: Record<string, unknown>, userId: string): Promise<void> {
@@ -34,7 +33,7 @@ export async function syncProjectionEntry(chatId: string, userId: string): Promi
     if (!bookId) return;
 
     const settings = await loadSettings(userId);
-    const outletMode = settings.enabled && settings.memoryInjectionMode === "outlet";
+    const outletMode = settings.enabled;
     const outletName = normalizeOutletName(settings.memoryOutletName);
     const entries = await listAllEntries(bookId, userId);
     let touched = false;

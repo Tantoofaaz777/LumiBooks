@@ -12,6 +12,7 @@ export interface EntryNameContext {
   tier: EntryNameTier;
   title: string;
   sceneNumber: number;
+  storyOrder?: number;
   firstMsgIdx?: number;
   lastMsgIdx?: number;
   sourceCount?: number;
@@ -98,6 +99,9 @@ function applyLocalMacros(template: string, ctx: TemplateContext): string {
   const values: Record<string, string> = {
     scene: range || String(ctx.sceneNumber),
     scenenumber: String(ctx.sceneNumber),
+    scenenumberpadded: pad3(ctx.sceneNumber),
+    storyorder: typeof ctx.storyOrder === "number" ? String(ctx.storyOrder) : String(ctx.sceneNumber),
+    storyorderpadded: pad3(typeof ctx.storyOrder === "number" ? ctx.storyOrder : ctx.sceneNumber),
     title: ctx.title.trim() || fallbackTitle(ctx),
     tier: ctx.tier,
     chat: chatLabel,
@@ -126,4 +130,8 @@ function fallbackTitle(ctx: Pick<EntryNameContext, "tier">): string {
   if (ctx.tier === "volume") return "Volume";
   if (ctx.tier === "arc") return "Arc";
   return "Chapter";
+}
+
+function pad3(n: number): string {
+  return String(Math.max(0, Math.floor(n))).padStart(3, "0");
 }

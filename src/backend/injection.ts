@@ -4,6 +4,7 @@ import type { InterceptorResultDTO, LlmMessageDTO } from "lumiverse-spindle-type
 import { buildCoverage, type CoverageMap } from "./coverage";
 import { getChatAttachedBookIds, listLmbEntries, type LMBEntry } from "./world-book";
 import { error } from "./runtime";
+import { storyOrderOf } from "./story-order";
 
 let injectionAnomalyCb: ((userId: string, text: string) => void) | null = null;
 
@@ -56,7 +57,7 @@ function orderEntries(coverage: CoverageMap, msgIdToIdx: Map<string, number>): O
       (haveIdx ? `${tierName} msgs ${firstIdx + 1}-${lastIdx + 1}` : tierName);
     ordered.push({ entry, label, firstIdx: resolvedFirst, lastIdx: resolvedLast, emitted: false });
   }
-  ordered.sort((a, b) => a.firstIdx - b.firstIdx);
+  ordered.sort((a, b) => storyOrderOf(a.entry) - storyOrderOf(b.entry));
   return ordered;
 }
 

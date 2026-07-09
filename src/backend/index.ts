@@ -66,6 +66,7 @@ import { parseStmbPresetExport } from "./presets";
 import { syncProjectionEntry } from "./projection";
 import { syncNamingForChat } from "./naming-sync";
 import { importAttachedLorebooks } from "./import-lorebook";
+import { syncStoryOrderForChat } from "./story-order";
 
 async function notify(
   userId: string,
@@ -107,6 +108,9 @@ async function doPushState(userId: string, chatId?: string | null): Promise<void
     if (chatId) {
       const active = await spindle.chats.getActive(userId).catch(() => null);
       if (active && active.id !== chatId) return;
+      await syncStoryOrderForChat(chatId, userId).catch((err) => {
+        warn(`story order sync before state failed: ${describeError(err)}`);
+      });
       await syncNamingForChat(chatId, userId).catch((err) => {
         warn(`naming sync before state failed: ${describeError(err)}`);
       });
@@ -165,7 +169,7 @@ registerPipelineCallbacks({
 spindle.registerWorldInfoInterceptor(async (ctx) => {
   const userId = ctx.userId ?? resolveUserId(ctx.chatId) ?? getBootstrapUserId();
   const settings = userId ? await loadSettings(userId).catch(() => null) : null;
-  const outletMode = !!settings?.enabled && settings.memoryInjectionMode === "outlet";
+  const outletMode = !!settings?.enabled;
   let activeOutletIds: Set<string> | null = null;
   if (outletMode && userId && ctx.chatId) {
     const allEntries = await listLmbEntries(ctx.chatId, userId).catch(() => []);
@@ -209,10 +213,7 @@ spindle.registerInterceptor(async (messages, context) => {
     if (!userId) return messages;
     const settings = await loadSettings(userId);
     if (!settings.enabled) return messages;
-    if (settings.memoryInjectionMode === "outlet") return messages;
-    const result = await buildInjection(chatId, messages as LlmMessageDTO[], userId);
-    if (!result) return messages;
-    return { messages: result.messages, breakdown: result.breakdown };
+    return messages;
   } catch (err) {
     warn(`interceptor failed: ${describeError(err)}`);
     return messages;
@@ -759,10 +760,10 @@ spindle.onFrontendMessage(async (raw, userId) => {
         if (result.imported > 0) {
           const settings = await loadSettings(userId);
           const profile = settings.profiles.find((p) => p.id === settings.activeProfileId);
-          if (profile?.hideCoveredMessages) {
+          if (profile?.hideCoveredMessages || typeof result.hideThroughIdx === "number") {
             const messages = await spindle.chat.getMessages(msg.chatId);
             const coverage = await buildCoverage(msg.chatId, userId);
-            await syncHiddenForCoveredMessages(msg.chatId, messages, coverage, userId, true);
+            await syncHiddenForCoveredMessages(msg.chatId, messages, coverage, userId, true, result.hideThroughIdx);
           }
         }
         const skipped = result.skippedDuplicate + result.skippedInvalidRange + result.skippedNoRange;

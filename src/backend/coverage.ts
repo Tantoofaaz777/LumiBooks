@@ -270,12 +270,16 @@ export async function syncHiddenForCoveredMessages(
   coverage: CoverageMap,
   userId: string,
   desiredHidden: boolean,
+  hideThroughIdx?: number,
 ): Promise<void> {
   void userId;
   const toFlip: string[] = [];
   for (const m of messages) {
     if (isExcluded(m)) continue;
-    const isCovered = coverage.coveredBy.has(m.id);
+    const idx = typeof m.index_in_chat === "number" ? m.index_in_chat : messages.indexOf(m);
+    const isCovered = typeof hideThroughIdx === "number"
+      ? idx <= hideThroughIdx
+      : coverage.coveredBy.has(m.id);
     if (!isCovered) continue;
     const currentlyHidden = !!(m.extra && (m.extra as Record<string, unknown>).hidden);
     if (desiredHidden && !currentlyHidden) toFlip.push(m.id);

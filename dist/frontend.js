@@ -1917,12 +1917,12 @@ var DEFAULT_SETTINGS = {
   debugLog: false,
   forceConstantEntries: true,
   showAutomationToasts: true,
-  memoryInjectionMode: "chat_history",
+  memoryInjectionMode: "outlet",
   memoryOutletName: "lumibooks",
   bookNameTemplate: `${WORLD_BOOK_NAME_PREFIX} - {{chat}}`,
-  chapterNameTemplate: "#{{sceneNumber}} - {{title}} (msgs {{scene}})",
-  arcNameTemplate: "{{rootPrefix}}Arc #{{sceneNumber}} - {{title}} (msgs {{scene}})",
-  volumeNameTemplate: "{{rootPrefix}}Volume #{{sceneNumber}} - {{title}} (msgs {{scene}})",
+  chapterNameTemplate: "#{{storyOrder}} - {{title}} (msgs {{scene}})",
+  arcNameTemplate: "{{rootPrefix}}Arc {{sceneNumberPadded}} - {{title}}",
+  volumeNameTemplate: "{{rootPrefix}}Volume {{sceneNumberPadded}} - {{title}}",
   includeContentHeaders: false
 };
 
@@ -2826,20 +2826,8 @@ function renderInjection(host, state, send) {
   const sec = section("Injection");
   const help = document.createElement("div");
   help.className = "lmb-help";
-  help.textContent = "Choose where active memories land in the assembled prompt.";
+  help.textContent = "Active memories are always sent through an outlet.";
   sec.body.appendChild(help);
-  sec.body.appendChild(labelled("Mode", select({
-    value: state.settings.memoryInjectionMode,
-    options: [
-      { value: "chat_history", label: "Chat history" },
-      { value: "outlet", label: "Outlet macro" }
-    ],
-    onChange: (v) => send({
-      type: "save_settings",
-      patch: { memoryInjectionMode: v === "outlet" ? "outlet" : "chat_history" },
-      chatId: state.activeChatId
-    })
-  })));
   const outletField = field("Outlet name");
   const outletInput = textInput({
     value: state.settings.memoryOutletName,
@@ -2850,11 +2838,10 @@ function renderInjection(host, state, send) {
       chatId: state.activeChatId
     })
   });
-  outletInput.disabled = state.settings.memoryInjectionMode !== "outlet";
   outletField.body.appendChild(outletInput);
   const macro = document.createElement("div");
   macro.className = "lmb-field-hint";
-  macro.textContent = state.settings.memoryInjectionMode === "outlet" ? `Place {{outlet::${state.settings.memoryOutletName || "lumibooks"}}} in your preset where memories should appear.` : "Outlet mode sends active LumiBooks entries through the configured outlet instead of injecting them into chat history.";
+  macro.textContent = `Place {{outlet::${state.settings.memoryOutletName || "lumibooks"}}} in your preset where memories should appear.`;
   outletField.body.appendChild(macro);
   sec.body.appendChild(outletField.wrap);
   host.appendChild(sec.wrap);
@@ -2863,7 +2850,7 @@ function renderNaming(host, state, send) {
   const sec = section("Naming");
   const help = document.createElement("div");
   help.className = "lmb-help";
-  help.textContent = "Templates support Lumiverse macros like {{user}} and {{char}}, plus {{scene}}, {{sceneNumber}}, {{title}}, and {{chat}}.";
+  help.textContent = "Templates support Lumiverse macros like {{user}} and {{char}}, plus {{scene}}, {{storyOrder}}, {{sceneNumberPadded}}, {{title}}, and {{chat}}.";
   sec.body.appendChild(help);
   const saveSetting = (patch) => {
     send({ type: "save_settings", patch, chatId: state.activeChatId });
@@ -2878,9 +2865,9 @@ function renderNaming(host, state, send) {
     sec.body.appendChild(row.wrap);
   };
   addTemplate("Lorebook name", "bookNameTemplate", "LumiBooks - {{chat}}");
-  addTemplate("Chapter entry", "chapterNameTemplate", "#{{sceneNumber}} - {{title}} (msgs {{scene}})");
-  addTemplate("Arc entry", "arcNameTemplate", "{{rootPrefix}}Arc #{{sceneNumber}} - {{title}} (msgs {{scene}})");
-  addTemplate("Volume entry", "volumeNameTemplate", "{{rootPrefix}}Volume #{{sceneNumber}} - {{title}} (msgs {{scene}})");
+  addTemplate("Chapter entry", "chapterNameTemplate", "#{{storyOrder}} - {{title}} (msgs {{scene}})");
+  addTemplate("Arc entry", "arcNameTemplate", "{{rootPrefix}}Arc {{sceneNumberPadded}} - {{title}}");
+  addTemplate("Volume entry", "volumeNameTemplate", "{{rootPrefix}}Volume {{sceneNumberPadded}} - {{title}}");
   sec.body.appendChild(checkbox({
     checked: state.settings.includeContentHeaders,
     label: "Save generated headers in memory content",
