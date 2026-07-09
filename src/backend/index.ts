@@ -1,6 +1,5 @@
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
-import type { LlmMessageDTO } from "lumiverse-spindle-types";
 import type { FrontendToBackend } from "../types";
 import { EXTENSION_KEY, PROJECTION_KEY, normalizeProfile, normalizeCustomPreset } from "../shared";
 import {
@@ -34,7 +33,6 @@ import {
   reassertChatBinding,
   registerBookAnomalyCallback,
 } from "./world-book";
-import { buildInjection, registerInjectionAnomalyCallback } from "./injection";
 import {
   abortBusy,
   acceptPreview,
@@ -65,7 +63,7 @@ import { buildState } from "./state";
 import { parseStmbPresetExport } from "./presets";
 import { syncProjectionEntry } from "./projection";
 import { syncNamingForChat } from "./naming-sync";
-import { confirmAdoptLorebook, importAttachedLorebooks, listAdoptLorebookCandidates } from "./import-lorebook";
+import { confirmAdoptLorebook, listAdoptLorebookCandidates } from "./import-lorebook";
 import { syncStoryOrderForChat } from "./story-order";
 
 async function notify(
@@ -84,18 +82,6 @@ async function notify(
   } catch (err) {
     warn(`toast delivery failed: ${describeError(err)}`);
   }
-}
-
-function importSkipSummary(result: {
-  skippedNoRange: number;
-  skippedDuplicate: number;
-  skippedInvalidRange: number;
-}): string {
-  const parts: string[] = [];
-  if (result.skippedNoRange) parts.push(`${result.skippedNoRange} no range`);
-  if (result.skippedInvalidRange) parts.push(`${result.skippedInvalidRange} invalid range`);
-  if (result.skippedDuplicate) parts.push(`${result.skippedDuplicate} duplicate/overlap`);
-  return parts.length ? parts.join(", ") : "0 skipped";
 }
 
 const PUSH_DEBOUNCE_MS = 30;
@@ -190,34 +176,6 @@ spindle.registerWorldInfoInterceptor(async (ctx) => {
     }
   }
   return disabled.length ? { disabled } : undefined;
-}, 90);
-
-spindle.registerInterceptor(async (messages, context) => {
-  try {
-    const chatId =
-      context && typeof context === "object" && typeof (context as { chatId?: unknown }).chatId === "string"
-        ? ((context as { chatId?: unknown }).chatId as string)
-        : null;
-    if (!chatId) return messages;
-    let userId = resolveUserId(chatId);
-    if (!userId) {
-      const bootstrap = getBootstrapUserId();
-      if (bootstrap) {
-        const chat = await spindle.chats.get(chatId, bootstrap).catch(() => null);
-        if (chat) {
-          rememberChatUser(chatId, bootstrap);
-          userId = bootstrap;
-        }
-      }
-    }
-    if (!userId) return messages;
-    const settings = await loadSettings(userId);
-    if (!settings.enabled) return messages;
-    return messages;
-  } catch (err) {
-    warn(`interceptor failed: ${describeError(err)}`);
-    return messages;
-  }
 }, 90);
 
 spindle.on("MESSAGE_SENT", async (payload: unknown, hostUserId?: string) => {
@@ -747,36 +705,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
         break;
       }
 
-      case "resync_hidden": {
-        const messages = await spindle.chat.getMessages(msg.chatId);
-        const coverage = await buildCoverage(msg.chatId, userId);
-        await syncHiddenForCoveredMessages(msg.chatId, messages, coverage, userId, true);
-        await pushState(userId, msg.chatId);
-        break;
-      }
-
-      case "import_attached_lorebooks": {
-        const result = await importAttachedLorebooks(msg.chatId, userId);
-        if (result.imported > 0) {
-          const settings = await loadSettings(userId);
-          const profile = settings.profiles.find((p) => p.id === settings.activeProfileId);
-          if (profile?.hideCoveredMessages || typeof result.hideThroughIdx === "number") {
-            const messages = await spindle.chat.getMessages(msg.chatId);
-            const coverage = await buildCoverage(msg.chatId, userId);
-            await syncHiddenForCoveredMessages(msg.chatId, messages, coverage, userId, true, result.hideThroughIdx);
-          }
-        }
-        const skipped = result.skippedDuplicate + result.skippedInvalidRange + result.skippedNoRange;
-        const text = result.imported > 0
-          ? `Imported ${result.imported} entr${result.imported === 1 ? "y" : "ies"} from attached lorebooks${skipped ? ` (${importSkipSummary(result)})` : ""}${result.details.length ? `; ${result.details.join("; ")}` : ""}`
-          : result.scannedBooks === 0
-            ? "No other attached lorebooks found to import"
-            : `No importable entries found (${importSkipSummary(result)})${result.details.length ? `; ${result.details.join("; ")}` : ""}`;
-        await notify(userId, result.imported > 0 ? "success" : "info", text);
-        await pushState(userId, msg.chatId);
-        break;
-      }
-
       case "prepare_adopt_lorebook": {
         const books = await listAdoptLorebookCandidates(msg.chatId, userId);
         send({ type: "adopt_lorebook_candidates", chatId: msg.chatId, books }, userId);
@@ -855,20 +783,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const text = updated === 0
           ? `Future entries will be ${msg.value ? "constant" : "keyword-triggered"}`
           : `Memoria flipped ${updated} entr${updated === 1 ? "y" : "ies"} to ${msg.value ? "constant" : "keyword-triggered"}`;
-        await notify(userId, "info", text);
-        await pushState(userId, msg.chatId);
-        break;
-      }
-
-      case "resync_visibility": {
-        const settings = await loadSettings(userId);
-        const profile = settings.profiles.find((p) => p.id === settings.activeProfileId);
-        const desiredHidden = profile ? profile.hideCoveredMessages : true;
-        const { unhidden, hidden } = await resyncVisibility(msg.chatId, userId, desiredHidden);
-        const total = unhidden + hidden;
-        const text = total === 0
-          ? "Memoria's shelf is already aligned, nya"
-          : `Memoria resynced ${total} message${total === 1 ? "" : "s"} (${hidden} hidden, ${unhidden} unhidden)`;
         await notify(userId, "info", text);
         await pushState(userId, msg.chatId);
         break;
@@ -1080,10 +994,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
 
 registerBookAnomalyCallback((userId, tone, text) => {
   void notify(userId, tone, text);
-});
-
-registerInjectionAnomalyCallback((userId, text) => {
-  void notify(userId, "error", text);
 });
 
 registerHookEndpoints();

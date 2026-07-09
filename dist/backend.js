@@ -1278,12 +1278,6 @@ async function syncStoryOrderForChat(chatId, userId) {
     invalidateBookCache(userId, chatId);
 }
 
-// src/backend/injection.ts
-var injectionAnomalyCb = null;
-function registerInjectionAnomalyCallback(cb) {
-  injectionAnomalyCb = cb;
-}
-
 // src/backend/regex.ts
 var TTL_MS = 5000;
 var cachedScripts = new Map;
@@ -4370,127 +4364,6 @@ function repairLegacyAdoptedComment(comment) {
 }
 
 // src/backend/import-lorebook.ts
-var RANGE_PATTERNS = [
-  /\((?:msgs?|messages?)?\s*(\d{1,6})\s*[-\u2013\u2014]\s*(\d{1,6})\)/i,
-  /\bmsgs?\s*(\d{1,6})\s*[-\u2013\u2014]\s*(\d{1,6})\b/i,
-  /\bmessages?\s*(\d{1,6})\s*[-\u2013\u2014]\s*(\d{1,6})\b/i
-];
-async function importAttachedLorebooks(chatId, userId) {
-  const settings = await loadSettings(userId);
-  const targetBook = await ensureBookForChat(chatId, userId);
-  const attachedIds = await getChatAttachedBookIds(chatId, userId);
-  const sourceBookIds = [...new Set(attachedIds.filter((id) => id !== targetBook.id))];
-  const messages = await spindle.chat.getMessages(chatId);
-  const existing = await listLmbEntries(chatId, userId);
-  const existingRanges = new Set(existing.filter((entry) => entry.meta.tier === 1).map((entry) => `${entry.meta.firstMsgIdx ?? -1}:${entry.meta.lastMsgIdx ?? -1}`));
-  const occupiedRanges = existing.filter((entry) => entry.meta.tier === 1).map((entry) => ({
-    first: entry.meta.firstMsgIdx ?? -1,
-    last: entry.meta.lastMsgIdx ?? -1
-  })).filter((range) => range.first >= 0 && range.last >= range.first);
-  const candidates = [];
-  let skippedNoRange = 0;
-  let skippedDuplicate = 0;
-  let skippedInvalidRange = 0;
-  let scannedBooks = 0;
-  let hideThroughIdx;
-  const details = [];
-  for (const bookId of sourceBookIds) {
-    const book = await spindle.world_books.get(bookId, userId).catch(() => null);
-    if (!book)
-      continue;
-    scannedBooks++;
-    const entries = await listAllEntries(bookId, userId).catch(() => []);
-    const parsedEntries = [];
-    for (const entry of entries) {
-      if (entry.disabled)
-        continue;
-      const ext = entry.extensions || {};
-      if (ext[EXTENSION_KEY])
-        continue;
-      const parsed = parseRange(entry.comment || entry.content.split(/\n+/, 1)[0] || "");
-      if (!parsed) {
-        skippedNoRange++;
-        addDetail(details, `${entryLabel(entry)}: no range`);
-        continue;
-      }
-      parsedEntries.push({ entry, parsed });
-    }
-    const zeroBasedBook = parsedEntries.some(({ parsed }) => parsed.start === 0);
-    for (const { entry, parsed } of parsedEntries) {
-      const resolved = resolveRange(parsed.start, parsed.end, messages.length, zeroBasedBook);
-      if (!resolved) {
-        skippedInvalidRange++;
-        addDetail(details, `${entryLabel(entry)}: invalid range ${parsed.start}-${parsed.end} for ${messages.length} chat messages`);
-        continue;
-      }
-      const { firstMsgIdx, lastMsgIdx } = resolved;
-      const key2 = `${firstMsgIdx}:${lastMsgIdx}`;
-      if (existingRanges.has(key2)) {
-        skippedDuplicate++;
-        addDetail(details, `${entryLabel(entry)}: duplicate range`);
-        continue;
-      }
-      if (occupiedRanges.some((range) => rangesOverlap(firstMsgIdx, lastMsgIdx, range.first, range.last))) {
-        skippedDuplicate++;
-        addDetail(details, `${entryLabel(entry)}: overlapping range`);
-        continue;
-      }
-      existingRanges.add(key2);
-      occupiedRanges.push({ first: firstMsgIdx, last: lastMsgIdx });
-      candidates.push({
-        source: entry,
-        firstMsgIdx,
-        lastMsgIdx,
-        title: cleanTitle(entry.comment, parsed.raw) || cleanTitle(entry.content.split(/\n+/, 1)[0] || "", parsed.raw) || "Imported Memory"
-      });
-    }
-  }
-  candidates.sort((a, b) => a.firstMsgIdx - b.firstMsgIdx);
-  const maxScene = existing.reduce((max, entry) => {
-    if (entry.meta.tier !== 1 || entry.meta.isRoot)
-      return max;
-    return Math.max(max, entry.meta.sceneNumber ?? 0);
-  }, 0);
-  const firstStoryOrder = nextStoryOrder(existing);
-  let imported = 0;
-  for (const candidate of candidates) {
-    const msgIds = messages.slice(candidate.firstMsgIdx, candidate.lastMsgIdx + 1).map((message) => message.id);
-    const sceneNumber = maxScene + imported + 1;
-    const storyOrder = firstStoryOrder + imported;
-    const meta = {
-      tier: 1,
-      chatId,
-      msgIds,
-      firstMsgIdx: candidate.firstMsgIdx,
-      lastMsgIdx: candidate.lastMsgIdx,
-      tokenCountInput: 0,
-      tokenCountOutput: approximateTokensFromChars((candidate.source.content || "").length),
-      model: "imported",
-      connectionId: "imported",
-      createdAt: candidate.source.created_at || Date.now(),
-      title: candidate.title,
-      sceneNumber,
-      storyOrder
-    };
-    const comment = await formatEntryName(settings, {
-      chatId,
-      userId,
-      tier: "chapter",
-      title: meta.title ?? "",
-      sceneNumber,
-      storyOrder,
-      firstMsgIdx: meta.firstMsgIdx,
-      lastMsgIdx: meta.lastMsgIdx,
-      turnCount: msgIds.length
-    });
-    await createChapterEntry(targetBook.id, meta, candidate.source.content || "", comment, userId, candidate.source.key ?? [], settings.forceConstantEntries);
-    hideThroughIdx = hideThroughIdx === undefined ? candidate.lastMsgIdx : Math.max(hideThroughIdx, candidate.lastMsgIdx);
-    imported++;
-  }
-  if (imported > 0)
-    invalidateBookCache(userId, chatId);
-  return { imported, skippedNoRange, skippedDuplicate, skippedInvalidRange, scannedBooks, details, hideThroughIdx };
-}
 async function listAdoptLorebookCandidates(chatId, userId) {
   const targetBookId = await findBookForChat(chatId, userId).catch(() => null);
   const attachedIds = await getChatAttachedBookIds(chatId, userId);
@@ -4554,7 +4427,7 @@ async function confirmAdoptLorebook(chatId, userId, bookId, plan) {
     const tier = item.tier;
     const sceneNumber = (sceneCounts.get(tier) ?? 0) + 1;
     sceneCounts.set(tier, sceneNumber);
-    const title = cleanTitle(source.comment, "") || cleanTitle(source.content.split(/\n+/, 1)[0] || "", "") || "Imported Memory";
+    const title = cleanTitle(source.comment) || cleanTitle(source.content.split(/\n+/, 1)[0] || "") || "Imported Memory";
     const meta = {
       tier,
       chatId,
@@ -4581,48 +4454,8 @@ async function confirmAdoptLorebook(chatId, userId, bookId, plan) {
   invalidateBookCache(userId, chatId);
   return { adopted, skipped };
 }
-function parseRange(text) {
-  for (const pattern of RANGE_PATTERNS) {
-    const match = pattern.exec(text);
-    if (!match)
-      continue;
-    const start = Number(match[1]);
-    const end = Number(match[2]);
-    if (!Number.isFinite(start) || !Number.isFinite(end))
-      continue;
-    return { start, end, raw: match[0] };
-  }
-  return null;
-}
-function resolveRange(start, end, messageCount, preferZeroBased) {
-  const zeroBased = { firstMsgIdx: start, lastMsgIdx: end };
-  const oneBased = { firstMsgIdx: start - 1, lastMsgIdx: end - 1 };
-  const preferred = preferZeroBased ? zeroBased : oneBased;
-  if (isValidRange(preferred.firstMsgIdx, preferred.lastMsgIdx, messageCount))
-    return preferred;
-  const fallback = preferZeroBased ? oneBased : zeroBased;
-  if (isValidRange(fallback.firstMsgIdx, fallback.lastMsgIdx, messageCount))
-    return fallback;
-  return null;
-}
-function isValidRange(firstMsgIdx, lastMsgIdx, messageCount) {
-  return firstMsgIdx >= 0 && lastMsgIdx >= firstMsgIdx && lastMsgIdx < messageCount;
-}
-function cleanTitle(text, rangeRaw) {
-  if (!rangeRaw)
-    return text.trim();
-  return text.replace(rangeRaw, "").replace(/\bmsgs?\s*$/i, "").replace(/\bmessages?\s*$/i, "").replace(/[-\u2013\u2014:#[\]()[\]\s]+$/g, "").replace(/^\s*[-\u2013\u2014:#[\]()[\]\s]+/g, "").trim();
-}
-function rangesOverlap(aFirst, aLast, bFirst, bLast) {
-  return aFirst <= bLast && bFirst <= aLast;
-}
-function entryLabel(entry) {
-  const label = (entry.comment || entry.content.split(/\n+/, 1)[0] || entry.id).trim();
-  return label.length > 80 ? `${label.slice(0, 77)}...` : label;
-}
-function addDetail(details, detail) {
-  if (details.length < 3)
-    details.push(detail);
+function cleanTitle(text) {
+  return text.trim();
 }
 
 // src/backend/index.ts
@@ -4638,16 +4471,6 @@ async function notify(userId, tone, text, automation = false) {
   } catch (err) {
     warn(`toast delivery failed: ${describeError(err)}`);
   }
-}
-function importSkipSummary(result) {
-  const parts = [];
-  if (result.skippedNoRange)
-    parts.push(`${result.skippedNoRange} no range`);
-  if (result.skippedInvalidRange)
-    parts.push(`${result.skippedInvalidRange} invalid range`);
-  if (result.skippedDuplicate)
-    parts.push(`${result.skippedDuplicate} duplicate/overlap`);
-  return parts.length ? parts.join(", ") : "0 skipped";
 }
 var PUSH_DEBOUNCE_MS = 30;
 var pushTimers = new Map;
@@ -4745,33 +4568,6 @@ spindle.registerWorldInfoInterceptor(async (ctx) => {
     }
   }
   return disabled.length ? { disabled } : undefined;
-}, 90);
-spindle.registerInterceptor(async (messages, context) => {
-  try {
-    const chatId = context && typeof context === "object" && typeof context.chatId === "string" ? context.chatId : null;
-    if (!chatId)
-      return messages;
-    let userId = resolveUserId(chatId);
-    if (!userId) {
-      const bootstrap = getBootstrapUserId();
-      if (bootstrap) {
-        const chat = await spindle.chats.get(chatId, bootstrap).catch(() => null);
-        if (chat) {
-          rememberChatUser(chatId, bootstrap);
-          userId = bootstrap;
-        }
-      }
-    }
-    if (!userId)
-      return messages;
-    const settings = await loadSettings(userId);
-    if (!settings.enabled)
-      return messages;
-    return messages;
-  } catch (err) {
-    warn(`interceptor failed: ${describeError(err)}`);
-    return messages;
-  }
 }, 90);
 spindle.on("MESSAGE_SENT", async (payload, hostUserId) => {
   const p = payload;
@@ -5272,30 +5068,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
         await pushState(userId, msg.chatId);
         break;
       }
-      case "resync_hidden": {
-        const messages = await spindle.chat.getMessages(msg.chatId);
-        const coverage = await buildCoverage(msg.chatId, userId);
-        await syncHiddenForCoveredMessages(msg.chatId, messages, coverage, userId, true);
-        await pushState(userId, msg.chatId);
-        break;
-      }
-      case "import_attached_lorebooks": {
-        const result = await importAttachedLorebooks(msg.chatId, userId);
-        if (result.imported > 0) {
-          const settings = await loadSettings(userId);
-          const profile = settings.profiles.find((p) => p.id === settings.activeProfileId);
-          if (profile?.hideCoveredMessages || typeof result.hideThroughIdx === "number") {
-            const messages = await spindle.chat.getMessages(msg.chatId);
-            const coverage = await buildCoverage(msg.chatId, userId);
-            await syncHiddenForCoveredMessages(msg.chatId, messages, coverage, userId, true, result.hideThroughIdx);
-          }
-        }
-        const skipped = result.skippedDuplicate + result.skippedInvalidRange + result.skippedNoRange;
-        const text = result.imported > 0 ? `Imported ${result.imported} entr${result.imported === 1 ? "y" : "ies"} from attached lorebooks${skipped ? ` (${importSkipSummary(result)})` : ""}${result.details.length ? `; ${result.details.join("; ")}` : ""}` : result.scannedBooks === 0 ? "No other attached lorebooks found to import" : `No importable entries found (${importSkipSummary(result)})${result.details.length ? `; ${result.details.join("; ")}` : ""}`;
-        await notify(userId, result.imported > 0 ? "success" : "info", text);
-        await pushState(userId, msg.chatId);
-        break;
-      }
       case "prepare_adopt_lorebook": {
         const books = await listAdoptLorebookCandidates(msg.chatId, userId);
         send({ type: "adopt_lorebook_candidates", chatId: msg.chatId, books }, userId);
@@ -5367,17 +5139,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
           return 0;
         });
         const text = updated === 0 ? `Future entries will be ${msg.value ? "constant" : "keyword-triggered"}` : `Memoria flipped ${updated} entr${updated === 1 ? "y" : "ies"} to ${msg.value ? "constant" : "keyword-triggered"}`;
-        await notify(userId, "info", text);
-        await pushState(userId, msg.chatId);
-        break;
-      }
-      case "resync_visibility": {
-        const settings = await loadSettings(userId);
-        const profile = settings.profiles.find((p) => p.id === settings.activeProfileId);
-        const desiredHidden = profile ? profile.hideCoveredMessages : true;
-        const { unhidden, hidden } = await resyncVisibility(msg.chatId, userId, desiredHidden);
-        const total = unhidden + hidden;
-        const text = total === 0 ? "Memoria's shelf is already aligned, nya" : `Memoria resynced ${total} message${total === 1 ? "" : "s"} (${hidden} hidden, ${unhidden} unhidden)`;
         await notify(userId, "info", text);
         await pushState(userId, msg.chatId);
         break;
@@ -5571,9 +5332,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
 });
 registerBookAnomalyCallback((userId, tone, text) => {
   notify(userId, tone, text);
-});
-registerInjectionAnomalyCallback((userId, text) => {
-  notify(userId, "error", text);
 });
 registerHookEndpoints();
 info("LumiBooks loaded.");

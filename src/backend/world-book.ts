@@ -282,8 +282,8 @@ export async function getChatAttachedBookIds(chatId: string, userId: string): Pr
  * chat_world_book_ids (plus character/persona/global), but LumiBooks resolves
  * its book by its own lumibooks_chat_id tag - so a wholesale chat metadata
  * write by another actor can silently unbind the book (the host stops scanning
- * it, getActivated returns nothing, and injection drops everything) while the
- * book itself stays intact. Returns true if it re-bound.
+ * it, so outlet entries stop activating) while the book itself stays intact.
+ * Returns true if it re-bound.
  */
 export async function reassertChatBinding(chatId: string, userId: string): Promise<boolean> {
   const bookId = await findBookForChat(chatId, userId).catch(() => null);
