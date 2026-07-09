@@ -64,26 +64,6 @@ function renderStatus(host: HTMLElement, state: FrontendState, send: (m: Fronten
     "Uncompressed tail",
     `${state.coverage.uncoveredMessages} msgs, ~${formatTokens(state.coverage.approxUncoveredTokens)} tokens`,
   );
-  const profile = state.activeProfile;
-  const thresholds = document.createElement("div");
-  thresholds.style.gridColumn = "1 / -1";
-  thresholds.style.display = "flex";
-  thresholds.style.gap = "6px";
-  thresholds.style.flexWrap = "wrap";
-  thresholds.style.marginTop = "4px";
-  thresholds.append(
-    pill(`lag ${profile.lagValue}${profile.lagUnit === "tokens" ? "t" : "m"}`),
-    pill(`window ${profile.windowValue}${profile.windowUnit === "tokens" ? "t" : "m"}`),
-    pill(profile.chapterTargetUnit === "tokens"
-      ? `chapter ${profile.chapterTargetTokens}t`
-      : `chapter ${profile.chapterTargetPercent}%`),
-    pill(profile.arcTargetUnit === "tokens"
-      ? `arc ${profile.arcTargetTokens}t`
-      : `arc ${profile.arcTargetPercent}%`),
-    pill(state.coverage.lagSatisfied ? "lag ready" : "lag building", state.coverage.lagSatisfied ? "ok" : "warn"),
-    pill(state.coverage.windowAvailable ? "window ready" : "window building", state.coverage.windowAvailable ? "ok" : "warn"),
-  );
-  grid.appendChild(thresholds);
   sec.body.appendChild(grid);
 
   inflightBusyLabels.clear();
@@ -229,14 +209,14 @@ function renderActions(host: HTMLElement, state: FrontendState, send: (m: Fronte
     makeButton("File chapter", () => send({ type: "create_chapter", chatId }), {
       primary: true,
       disabled,
-      title: "Compress the oldest uncovered window into a new chapter using the current profile",
+      title: "Compress available uncompressed messages into a new chapter",
     }),
   );
   if (state.backlogChapters > 1) {
     row.append(
       makeButton(`File all chapters (${state.backlogChapters})`, () => send({ type: "create_all_chapters", chatId }), {
         disabled,
-        title: "Drain the chapter backlog - keeps filing chapters until the lag or window threshold blocks further compression",
+        title: "File available uncompressed messages into chapters",
       }),
     );
   }
@@ -250,7 +230,7 @@ function renderActions(host: HTMLElement, state: FrontendState, send: (m: Fronte
     row.append(
       makeButton(`File all arcs (${state.backlogArcs})`, () => send({ type: "create_all_arcs", chatId }), {
         disabled,
-        title: "Drain the arc backlog - keeps binding arcs until the configured arc trigger no longer fires",
+        title: "Bind available chapter groups into arcs",
       }),
     );
   }
@@ -283,7 +263,7 @@ function renderEntries(
   const arcs = state.arcs.filter((a) => !a.isRoot);
   const volumes = state.volumes.filter((v) => !v.isRoot);
   if (chapters.length + arcs.length + volumes.length === 0) {
-    sec.body.appendChild(textNode("Empty shelf for now. Memoria will start filing once the lag fills.", "lmb-empty"));
+    sec.body.appendChild(textNode("Empty shelf for now. File or adopt a chapter to begin.", "lmb-empty"));
     host.appendChild(sec.wrap);
     return;
   }

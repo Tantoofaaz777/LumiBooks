@@ -34,8 +34,8 @@ export function renderAboutTab(
 
   const how = section("How it works");
   const lines = [
-    "Tail messages stay uncompressed until they pass the lag.",
-    "Once the window fills, Memoria writes a chapter, hides the older chat history through that range, and sends active memories through your outlet.",
+    "You choose message ranges manually, then Memoria writes or binds them into chapters.",
+    "Filed chapters hide the older chat history through that range and send active memories through your outlet.",
     "Several chapters can be bound into a single arc that replaces them.",
     "Arcs can be pressed into a volume the same way, manually from the Make tab.",
     "Storage lives in a world book bound to the chat. Adopted books keep their original names.",
@@ -123,13 +123,6 @@ function renderExtras(
     host.appendChild(sec.wrap);
     return;
   }
-
-  sec.body.appendChild(checkbox({
-    checked: state.settings.showAutomationToasts,
-    label: "Automation toasts",
-    hint: "When off, Memoria's background runs stay quiet. Errors and your own actions still toast.",
-    onChange: (v) => send({ type: "save_settings", patch: { showAutomationToasts: v }, chatId: state.activeChatId }),
-  }));
 
   sec.body.appendChild(checkbox({
     checked: state.settings.forceConstantEntries,

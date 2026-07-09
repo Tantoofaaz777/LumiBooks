@@ -1187,15 +1187,6 @@ function renderStatus(host, state, send) {
     addRow(grid, "Character", state.activeCharacterName);
   addRow(grid, "Messages", `${state.coverage.totalMessages} (${state.coverage.coveredMessages} covered)`);
   addRow(grid, "Uncompressed tail", `${state.coverage.uncoveredMessages} msgs, ~${formatTokens(state.coverage.approxUncoveredTokens)} tokens`);
-  const profile = state.activeProfile;
-  const thresholds = document.createElement("div");
-  thresholds.style.gridColumn = "1 / -1";
-  thresholds.style.display = "flex";
-  thresholds.style.gap = "6px";
-  thresholds.style.flexWrap = "wrap";
-  thresholds.style.marginTop = "4px";
-  thresholds.append(pill(`lag ${profile.lagValue}${profile.lagUnit === "tokens" ? "t" : "m"}`), pill(`window ${profile.windowValue}${profile.windowUnit === "tokens" ? "t" : "m"}`), pill(profile.chapterTargetUnit === "tokens" ? `chapter ${profile.chapterTargetTokens}t` : `chapter ${profile.chapterTargetPercent}%`), pill(profile.arcTargetUnit === "tokens" ? `arc ${profile.arcTargetTokens}t` : `arc ${profile.arcTargetPercent}%`), pill(state.coverage.lagSatisfied ? "lag ready" : "lag building", state.coverage.lagSatisfied ? "ok" : "warn"), pill(state.coverage.windowAvailable ? "window ready" : "window building", state.coverage.windowAvailable ? "ok" : "warn"));
-  grid.appendChild(thresholds);
   sec.body.appendChild(grid);
   inflightBusyLabels.clear();
   for (const b of state.busy) {
@@ -1321,12 +1312,12 @@ function renderActions(host, state, send) {
   row.append(makeButton("File chapter", () => send({ type: "create_chapter", chatId }), {
     primary: true,
     disabled,
-    title: "Compress the oldest uncovered window into a new chapter using the current profile"
+    title: "Compress available uncompressed messages into a new chapter"
   }));
   if (state.backlogChapters > 1) {
     row.append(makeButton(`File all chapters (${state.backlogChapters})`, () => send({ type: "create_all_chapters", chatId }), {
       disabled,
-      title: "Drain the chapter backlog - keeps filing chapters until the lag or window threshold blocks further compression"
+      title: "File available uncompressed messages into chapters"
     }));
   }
   row.append(makeButton("Bind arc", () => send({ type: "create_arc", chatId }), {
@@ -1336,7 +1327,7 @@ function renderActions(host, state, send) {
   if (state.backlogArcs > 1) {
     row.append(makeButton(`File all arcs (${state.backlogArcs})`, () => send({ type: "create_all_arcs", chatId }), {
       disabled,
-      title: "Drain the arc backlog - keeps binding arcs until the configured arc trigger no longer fires"
+      title: "Bind available chapter groups into arcs"
     }));
   }
   if (!state.bookId) {
@@ -1362,7 +1353,7 @@ function renderEntries(host, state, ctx, send) {
   const arcs = state.arcs.filter((a) => !a.isRoot);
   const volumes = state.volumes.filter((v) => !v.isRoot);
   if (chapters.length + arcs.length + volumes.length === 0) {
-    sec.body.appendChild(textNode("Empty shelf for now. Memoria will start filing once the lag fills.", "lmb-empty"));
+    sec.body.appendChild(textNode("Empty shelf for now. File or adopt a chapter to begin.", "lmb-empty"));
     host.appendChild(sec.wrap);
     return;
   }
@@ -2116,8 +2107,6 @@ function renderProfileTab(host, state, ctx, send) {
     rest.setAttribute("inert", "");
   }
   host.appendChild(rest);
-  renderCompressionTargets(rest, profile, patch);
-  renderAutomation(rest, profile, patch);
   renderConnection(rest, state, profile, patch);
   renderSamplers(rest, state, profile, send);
   renderContext(rest, profile, patch);
@@ -2198,242 +2187,6 @@ function renderProfilePicker(host, state, ctx, send) {
     onChange: (v) => send({ type: "save_settings", patch: { enabled: v }, chatId: state.activeChatId })
   }));
   sec.body.appendChild(enableWrap.wrap);
-  host.appendChild(sec.wrap);
-}
-function renderAutomation(host, profile, patch) {
-  const sec = section("Automation");
-  const help = document.createElement("div");
-  help.className = "lmb-help";
-  help.textContent = "Everything in this section runs in the background after each generation. Manual actions in the Books and Make tabs always work regardless of these toggles.";
-  sec.body.appendChild(help);
-  sec.body.appendChild(checkbox({
-    checked: profile.autoCreate,
-    label: "Run automation",
-    hint: "Master toggle. When off, Memoria only acts on manual triggers.",
-    onChange: (v) => patch({ autoCreate: v })
-  }));
-  const subsWrap = document.createElement("div");
-  subsWrap.className = profile.autoCreate ? "lmb-subgroup" : "lmb-subgroup lmb-greyed";
-  sec.body.appendChild(subsWrap);
-  const chapterGroupTitle = document.createElement("div");
-  chapterGroupTitle.className = "lmb-subgroup-title";
-  chapterGroupTitle.textContent = "Auto-file chapters";
-  subsWrap.appendChild(chapterGroupTitle);
-  subsWrap.appendChild(checkbox({
-    checked: profile.autoCreateChapter,
-    label: "Enabled",
-    hint: "Compresses the oldest uncovered window into a chapter once thresholds are met.",
-    onChange: (v) => patch({ autoCreateChapter: v })
-  }));
-  const chapterFields = document.createElement("div");
-  chapterFields.className = profile.autoCreateChapter ? "" : "lmb-greyed";
-  subsWrap.appendChild(chapterFields);
-  const lagGrid = document.createElement("div");
-  lagGrid.className = "lmb-grid-2";
-  lagGrid.append(labelled("Lag unit", select({
-    value: profile.lagUnit,
-    options: [
-      { value: "messages", label: "messages" },
-      { value: "tokens", label: "tokens" }
-    ],
-    onChange: (v) => patch({ lagUnit: v === "tokens" ? "tokens" : "messages" })
-  })), labelled(profile.lagUnit === "tokens" ? "Lag tokens" : "Lag messages", numberInput({
-    value: profile.lagValue,
-    min: 0,
-    max: profile.lagUnit === "tokens" ? 1e6 : 1e5,
-    step: profile.lagUnit === "tokens" ? 50 : 1,
-    defaultValue: PROFILE_DEFAULTS.lagValue,
-    onBlur: (v) => patch({ lagValue: v ?? PROFILE_DEFAULTS.lagValue })
-  })));
-  chapterFields.appendChild(lagGrid);
-  const scheduleHint = document.createElement("div");
-  scheduleHint.className = "lmb-field-hint";
-  scheduleHint.textContent = "Lag is the most-recent portion Memoria leaves uncompressed. Once the lag is full and there's a window's worth of older messages behind it, Memoria files them. In token mode, the lag bucket includes messages up to and including the one that hits the token limit.";
-  chapterFields.appendChild(scheduleHint);
-  const arcGroupTitle = document.createElement("div");
-  arcGroupTitle.className = "lmb-subgroup-title";
-  arcGroupTitle.style.marginTop = "6px";
-  arcGroupTitle.textContent = "Auto-bind arcs";
-  subsWrap.appendChild(arcGroupTitle);
-  subsWrap.appendChild(checkbox({
-    checked: profile.autoCreateArc,
-    label: "Enabled",
-    hint: "Rolls oldest chapters into an arc once the threshold is met, leaving the recent ones as lag.",
-    onChange: (v) => patch({ autoCreateArc: v })
-  }));
-  const arcFields = document.createElement("div");
-  arcFields.className = profile.autoCreateArc ? "" : "lmb-greyed";
-  subsWrap.appendChild(arcFields);
-  const arcGrid = document.createElement("div");
-  arcGrid.className = "lmb-grid-2";
-  arcGrid.append(labelled("Trigger", select({
-    value: profile.arcTrigger,
-    options: [
-      { value: "chapters", label: "after N chapters" },
-      { value: "tokens", label: "after N tokens" },
-      { value: "manual", label: "manual only" }
-    ],
-    onChange: (v) => patch({ arcTrigger: v === "tokens" || v === "manual" ? v : "chapters" })
-  })), labelled(profile.arcTrigger === "tokens" ? "Lag tokens" : "Lag chapters", numberInput({
-    value: profile.arcTrigger === "tokens" ? profile.arcLagTokens : profile.arcLagChapters,
-    min: 0,
-    max: profile.arcTrigger === "tokens" ? 200000 : 100,
-    step: profile.arcTrigger === "tokens" ? 100 : 1,
-    disabled: profile.arcTrigger === "manual",
-    defaultValue: profile.arcTrigger === "tokens" ? PROFILE_DEFAULTS.arcLagTokens : PROFILE_DEFAULTS.arcLagChapters,
-    onBlur: (v) => {
-      if (v === null)
-        return;
-      if (profile.arcTrigger === "tokens")
-        patch({ arcLagTokens: v });
-      else
-        patch({ arcLagChapters: v });
-    }
-  })));
-  arcFields.appendChild(arcGrid);
-  const arcHint = document.createElement("div");
-  arcHint.className = "lmb-field-hint";
-  arcHint.textContent = "Arc lag reserves the most-recent chapters and never binds them, so you keep some chapter-level detail.";
-  arcFields.appendChild(arcHint);
-  host.appendChild(sec.wrap);
-}
-function renderCompressionTargets(host, profile, patch) {
-  const sec = section("Compression targets");
-  const help = document.createElement("div");
-  help.className = "lmb-help";
-  help.textContent = "How much Memoria compresses each chapter and arc, and how much input goes into each. Used by both manual and automatic triggers.";
-  sec.body.appendChild(help);
-  const chapterTitle = document.createElement("div");
-  chapterTitle.className = "lmb-subgroup-title";
-  chapterTitle.textContent = "Chapter";
-  sec.body.appendChild(chapterTitle);
-  const windowGrid = document.createElement("div");
-  windowGrid.className = "lmb-grid-2";
-  windowGrid.append(labelled("Window unit", select({
-    value: profile.windowUnit,
-    options: [
-      { value: "messages", label: "messages" },
-      { value: "tokens", label: "tokens" }
-    ],
-    onChange: (v) => patch({ windowUnit: v === "tokens" ? "tokens" : "messages" })
-  })), labelled(profile.windowUnit === "tokens" ? "Tokens to chapterize" : "Messages to chapterize", numberInput({
-    value: profile.windowValue,
-    min: 1,
-    max: profile.windowUnit === "tokens" ? 1e6 : 1e5,
-    step: profile.windowUnit === "tokens" ? 100 : 1,
-    defaultValue: PROFILE_DEFAULTS.windowValue,
-    onBlur: (v) => patch({ windowValue: v ?? PROFILE_DEFAULTS.windowValue })
-  })));
-  sec.body.appendChild(windowGrid);
-  const windowHint = document.createElement("div");
-  windowHint.className = "lmb-field-hint";
-  windowHint.textContent = "In token mode, the window includes messages up to and including the one that hits the token limit.";
-  sec.body.appendChild(windowHint);
-  const chapterRatioGrid = document.createElement("div");
-  chapterRatioGrid.className = "lmb-grid-2";
-  chapterRatioGrid.append(labelled("Chapter ratio", select({
-    value: profile.chapterTargetUnit,
-    options: [
-      { value: "percent", label: "% of input" },
-      { value: "tokens", label: "token budget" }
-    ],
-    onChange: (v) => patch({ chapterTargetUnit: v === "tokens" ? "tokens" : "percent" })
-  })), labelled(profile.chapterTargetUnit === "tokens" ? "Chapter tokens" : "Chapter %", numberInput({
-    value: profile.chapterTargetUnit === "tokens" ? profile.chapterTargetTokens : profile.chapterTargetPercent,
-    min: profile.chapterTargetUnit === "tokens" ? 50 : 2,
-    max: profile.chapterTargetUnit === "tokens" ? 1e6 : 90,
-    step: profile.chapterTargetUnit === "tokens" ? 50 : 1,
-    defaultValue: profile.chapterTargetUnit === "tokens" ? PROFILE_DEFAULTS.chapterTargetTokens : PROFILE_DEFAULTS.chapterTargetPercent,
-    onBlur: (v) => {
-      if (v === null)
-        return;
-      if (profile.chapterTargetUnit === "tokens")
-        patch({ chapterTargetTokens: v });
-      else
-        patch({ chapterTargetPercent: v });
-    }
-  })));
-  sec.body.appendChild(chapterRatioGrid);
-  const arcTitle = document.createElement("div");
-  arcTitle.className = "lmb-subgroup-title";
-  arcTitle.style.marginTop = "6px";
-  arcTitle.textContent = "Arc";
-  sec.body.appendChild(arcTitle);
-  sec.body.appendChild(labelled(profile.arcTrigger === "tokens" ? "Tokens to bind" : "Chapters to bind", numberInput({
-    value: profile.arcTrigger === "tokens" ? profile.arcAfterTokens : profile.arcAfterChapters,
-    min: profile.arcTrigger === "tokens" ? 500 : 2,
-    max: profile.arcTrigger === "tokens" ? 200000 : 100,
-    step: profile.arcTrigger === "tokens" ? 500 : 1,
-    disabled: profile.arcTrigger === "manual",
-    defaultValue: profile.arcTrigger === "tokens" ? PROFILE_DEFAULTS.arcAfterTokens : PROFILE_DEFAULTS.arcAfterChapters,
-    onBlur: (v) => {
-      if (v === null)
-        return;
-      if (profile.arcTrigger === "tokens")
-        patch({ arcAfterTokens: v });
-      else
-        patch({ arcAfterChapters: v });
-    }
-  })));
-  const arcRatioGrid = document.createElement("div");
-  arcRatioGrid.className = "lmb-grid-2";
-  arcRatioGrid.append(labelled("Arc ratio", select({
-    value: profile.arcTargetUnit,
-    options: [
-      { value: "percent", label: "% of input" },
-      { value: "tokens", label: "token budget" }
-    ],
-    onChange: (v) => patch({ arcTargetUnit: v === "tokens" ? "tokens" : "percent" })
-  })), labelled(profile.arcTargetUnit === "tokens" ? "Arc tokens" : "Arc %", numberInput({
-    value: profile.arcTargetUnit === "tokens" ? profile.arcTargetTokens : profile.arcTargetPercent,
-    min: profile.arcTargetUnit === "tokens" ? 50 : 5,
-    max: profile.arcTargetUnit === "tokens" ? 1e6 : 95,
-    step: profile.arcTargetUnit === "tokens" ? 50 : 1,
-    defaultValue: profile.arcTargetUnit === "tokens" ? PROFILE_DEFAULTS.arcTargetTokens : PROFILE_DEFAULTS.arcTargetPercent,
-    onBlur: (v) => {
-      if (v === null)
-        return;
-      if (profile.arcTargetUnit === "tokens")
-        patch({ arcTargetTokens: v });
-      else
-        patch({ arcTargetPercent: v });
-    }
-  })));
-  sec.body.appendChild(arcRatioGrid);
-  const volumeTitle = document.createElement("div");
-  volumeTitle.className = "lmb-subgroup-title";
-  volumeTitle.style.marginTop = "6px";
-  volumeTitle.textContent = "Volume";
-  sec.body.appendChild(volumeTitle);
-  const volumeHint = document.createElement("div");
-  volumeHint.className = "lmb-field-hint";
-  volumeHint.textContent = "Volumes are manual only. Turn arcs into a volume from the Make tab.";
-  sec.body.appendChild(volumeHint);
-  const volumeRatioGrid = document.createElement("div");
-  volumeRatioGrid.className = "lmb-grid-2";
-  volumeRatioGrid.append(labelled("Volume ratio", select({
-    value: profile.volumeTargetUnit,
-    options: [
-      { value: "percent", label: "% of input" },
-      { value: "tokens", label: "token budget" }
-    ],
-    onChange: (v) => patch({ volumeTargetUnit: v === "tokens" ? "tokens" : "percent" })
-  })), labelled(profile.volumeTargetUnit === "tokens" ? "Volume tokens" : "Volume %", numberInput({
-    value: profile.volumeTargetUnit === "tokens" ? profile.volumeTargetTokens : profile.volumeTargetPercent,
-    min: profile.volumeTargetUnit === "tokens" ? 50 : 5,
-    max: profile.volumeTargetUnit === "tokens" ? 1e6 : 95,
-    step: profile.volumeTargetUnit === "tokens" ? 50 : 1,
-    defaultValue: profile.volumeTargetUnit === "tokens" ? PROFILE_DEFAULTS.volumeTargetTokens : PROFILE_DEFAULTS.volumeTargetPercent,
-    onBlur: (v) => {
-      if (v === null)
-        return;
-      if (profile.volumeTargetUnit === "tokens")
-        patch({ volumeTargetTokens: v });
-      else
-        patch({ volumeTargetPercent: v });
-    }
-  })));
-  sec.body.appendChild(volumeRatioGrid);
   host.appendChild(sec.wrap);
 }
 function renderConnection(host, state, profile, patch) {
@@ -2972,8 +2725,8 @@ function renderAboutTab(host, state, send) {
   host.appendChild(hero.wrap);
   const how = section("How it works");
   const lines = [
-    "Tail messages stay uncompressed until they pass the lag.",
-    "Once the window fills, Memoria writes a chapter, hides the older chat history through that range, and sends active memories through your outlet.",
+    "You choose message ranges manually, then Memoria writes or binds them into chapters.",
+    "Filed chapters hide the older chat history through that range and send active memories through your outlet.",
     "Several chapters can be bound into a single arc that replaces them.",
     "Arcs can be pressed into a volume the same way, manually from the Make tab.",
     "Storage lives in a world book bound to the chat. Adopted books keep their original names."
@@ -3038,12 +2791,6 @@ function renderExtras(host, state, send) {
     host.appendChild(sec.wrap);
     return;
   }
-  sec.body.appendChild(checkbox({
-    checked: state.settings.showAutomationToasts,
-    label: "Automation toasts",
-    hint: "When off, Memoria's background runs stay quiet. Errors and your own actions still toast.",
-    onChange: (v) => send({ type: "save_settings", patch: { showAutomationToasts: v }, chatId: state.activeChatId })
-  }));
   sec.body.appendChild(checkbox({
     checked: state.settings.forceConstantEntries,
     label: "Force constant entries",
