@@ -320,45 +320,51 @@ var STYLES = `
   width: 100%;
 }
 .lmb-textarea-expand-wrap > textarea {
-  padding-right: 34px;
+  width: 100%;
+  box-sizing: border-box;
 }
 .lmb-textarea-expand-btn {
   position: absolute;
   top: 5px;
   right: 5px;
-  width: 24px;
-  height: 24px;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 5px;
+  width: var(--lumiverse-btn-icon-sm, 28px);
+  height: var(--lumiverse-btn-icon-sm, 28px);
+  padding: 0;
   border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.12));
+  border-radius: var(--lumiverse-radius-sm, 5px);
   background: var(--lumiverse-bg, #0f0d15);
   color: var(--lumiverse-text-dim, rgba(221,226,234,0.65));
   cursor: pointer;
   opacity: 0;
-  transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
-  z-index: 1;
+  transition: all var(--lumiverse-transition-fast, 0.15s ease);
 }
 .lmb-textarea-expand-wrap:hover .lmb-textarea-expand-btn,
 .lmb-textarea-expand-wrap:focus-within .lmb-textarea-expand-btn {
   opacity: 1;
 }
-.lmb-textarea-expand-btn:hover,
-.lmb-textarea-expand-btn:focus-visible {
+.lmb-textarea-expand-btn:hover:not(:disabled) {
   opacity: 1;
   color: var(--lumiverse-primary, #6b8ff0);
   border-color: var(--lumiverse-primary, #6b8ff0);
-  outline: none;
+  background: var(--lumiverse-bg, #0f0d15);
 }
 .lmb-textarea-expand-btn svg {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
   fill: none;
   stroke: currentColor;
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+@media (hover: none), (pointer: coarse) {
+  .lmb-textarea-expand-btn {
+    opacity: 1;
+  }
 }
 
 .lmb-select {
@@ -912,11 +918,11 @@ function expandableTextArea(ctx, title, opts) {
   expandBtn.title = "Expand editor";
   expandBtn.setAttribute("aria-label", "Expand editor");
   expandBtn.innerHTML = `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M15 3h6v6"/>
-      <path d="M21 3l-7 7"/>
-      <path d="M9 21H3v-6"/>
-      <path d="M3 21l7-7"/>
+    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+      stroke-linejoin="round" aria-hidden="true">
+      <path d="M15 3h6v6"/><path d="m21 3-7 7"/>
+      <path d="m3 21 7-7"/><path d="M9 21H3v-6"/>
     </svg>
   `;
   expandBtn.addEventListener("mousedown", (e) => e.preventDefault());
