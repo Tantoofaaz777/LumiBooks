@@ -6,11 +6,10 @@ import {
   makeButton,
   section,
   span,
-  textArea,
   textInput,
   textNode,
 } from "../components";
-import { confirmDelete, openEditModal } from "../modals";
+import { confirmDelete, expandableTextArea, openEditModal } from "../modals";
 
 const inflightBusyLabels = new Map<string, HTMLSpanElement>();
 
@@ -42,7 +41,7 @@ export function renderBooksTab(
 
   renderStatus(host, state, send);
   renderFailure(host, state, send);
-  renderPreviews(host, state, send);
+  renderPreviews(host, state, ctx, send);
   renderEntries(host, state, ctx, send);
 }
 
@@ -116,16 +115,16 @@ function renderFailure(host: HTMLElement, state: FrontendState, send: (m: Fronte
   host.appendChild(sec);
 }
 
-function renderPreviews(host: HTMLElement, state: FrontendState, send: (m: FrontendToBackend) => void): void {
+function renderPreviews(host: HTMLElement, state: FrontendState, ctx: SpindleFrontendContext, send: (m: FrontendToBackend) => void): void {
   if (state.pendingPreviews.length === 0 || !state.activeChatId) return;
   const sec = section(`Pending previews (${state.pendingPreviews.length})`);
   for (const p of state.pendingPreviews) {
-    sec.body.appendChild(renderPreviewCard(p, state.activeChatId, send));
+    sec.body.appendChild(renderPreviewCard(p, state.activeChatId, ctx, send));
   }
   host.appendChild(sec.wrap);
 }
 
-function renderPreviewCard(preview: PendingPreview, chatId: string, send: (m: FrontendToBackend) => void): HTMLElement {
+function renderPreviewCard(preview: PendingPreview, chatId: string, ctx: SpindleFrontendContext, send: (m: FrontendToBackend) => void): HTMLElement {
   const card = document.createElement("div");
   card.className = "lmb-preview-card";
 
@@ -159,8 +158,12 @@ function renderPreviewCard(preview: PendingPreview, chatId: string, send: (m: Fr
   card.appendChild(titleField.wrap);
 
   const contentField = field("Content");
-  const contentInput = textArea({ value: preview.content, rows: 10, onChange: syncEdit });
-  contentField.body.appendChild(contentInput);
+  const { wrap: contentInputWrap, textarea: contentInput } = expandableTextArea(ctx, `${preview.kind} preview content`, {
+    value: preview.content,
+    rows: 10,
+    onChange: syncEdit,
+  });
+  contentField.body.appendChild(contentInputWrap);
   card.appendChild(contentField.wrap);
 
   if (preview.shortComment) {

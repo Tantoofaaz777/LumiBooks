@@ -14,6 +14,60 @@ export interface EditEntryFields {
   content: string;
 }
 
+export function expandableTextArea(
+  ctx: SpindleFrontendContext,
+  title: string,
+  opts: Parameters<typeof textArea>[0],
+): { wrap: HTMLDivElement; textarea: HTMLTextAreaElement } {
+  const wrap = document.createElement("div");
+  wrap.className = "lmb-textarea-expand-wrap";
+  const textarea = textArea(opts);
+  const expandBtn = document.createElement("button");
+  expandBtn.type = "button";
+  expandBtn.className = "lmb-textarea-expand-btn";
+  expandBtn.title = "Expand editor";
+  expandBtn.setAttribute("aria-label", "Expand editor");
+  expandBtn.innerHTML = `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M15 3h6v6"/>
+      <path d="M21 3l-7 7"/>
+      <path d="M9 21H3v-6"/>
+      <path d="M3 21l7-7"/>
+    </svg>
+  `;
+  expandBtn.addEventListener("mousedown", (e) => e.preventDefault());
+  expandBtn.addEventListener("click", () => openExpandedTextEditor(ctx, title, textarea));
+  wrap.append(textarea, expandBtn);
+  return { wrap, textarea };
+}
+
+function openExpandedTextEditor(ctx: SpindleFrontendContext, title: string, source: HTMLTextAreaElement): void {
+  const handle = ctx.ui.showModal({ title, width: 980, maxHeight: 820 });
+  const root = document.createElement("div");
+  root.className = "lmb-expanded-editor";
+  handle.root.appendChild(root);
+
+  const editor = textArea({ value: source.value, rows: 28 });
+  editor.classList.add("lmb-expanded-editor__textarea");
+  editor.selectionStart = source.selectionStart;
+  editor.selectionEnd = source.selectionEnd;
+  editor.addEventListener("input", () => {
+    source.value = editor.value;
+    source.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  editor.addEventListener("select", () => {
+    source.selectionStart = editor.selectionStart;
+    source.selectionEnd = editor.selectionEnd;
+  });
+  root.appendChild(editor);
+
+  const actions = document.createElement("div");
+  actions.className = "lmb-modal-actions";
+  actions.append(makeButton("Close", () => handle.dismiss(), { primary: true }));
+  root.appendChild(actions);
+  setTimeout(() => editor.focus(), 0);
+}
+
 export function openEditModal(
   ctx: SpindleFrontendContext,
   title: string,
@@ -39,8 +93,11 @@ export function openEditModal(
   const cLbl = document.createElement("div");
   cLbl.className = "lmb-field-label";
   cLbl.textContent = "Content";
-  const contentInput = textArea({ value: fields.content, rows: 16 });
-  contentWrap.append(cLbl, contentInput);
+  const { wrap: contentInputWrap, textarea: contentInput } = expandableTextArea(ctx, `${title} content`, {
+    value: fields.content,
+    rows: 16,
+  });
+  contentWrap.append(cLbl, contentInputWrap);
   form.appendChild(contentWrap);
 
   const actions = document.createElement("div");

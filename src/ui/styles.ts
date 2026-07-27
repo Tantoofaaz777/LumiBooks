@@ -314,6 +314,65 @@ export const STYLES = `
   font-size: 12px;
 }
 
+.lmb-textarea-expand-wrap {
+  position: relative;
+  width: 100%;
+}
+.lmb-textarea-expand-wrap > textarea {
+  padding-right: 34px;
+}
+.lmb-textarea-expand-btn {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.12));
+  background: var(--lumiverse-bg, #0f0d15);
+  color: var(--lumiverse-text-dim, rgba(221,226,234,0.65));
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
+  z-index: 1;
+}
+.lmb-textarea-expand-wrap:hover .lmb-textarea-expand-btn,
+.lmb-textarea-expand-wrap:focus-within .lmb-textarea-expand-btn {
+  opacity: 1;
+}
+.lmb-textarea-expand-btn:hover,
+.lmb-textarea-expand-btn:focus-visible {
+  opacity: 1;
+  color: var(--lumiverse-primary, #6b8ff0);
+  border-color: var(--lumiverse-primary, #6b8ff0);
+  outline: none;
+}
+.lmb-textarea-expand-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.lmb-expanded-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 12px 12px 12px;
+  height: min(760px, calc(100vh - 120px));
+}
+.lmb-expanded-editor__textarea {
+  flex: 1 1 auto;
+  min-height: 0;
+  resize: none;
+}
+
 .lmb-select {
   width: 100%;
   appearance: none;

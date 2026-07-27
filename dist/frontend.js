@@ -315,6 +315,65 @@ var STYLES = `
   font-size: 12px;
 }
 
+.lmb-textarea-expand-wrap {
+  position: relative;
+  width: 100%;
+}
+.lmb-textarea-expand-wrap > textarea {
+  padding-right: 34px;
+}
+.lmb-textarea-expand-btn {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.12));
+  background: var(--lumiverse-bg, #0f0d15);
+  color: var(--lumiverse-text-dim, rgba(221,226,234,0.65));
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
+  z-index: 1;
+}
+.lmb-textarea-expand-wrap:hover .lmb-textarea-expand-btn,
+.lmb-textarea-expand-wrap:focus-within .lmb-textarea-expand-btn {
+  opacity: 1;
+}
+.lmb-textarea-expand-btn:hover,
+.lmb-textarea-expand-btn:focus-visible {
+  opacity: 1;
+  color: var(--lumiverse-primary, #6b8ff0);
+  border-color: var(--lumiverse-primary, #6b8ff0);
+  outline: none;
+}
+.lmb-textarea-expand-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.lmb-expanded-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 12px 12px 12px;
+  height: min(760px, calc(100vh - 120px));
+}
+.lmb-expanded-editor__textarea {
+  flex: 1 1 auto;
+  min-height: 0;
+  resize: none;
+}
+
 .lmb-select {
   width: 100%;
   appearance: none;
@@ -854,6 +913,52 @@ function preserveScroll(anchor, fn) {
 var HIDDEN_ICON = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a19.77 19.77 0 0 1 4.22-5.42"/><path d="M22.54 16.88A10.94 10.94 0 0 0 23 12s-4-8-11-8a10.84 10.84 0 0 0-5.34 1.4"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
 
 // src/ui/modals.ts
+function expandableTextArea(ctx, title, opts) {
+  const wrap = document.createElement("div");
+  wrap.className = "lmb-textarea-expand-wrap";
+  const textarea = textArea(opts);
+  const expandBtn = document.createElement("button");
+  expandBtn.type = "button";
+  expandBtn.className = "lmb-textarea-expand-btn";
+  expandBtn.title = "Expand editor";
+  expandBtn.setAttribute("aria-label", "Expand editor");
+  expandBtn.innerHTML = `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M15 3h6v6"/>
+      <path d="M21 3l-7 7"/>
+      <path d="M9 21H3v-6"/>
+      <path d="M3 21l7-7"/>
+    </svg>
+  `;
+  expandBtn.addEventListener("mousedown", (e) => e.preventDefault());
+  expandBtn.addEventListener("click", () => openExpandedTextEditor(ctx, title, textarea));
+  wrap.append(textarea, expandBtn);
+  return { wrap, textarea };
+}
+function openExpandedTextEditor(ctx, title, source) {
+  const handle = ctx.ui.showModal({ title, width: 980, maxHeight: 820 });
+  const root = document.createElement("div");
+  root.className = "lmb-expanded-editor";
+  handle.root.appendChild(root);
+  const editor = textArea({ value: source.value, rows: 28 });
+  editor.classList.add("lmb-expanded-editor__textarea");
+  editor.selectionStart = source.selectionStart;
+  editor.selectionEnd = source.selectionEnd;
+  editor.addEventListener("input", () => {
+    source.value = editor.value;
+    source.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  editor.addEventListener("select", () => {
+    source.selectionStart = editor.selectionStart;
+    source.selectionEnd = editor.selectionEnd;
+  });
+  root.appendChild(editor);
+  const actions = document.createElement("div");
+  actions.className = "lmb-modal-actions";
+  actions.append(makeButton("Close", () => handle.dismiss(), { primary: true }));
+  root.appendChild(actions);
+  setTimeout(() => editor.focus(), 0);
+}
 function openEditModal(ctx, title, fields, onSave) {
   const handle = ctx.ui.showModal({ title, width: 640, maxHeight: 720 });
   const form = document.createElement("div");
@@ -872,8 +977,11 @@ function openEditModal(ctx, title, fields, onSave) {
   const cLbl = document.createElement("div");
   cLbl.className = "lmb-field-label";
   cLbl.textContent = "Content";
-  const contentInput = textArea({ value: fields.content, rows: 16 });
-  contentWrap.append(cLbl, contentInput);
+  const { wrap: contentInputWrap, textarea: contentInput } = expandableTextArea(ctx, `${title} content`, {
+    value: fields.content,
+    rows: 16
+  });
+  contentWrap.append(cLbl, contentInputWrap);
   form.appendChild(contentWrap);
   const actions = document.createElement("div");
   actions.className = "lmb-modal-actions";
@@ -1190,7 +1298,7 @@ function renderBooksTab(host, state, ctx, send) {
   host.replaceChildren();
   renderStatus(host, state, send);
   renderFailure(host, state, send);
-  renderPreviews(host, state, send);
+  renderPreviews(host, state, ctx, send);
   renderEntries(host, state, ctx, send);
 }
 function renderStatus(host, state, send) {
@@ -1252,16 +1360,16 @@ function renderFailure(host, state, send) {
   sec.append(head, detail, row);
   host.appendChild(sec);
 }
-function renderPreviews(host, state, send) {
+function renderPreviews(host, state, ctx, send) {
   if (state.pendingPreviews.length === 0 || !state.activeChatId)
     return;
   const sec = section(`Pending previews (${state.pendingPreviews.length})`);
   for (const p of state.pendingPreviews) {
-    sec.body.appendChild(renderPreviewCard(p, state.activeChatId, send));
+    sec.body.appendChild(renderPreviewCard(p, state.activeChatId, ctx, send));
   }
   host.appendChild(sec.wrap);
 }
-function renderPreviewCard(preview, chatId, send) {
+function renderPreviewCard(preview, chatId, ctx, send) {
   const card = document.createElement("div");
   card.className = "lmb-preview-card";
   const head = document.createElement("div");
@@ -1294,8 +1402,12 @@ function renderPreviewCard(preview, chatId, send) {
   titleField.body.appendChild(titleInput);
   card.appendChild(titleField.wrap);
   const contentField = field("Content");
-  const contentInput = textArea({ value: preview.content, rows: 10, onChange: syncEdit });
-  contentField.body.appendChild(contentInput);
+  const { wrap: contentInputWrap, textarea: contentInput } = expandableTextArea(ctx, `${preview.kind} preview content`, {
+    value: preview.content,
+    rows: 10,
+    onChange: syncEdit
+  });
+  contentField.body.appendChild(contentInputWrap);
   card.appendChild(contentField.wrap);
   if (preview.shortComment) {
     const cm = document.createElement("div");
