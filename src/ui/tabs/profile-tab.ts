@@ -290,7 +290,7 @@ function renderRegex(
 
 function renderContext(host: HTMLElement, profile: LMBProfile, patch: (p: Partial<LMBProfile>) => void): void {
   const sec = section("Context");
-  const f = field("Chapter context");
+  const f = field("Previous context");
   f.body.appendChild(
     numberInput({
       value: profile.previousMemoriesCount,
@@ -302,7 +302,7 @@ function renderContext(host: HTMLElement, profile: LMBProfile, patch: (p: Partia
   );
   const hint = document.createElement("div");
   hint.className = "lmb-field-hint";
-  hint.textContent = "How many recent chapters to include as continuity context.";
+  hint.textContent = "How many recent active memories to include when generating a chapter.";
   f.body.appendChild(hint);
   sec.body.appendChild(f.wrap);
 

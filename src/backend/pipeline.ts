@@ -13,6 +13,7 @@ import { createChapterEntry, deleteEntry, ensureBookForChat, invalidateBookCache
 import { loadSettings } from "./storage";
 import { formatEntryName, savedMemoryContent } from "./naming";
 import { inheritedStoryOrder, nextStoryOrder, storyOrderOf } from "./story-order";
+import { selectPreviousContextEntries } from "./previous-context";
 import {
   AbortedSummarizerError,
   FatalSummarizerError,
@@ -369,12 +370,12 @@ async function runChapter(
   phraseToast(userId, "fire");
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
-  const chapters = coverage.activeEntries
-    .filter((e) => e.meta.tier === 1 && typeof e.meta.firstMsgIdx === "number")
-    .sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
-  const previousMemories = profile.previousMemoriesCount > 0
-    ? chapters.slice(-profile.previousMemoriesCount)
-    : [];
+  const previousMemories = selectPreviousContextEntries(
+    entries,
+    coverage.activeEntries,
+    profile.previousMemoriesCount,
+    replacesEntryId,
+  );
   const outcome = await runWithRetry(profile.retryCount + 1, async () => {
     const controller = new AbortController();
     registerAborter(userId, chatId, "chapter", controller);

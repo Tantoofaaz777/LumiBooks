@@ -1229,6 +1229,30 @@ async function syncStoryOrderForChat(chatId, userId) {
     invalidateBookCache(userId, chatId);
 }
 
+// src/backend/previous-context.ts
+function compareChronologically(left, right) {
+  const orderDifference = storyOrderOf(left) - storyOrderOf(right);
+  if (orderDifference !== 0)
+    return orderDifference;
+  const createdDifference = left.meta.createdAt - right.meta.createdAt;
+  if (createdDifference !== 0)
+    return createdDifference;
+  return left.raw.id.localeCompare(right.raw.id);
+}
+function selectPreviousContextEntries(allEntries, activeEntries, limit, replacesEntryId) {
+  const count = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
+  if (count === 0)
+    return [];
+  let anchorOrder = Number.POSITIVE_INFINITY;
+  if (replacesEntryId) {
+    const replacedEntry = allEntries.find((entry) => entry.raw.id === replacesEntryId);
+    if (!replacedEntry)
+      return [];
+    anchorOrder = storyOrderOf(replacedEntry);
+  }
+  return activeEntries.filter((entry) => entry.raw.id !== replacesEntryId).filter((entry) => storyOrderOf(entry) < anchorOrder).filter((entry) => (entry.raw.content || "").trim().length > 0).slice().sort(compareChronologically).slice(-count);
+}
+
 // src/backend/regex.ts
 var TTL_MS = 5000;
 var cachedScripts = new Map;
@@ -2368,8 +2392,7 @@ async function runChapter(chatId, profile, settings, userId, allMessages, window
   phraseToast(userId, "fire");
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
-  const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && typeof e.meta.firstMsgIdx === "number").sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
-  const previousMemories = profile.previousMemoriesCount > 0 ? chapters.slice(-profile.previousMemoriesCount) : [];
+  const previousMemories = selectPreviousContextEntries(entries, coverage.activeEntries, profile.previousMemoriesCount, replacesEntryId);
   const outcome = await runWithRetry(profile.retryCount + 1, async () => {
     const controller = new AbortController;
     registerAborter(userId, chatId, "chapter", controller);
