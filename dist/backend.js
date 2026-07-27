@@ -312,14 +312,49 @@ function describeError(err) {
 // src/backend/storage.ts
 var warnedNewerForUser = new Set;
 var writeLocks = new Map;
+var SETTINGS_READ_RETRY_DELAYS_MS = [100, 250];
+var SETTINGS_READ_ERROR = "Could not read LumiBooks settings. Nothing was saved; try again.";
 function withSettingsLock(userId, fn) {
   const prev = writeLocks.get(userId) ?? Promise.resolve();
   const next = prev.then(fn, fn);
   writeLocks.set(userId, next.catch(() => {}));
   return next;
 }
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+async function readSettingsRaw(userId) {
+  let lastError;
+  let observedExistingFile = false;
+  for (let attempt = 0;attempt <= SETTINGS_READ_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      const status = await spindle.userStorage.stat(SETTINGS_PATH, userId);
+      if (!status.exists) {
+        if (observedExistingFile) {
+          throw new Error("settings.json disappeared during a read attempt");
+        }
+        return DEFAULT_SETTINGS;
+      }
+      observedExistingFile = true;
+      if (!status.isFile)
+        throw new Error("settings.json is not a file");
+      const parsed = JSON.parse(await spindle.userStorage.read(SETTINGS_PATH, userId));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("settings.json does not contain a JSON object");
+      }
+      return parsed;
+    } catch (err) {
+      lastError = err;
+      const delay = SETTINGS_READ_RETRY_DELAYS_MS[attempt];
+      if (delay !== undefined)
+        await wait(delay);
+    }
+  }
+  warn(`settings read failed after retries for user ${userId}: ${describeError(lastError)}`);
+  throw new Error(SETTINGS_READ_ERROR);
+}
 async function loadSettings(userId) {
-  const raw = await spindle.userStorage.getJson(SETTINGS_PATH, { fallback: DEFAULT_SETTINGS, userId }).catch(() => DEFAULT_SETTINGS);
+  const raw = await readSettingsRaw(userId);
   const diskVersion = diskVersionFor(raw);
   if (diskVersion > STORAGE_VERSION && !warnedNewerForUser.has(userId)) {
     warnedNewerForUser.add(userId);
