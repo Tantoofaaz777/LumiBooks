@@ -179,6 +179,7 @@ function normalizeEntryMeta(raw) {
     sceneNumber: typeof v.sceneNumber === "number" && Number.isFinite(v.sceneNumber) && v.sceneNumber > 0 ? Math.floor(v.sceneNumber) : undefined,
     storyOrder: typeof v.storyOrder === "number" && Number.isFinite(v.storyOrder) && v.storyOrder > 0 ? Math.floor(v.storyOrder) : undefined,
     preserveComment: v.preserveComment === true ? true : undefined,
+    forkMode: v.forkMode === "baseline" || v.forkMode === "range" ? v.forkMode : undefined,
     rawOutput: typeof v.rawOutput === "string" ? v.rawOutput : undefined
   };
 }
@@ -2984,16 +2985,22 @@ async function copyLmbEntries(targetBookId, sourceEntries, userId, transform) {
 }
 async function createClone(bookId, source, meta, userId, commentOverride) {
   const ext = source.extensions || {};
-  return spindle.world_books.entries.create(bookId, {
+  const outletName = source.outlet_name;
+  const input = {
     content: source.content,
     comment: commentOverride ?? source.comment,
     disabled: source.disabled,
     constant: source.constant,
+    position: source.position,
+    order_value: source.order_value,
     key: source.key ?? [],
     keysecondary: source.keysecondary ?? [],
     vectorized: source.vectorized ?? false,
     extensions: { ...ext, [EXTENSION_KEY]: meta }
-  }, userId);
+  };
+  if (typeof outletName === "string")
+    input["outlet_name"] = outletName;
+  return spindle.world_books.entries.create(bookId, input, userId);
 }
 
 // src/backend/fork.ts
@@ -3013,8 +3020,9 @@ async function ensureForkAdoption(chatId, userId) {
     return existing;
   const p = (async () => {
     try {
-      await doForkAdoption(chatId, userId);
-      checked.add(k);
+      const result = await doForkAdoption(chatId, userId);
+      if (result === "done")
+        checked.add(k);
     } catch (err) {
       warn(`fork adoption failed for ${chatId.slice(0, 8)}: ${describeError(err)}`);
     } finally {
@@ -3027,20 +3035,20 @@ async function ensureForkAdoption(chatId, userId) {
 async function doForkAdoption(forkChatId, userId) {
   const chat = await spindle.chats.get(forkChatId, userId).catch(() => null);
   if (!chat)
-    return;
+    return "retry";
   const meta = chat.metadata && typeof chat.metadata === "object" ? chat.metadata : null;
   const branchedFrom = meta && typeof meta["branched_from"] === "string" ? meta["branched_from"] : null;
   if (!branchedFrom)
-    return;
+    return "done";
   if (meta && meta[FORK_ADOPTED_FLAG] === true)
-    return;
+    return "done";
   const owned = await findBookForChat(forkChatId, userId).catch(() => null);
   if (owned)
-    return;
+    return "done";
   const ancestor = await findAncestorBook(branchedFrom, userId);
   if (!ancestor)
-    return;
-  await cloneShelfForFork(forkChatId, chat.name ?? null, ancestor.chatId, userId);
+    return "retry";
+  return cloneShelfForFork(forkChatId, chat.name ?? null, ancestor.chatId, userId);
 }
 async function findAncestorBook(startChatId, userId) {
   const seen = new Set;
@@ -3063,8 +3071,11 @@ async function findAncestorBook(startChatId, userId) {
 }
 async function cloneShelfForFork(forkChatId, forkChatName, parentChatId, userId) {
   const parentEntries = await listLmbEntries(parentChatId, userId);
-  if (parentEntries.length === 0)
-    return;
+  if (parentEntries.length === 0) {
+    await markForkAdoptionComplete(forkChatId, userId);
+    info(`checked fork ${forkChatId.slice(0, 8)} from ${parentChatId.slice(0, 8)} (ancestor book was empty)`);
+    return "done";
+  }
   const [forkMsgs, parentMsgs] = await Promise.all([
     spindle.chat.getMessages(forkChatId),
     spindle.chat.getMessages(parentChatId)
@@ -3105,13 +3116,27 @@ async function cloneShelfForFork(forkChatId, forkChatName, parentChatId, userId)
   };
   const forkTransform = (entry, ctx) => {
     const { ids, first, last } = remap(entry.meta.msgIds);
+    const baseline = entry.meta.msgIds.length === 0 && entry.meta.forkMode !== "range";
     if (entry.meta.tier === 1) {
-      if (ids.length === 0)
-        return null;
-      return { msgIds: ids, firstMsgIdx: first, lastMsgIdx: last, extra: { chatId: forkChatId } };
+      if (ids.length === 0) {
+        if (!baseline)
+          return null;
+        return {
+          msgIds: [],
+          firstMsgIdx: undefined,
+          lastMsgIdx: undefined,
+          extra: { chatId: forkChatId, forkMode: "baseline" }
+        };
+      }
+      return {
+        msgIds: ids,
+        firstMsgIdx: first,
+        lastMsgIdx: last,
+        extra: { chatId: forkChatId, forkMode: "range" }
+      };
     }
     const survived = (entry.meta.sourceChapterEntryIds ?? []).map((oldId) => ctx.idMap.get(oldId)).filter((x) => typeof x === "string");
-    if (ids.length === 0 && survived.length === 0)
+    if (ids.length === 0 && survived.length === 0 && !baseline)
       return null;
     let firstIdx = first;
     let lastIdx = last;
@@ -3126,7 +3151,15 @@ async function cloneShelfForFork(forkChatId, forkChatName, parentChatId, userId)
           lastIdx = lastIdx === undefined ? cm.lastMsgIdx : Math.max(lastIdx, cm.lastMsgIdx);
       }
     }
-    return { msgIds: ids, firstMsgIdx: firstIdx, lastMsgIdx: lastIdx, extra: { chatId: forkChatId } };
+    return {
+      msgIds: ids,
+      firstMsgIdx: firstIdx,
+      lastMsgIdx: lastIdx,
+      extra: {
+        chatId: forkChatId,
+        forkMode: ids.length > 0 ? "range" : baseline ? "baseline" : entry.meta.forkMode
+      }
+    };
   };
   const settings = await loadSettings(userId);
   const newBookName = await formatBookName(settings, forkChatId, userId, forkChatName);
@@ -3141,10 +3174,20 @@ async function cloneShelfForFork(forkChatId, forkChatName, parentChatId, userId)
   try {
     const idMap = await copyLmbEntries(newBook.id, parentEntries, userId, forkTransform);
     cloned = idMap.size;
-    await rebindForkShelf(forkChatId, newBook.id, userId);
+    if (cloned > 0) {
+      await rebindForkShelf(forkChatId, newBook.id, userId);
+    }
   } catch (err) {
     await spindle.world_books.delete(newBook.id, userId).catch(() => {});
     throw err;
+  }
+  if (cloned === 0) {
+    await spindle.world_books.delete(newBook.id, userId).catch((err) => {
+      warn(`fork adoption: failed to delete unused book ${newBook.id}: ${describeError(err)}`);
+    });
+    await markForkAdoptionComplete(forkChatId, userId);
+    info(`checked fork ${forkChatId.slice(0, 8)} from ${parentChatId.slice(0, 8)} (no entries belonged before the fork)`);
+    return "done";
   }
   invalidateBookCache(userId, forkChatId);
   try {
@@ -3155,6 +3198,15 @@ async function cloneShelfForFork(forkChatId, forkChatName, parentChatId, userId)
     warn(`fork adoption: visibility resync failed: ${describeError(err)}`);
   }
   info(`adopted fork ${forkChatId.slice(0, 8)} from ${parentChatId.slice(0, 8)} (${cloned} entries cloned)`);
+  return "done";
+}
+async function markForkAdoptionComplete(forkChatId, userId) {
+  const chat = await spindle.chats.get(forkChatId, userId);
+  if (!chat)
+    throw new Error(`Fork chat ${forkChatId} disappeared during adoption`);
+  const metadata = chat.metadata && typeof chat.metadata === "object" ? { ...chat.metadata } : {};
+  metadata[FORK_ADOPTED_FLAG] = true;
+  await spindle.chats.update(forkChatId, { metadata }, userId);
 }
 async function rebindForkShelf(forkChatId, newBookId, userId) {
   const chat = await spindle.chats.get(forkChatId, userId).catch(() => null);
@@ -3535,6 +3587,7 @@ async function confirmAdoptLorebook(chatId, userId, bookId, plan) {
         sceneNumber,
         storyOrder: item.storyOrder,
         preserveComment: true,
+        forkMode: "baseline",
         supersededByEntryId: null
       };
       await spindle.world_books.entries.update(source.id, {
@@ -4151,7 +4204,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const firstMsgIdx = Math.min(...ordered.map(({ index }) => index));
         const lastMsgIdx = Math.max(...ordered.map(({ index }) => index));
         const tokenCountInput = ordered.reduce((sum, { message }) => sum + approximateTokensFromChars((message.content || "").length), 0);
-        await patchEntryMeta(entry, { msgIds, firstMsgIdx, lastMsgIdx, tokenCountInput }, userId);
+        await patchEntryMeta(entry, { msgIds, firstMsgIdx, lastMsgIdx, tokenCountInput, forkMode: "range" }, userId);
         invalidateBookCache(userId, msg.chatId);
         const coverage = await buildCoverage(msg.chatId, userId);
         await syncHiddenForCoveredMessages(msg.chatId, messages, coverage, userId, true, lastMsgIdx).catch((err) => {

@@ -110,18 +110,23 @@ async function createClone(
   commentOverride?: string,
 ): Promise<WorldBookEntryDTO> {
   const ext = (source.extensions || {}) as Record<string, unknown>;
+  const outletName = (source as unknown as { outlet_name?: string }).outlet_name;
+  const input: Record<string, unknown> = {
+    content: source.content,
+    comment: commentOverride ?? source.comment,
+    disabled: source.disabled,
+    constant: source.constant,
+    position: source.position,
+    order_value: source.order_value,
+    key: source.key ?? [],
+    keysecondary: source.keysecondary ?? [],
+    vectorized: source.vectorized ?? false,
+    extensions: { ...ext, [EXTENSION_KEY]: meta },
+  };
+  if (typeof outletName === "string") input["outlet_name"] = outletName;
   return spindle.world_books.entries.create(
     bookId,
-    {
-      content: source.content,
-      comment: commentOverride ?? source.comment,
-      disabled: source.disabled,
-      constant: source.constant,
-      key: source.key ?? [],
-      keysecondary: source.keysecondary ?? [],
-      vectorized: source.vectorized ?? false,
-      extensions: { ...ext, [EXTENSION_KEY]: meta },
-    },
+    input as never,
     userId,
   );
 }

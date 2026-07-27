@@ -673,7 +673,11 @@ spindle.onFrontendMessage(async (raw, userId) => {
           (sum, { message }) => sum + approximateTokensFromChars((message.content || "").length),
           0,
         );
-        await patchEntryMeta(entry, { msgIds, firstMsgIdx, lastMsgIdx, tokenCountInput }, userId);
+        await patchEntryMeta(
+          entry,
+          { msgIds, firstMsgIdx, lastMsgIdx, tokenCountInput, forkMode: "range" },
+          userId,
+        );
         invalidateBookCache(userId, msg.chatId);
         const coverage = await buildCoverage(msg.chatId, userId);
         await syncHiddenForCoveredMessages(msg.chatId, messages, coverage, userId, true, lastMsgIdx).catch((err) => {

@@ -13,6 +13,7 @@ const MAX_ANCESTRY_HOPS = 100;
 
 const checked = new Set<string>();
 const inflight = new Map<string, Promise<void>>();
+type ForkAdoptionResult = "done" | "retry";
 
 function key(userId: string, chatId: string): string {
   return `${userId}::${chatId}`;
@@ -25,8 +26,8 @@ export async function ensureForkAdoption(chatId: string, userId: string): Promis
   if (existing) return existing;
   const p = (async () => {
     try {
-      await doForkAdoption(chatId, userId);
-      checked.add(k);
+      const result = await doForkAdoption(chatId, userId);
+      if (result === "done") checked.add(k);
     } catch (err) {
       warn(`fork adoption failed for ${chatId.slice(0, 8)}: ${describeError(err)}`);
     } finally {
@@ -37,21 +38,21 @@ export async function ensureForkAdoption(chatId: string, userId: string): Promis
   return p;
 }
 
-async function doForkAdoption(forkChatId: string, userId: string): Promise<void> {
+async function doForkAdoption(forkChatId: string, userId: string): Promise<ForkAdoptionResult> {
   const chat = await spindle.chats.get(forkChatId, userId).catch(() => null);
-  if (!chat) return;
+  if (!chat) return "retry";
   const meta = chat.metadata && typeof chat.metadata === "object" ? (chat.metadata as Record<string, unknown>) : null;
   const branchedFrom = meta && typeof meta["branched_from"] === "string" ? (meta["branched_from"] as string) : null;
-  if (!branchedFrom) return;
-  if (meta && meta[FORK_ADOPTED_FLAG] === true) return;
+  if (!branchedFrom) return "done";
+  if (meta && meta[FORK_ADOPTED_FLAG] === true) return "done";
 
   const owned = await findBookForChat(forkChatId, userId).catch(() => null);
-  if (owned) return;
+  if (owned) return "done";
 
   const ancestor = await findAncestorBook(branchedFrom, userId);
-  if (!ancestor) return;
+  if (!ancestor) return "retry";
 
-  await cloneShelfForFork(forkChatId, chat.name ?? null, ancestor.chatId, userId);
+  return cloneShelfForFork(forkChatId, chat.name ?? null, ancestor.chatId, userId);
 }
 
 async function findAncestorBook(
@@ -82,9 +83,13 @@ async function cloneShelfForFork(
   forkChatName: string | null,
   parentChatId: string,
   userId: string,
-): Promise<void> {
+): Promise<ForkAdoptionResult> {
   const parentEntries = await listLmbEntries(parentChatId, userId);
-  if (parentEntries.length === 0) return;
+  if (parentEntries.length === 0) {
+    await markForkAdoptionComplete(forkChatId, userId);
+    info(`checked fork ${forkChatId.slice(0, 8)} from ${parentChatId.slice(0, 8)} (ancestor book was empty)`);
+    return "done";
+  }
 
   const [forkMsgs, parentMsgs] = await Promise.all([
     spindle.chat.getMessages(forkChatId),
@@ -123,14 +128,28 @@ async function cloneShelfForFork(
 
   const forkTransform: CopyTransform = (entry, ctx) => {
     const { ids, first, last } = remap(entry.meta.msgIds);
+    const baseline = entry.meta.msgIds.length === 0 && entry.meta.forkMode !== "range";
     if (entry.meta.tier === 1) {
-      if (ids.length === 0) return null;
-      return { msgIds: ids, firstMsgIdx: first, lastMsgIdx: last, extra: { chatId: forkChatId } };
+      if (ids.length === 0) {
+        if (!baseline) return null;
+        return {
+          msgIds: [],
+          firstMsgIdx: undefined,
+          lastMsgIdx: undefined,
+          extra: { chatId: forkChatId, forkMode: "baseline" },
+        };
+      }
+      return {
+        msgIds: ids,
+        firstMsgIdx: first,
+        lastMsgIdx: last,
+        extra: { chatId: forkChatId, forkMode: "range" },
+      };
     }
     const survived = (entry.meta.sourceChapterEntryIds ?? [])
       .map((oldId) => ctx.idMap.get(oldId))
       .filter((x): x is string => typeof x === "string");
-    if (ids.length === 0 && survived.length === 0) return null;
+    if (ids.length === 0 && survived.length === 0 && !baseline) return null;
     let firstIdx = first;
     let lastIdx = last;
     if (firstIdx === undefined || lastIdx === undefined) {
@@ -141,7 +160,15 @@ async function cloneShelfForFork(
         if (cm.lastMsgIdx !== undefined) lastIdx = lastIdx === undefined ? cm.lastMsgIdx : Math.max(lastIdx, cm.lastMsgIdx);
       }
     }
-    return { msgIds: ids, firstMsgIdx: firstIdx, lastMsgIdx: lastIdx, extra: { chatId: forkChatId } };
+    return {
+      msgIds: ids,
+      firstMsgIdx: firstIdx,
+      lastMsgIdx: lastIdx,
+      extra: {
+        chatId: forkChatId,
+        forkMode: ids.length > 0 ? "range" : baseline ? "baseline" : entry.meta.forkMode,
+      },
+    };
   };
 
   const settings = await loadSettings(userId);
@@ -161,10 +188,21 @@ async function cloneShelfForFork(
   try {
     const idMap = await copyLmbEntries(newBook.id, parentEntries, userId, forkTransform);
     cloned = idMap.size;
-    await rebindForkShelf(forkChatId, newBook.id, userId);
+    if (cloned > 0) {
+      await rebindForkShelf(forkChatId, newBook.id, userId);
+    }
   } catch (err) {
     await spindle.world_books.delete(newBook.id, userId).catch(() => {});
     throw err;
+  }
+
+  if (cloned === 0) {
+    await spindle.world_books.delete(newBook.id, userId).catch((err) => {
+      warn(`fork adoption: failed to delete unused book ${newBook.id}: ${describeError(err)}`);
+    });
+    await markForkAdoptionComplete(forkChatId, userId);
+    info(`checked fork ${forkChatId.slice(0, 8)} from ${parentChatId.slice(0, 8)} (no entries belonged before the fork)`);
+    return "done";
   }
 
   invalidateBookCache(userId, forkChatId);
@@ -178,6 +216,17 @@ async function cloneShelfForFork(
   }
 
   info(`adopted fork ${forkChatId.slice(0, 8)} from ${parentChatId.slice(0, 8)} (${cloned} entries cloned)`);
+  return "done";
+}
+
+async function markForkAdoptionComplete(forkChatId: string, userId: string): Promise<void> {
+  const chat = await spindle.chats.get(forkChatId, userId);
+  if (!chat) throw new Error(`Fork chat ${forkChatId} disappeared during adoption`);
+  const metadata = chat.metadata && typeof chat.metadata === "object"
+    ? { ...(chat.metadata as Record<string, unknown>) }
+    : {};
+  metadata[FORK_ADOPTED_FLAG] = true;
+  await spindle.chats.update(forkChatId, { metadata }, userId);
 }
 
 async function rebindForkShelf(forkChatId: string, newBookId: string, userId: string): Promise<void> {

@@ -80,6 +80,7 @@ export interface LMBEntryMeta {
   sceneNumber?: number;
   storyOrder?: number;
   preserveComment?: boolean;
+  forkMode?: "baseline" | "range";
   rawOutput?: string;
 }
 
@@ -275,6 +276,7 @@ export function normalizeEntryMeta(raw: unknown): LMBEntryMeta | null {
         ? Math.floor(v.storyOrder)
         : undefined,
     preserveComment: v.preserveComment === true ? true : undefined,
+    forkMode: v.forkMode === "baseline" || v.forkMode === "range" ? v.forkMode : undefined,
     rawOutput: typeof v.rawOutput === "string" ? v.rawOutput : undefined,
   };
 }

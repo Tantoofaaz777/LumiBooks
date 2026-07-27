@@ -108,6 +108,7 @@ export async function confirmAdoptLorebook(
         sceneNumber,
         storyOrder: item.storyOrder,
         preserveComment: true,
+        forkMode: "baseline",
         supersededByEntryId: null,
       };
       await spindle.world_books.entries.update(
