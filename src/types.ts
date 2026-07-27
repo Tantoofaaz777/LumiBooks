@@ -97,6 +97,9 @@ export interface AdoptLorebookEntryDraft {
   contentChars: number;
   alreadyManaged: boolean;
   managedChatId: string | null;
+  managedTier: 1 | 2 | 3 | null;
+  managedStoryOrder: number | null;
+  managedSourceEntryIds: string[];
 }
 
 export interface AdoptLorebookCandidate {
@@ -109,6 +112,7 @@ export interface AdoptLorebookPlanEntry {
   entryId: string;
   tier: 1 | 2 | 3 | 0;
   storyOrder: number;
+  sourceEntryIds: string[];
 }
 
 export interface FrontendState {

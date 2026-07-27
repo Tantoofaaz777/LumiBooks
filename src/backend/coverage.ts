@@ -11,6 +11,7 @@ type ChatMessageDTO = ChatMessage;
 export interface CoverageMap {
   coveredBy: Map<string, string>;
   activeEntries: LMBEntry[];
+  hideFrontier: number | null;
   volumes: LMBEntry[];
   arcs: LMBEntry[];
   chapters: LMBEntry[];
@@ -101,8 +102,31 @@ export async function buildCoverage(chatId: string, userId: string, preloadedEnt
     ...arcs.filter((a) => !supersededArcIds.has(a.raw.id)),
     ...chapters.filter((c) => !supersededChapterIds.has(c.raw.id)),
   ];
+  const entryById = new Map(entries.map((entry) => [entry.raw.id, entry] as const));
+  const frontierMemo = new Map<string, number | null>();
+  const inheritedFrontier = (entry: LMBEntry, visiting = new Set<string>()): number | null => {
+    if (frontierMemo.has(entry.raw.id)) return frontierMemo.get(entry.raw.id) ?? null;
+    if (visiting.has(entry.raw.id)) return null;
+    visiting.add(entry.raw.id);
+    let frontier = typeof entry.meta.lastMsgIdx === "number" && Number.isFinite(entry.meta.lastMsgIdx)
+      ? entry.meta.lastMsgIdx
+      : null;
+    for (const sourceId of entry.meta.sourceChapterEntryIds ?? []) {
+      const source = entryById.get(sourceId);
+      if (!source) continue;
+      const sourceFrontier = inheritedFrontier(source, visiting);
+      if (sourceFrontier !== null) frontier = frontier === null ? sourceFrontier : Math.max(frontier, sourceFrontier);
+    }
+    visiting.delete(entry.raw.id);
+    frontierMemo.set(entry.raw.id, frontier);
+    return frontier;
+  };
+  const activeFrontiers = activeEntries
+    .map((entry) => inheritedFrontier(entry))
+    .filter((value): value is number => value !== null);
+  const hideFrontier = activeFrontiers.length > 0 ? Math.max(...activeFrontiers) : null;
 
-  return { coveredBy, activeEntries, volumes, arcs, chapters };
+  return { coveredBy, activeEntries, hideFrontier, volumes, arcs, chapters };
 }
 
 export function isExcluded(m: ChatMessageDTO): boolean {
@@ -195,10 +219,7 @@ async function reconcileVisibilityNow(
 
   const messages = await spindle.chat.getMessages(chatId);
   const coverage = await buildCoverage(chatId, userId);
-  const frontierValues = coverage.activeEntries
-    .map((entry) => entry.meta.lastMsgIdx)
-    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-  const frontier = frontierValues.length > 0 ? Math.max(...frontierValues) : null;
+  const frontier = coverage.hideFrontier;
 
   const metadata = chat.metadata && typeof chat.metadata === "object"
     ? (chat.metadata as Record<string, unknown>)

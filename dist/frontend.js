@@ -399,12 +399,89 @@ var STYLES = `
 .lmb-multiselect-row input { accent-color: var(--lumiverse-primary, #6b8ff0); }
 
 .lmb-modal-form { display: flex; flex-direction: column; gap: 10px; padding: 8px 12px 12px 12px; }
+.lmb-adopt-step {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  opacity: 0.65;
+}
+.lmb-adopt-list { display: flex; flex-direction: column; gap: 8px; }
+.lmb-adopt-classification-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 130px 90px;
+  gap: 8px;
+  align-items: center;
+}
+.lmb-adopt-hierarchy-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.lmb-adopt-hierarchy-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lmb-adopt-hierarchy-title .lmb-entry-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lmb-adopt-order-field {
+  flex: 0 0 90px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10px;
+  opacity: 0.8;
+}
+.lmb-adopt-order-field .lmb-input { width: 100%; }
+.lmb-adopt-source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.12));
+  border-radius: var(--lumiverse-radius, 4px);
+  background: var(--lumiverse-fill, rgba(255,255,255,0.04));
+  padding: 5px 7px;
+}
+.lmb-adopt-source-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 3px 1px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.lmb-adopt-source-row input {
+  flex: 0 0 auto;
+  margin: 0;
+  accent-color: var(--lumiverse-primary, #6b8ff0);
+}
+.lmb-adopt-source-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lmb-adopt-source-row.disabled { cursor: default; opacity: 0.45; }
 .lmb-modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 6px;
   padding-top: 8px;
   border-top: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
+}
+
+@media (max-width: 560px) {
+  .lmb-adopt-classification-row { grid-template-columns: minmax(0, 1fr) 110px; }
+  .lmb-adopt-classification-row > .lmb-input:last-child { grid-column: 1 / -1; }
+  .lmb-adopt-hierarchy-head { align-items: flex-start; }
+  .lmb-adopt-hierarchy-title { align-items: flex-start; flex-direction: column; gap: 4px; }
 }
 
 .lmb-pill {
@@ -1090,13 +1167,16 @@ function openAdoptLorebookModal(ctx, chatId, books, send) {
     return;
   }
   let selectedBookId = books[0].bookId;
-  const rows = new Map;
+  let step = "classification";
+  let rows = new Map;
   const bookSelect = select({
     value: selectedBookId,
     options: books.map((book) => ({ value: book.bookId, label: `${book.name} (${book.entries.length})` })),
     onChange: (v) => {
       selectedBookId = v;
-      renderEntries();
+      step = "classification";
+      initializeRows();
+      render();
     }
   });
   const bookField = document.createElement("div");
@@ -1107,26 +1187,95 @@ function openAdoptLorebookModal(ctx, chatId, books, send) {
   bookField.append(bookLabel, bookSelect);
   const help = document.createElement("div");
   help.className = "lmb-help";
-  help.textContent = "This modifies the selected lorebook in-place and adds LumiBooks metadata to the chosen entries.";
+  const stepLabel = document.createElement("div");
+  stepLabel.className = "lmb-adopt-step";
   const list = document.createElement("div");
-  list.style.display = "flex";
-  list.style.flexDirection = "column";
-  list.style.gap = "8px";
+  list.className = "lmb-adopt-list";
+  const actions = document.createElement("div");
+  actions.className = "lmb-modal-actions";
   function selectedBook() {
     return books.find((book) => book.bookId === selectedBookId) ?? books[0];
   }
-  function renderEntries() {
-    rows.clear();
+  function initializeRows() {
+    rows = new Map;
+    selectedBook().entries.forEach((entry, index) => {
+      const belongsToThisChat = entry.managedChatId === chatId;
+      const tier = belongsToThisChat ? 0 : entry.managedTier ?? 1;
+      rows.set(entry.entryId, {
+        draft: entry,
+        tier,
+        storyOrder: entry.managedStoryOrder ?? index + 1,
+        sourceEntryIds: new Set(entry.managedSourceEntryIds),
+        sourcesTouched: entry.alreadyManaged
+      });
+    });
+  }
+  function orderedRows() {
+    return selectedBook().entries.map((entry) => rows.get(entry.entryId)).filter((row) => !!row);
+  }
+  function setStoryOrder(row, value) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0)
+      return;
+    row.storyOrder = Math.floor(value);
+  }
+  function sourceLabel(row) {
+    return `#${row.storyOrder} ${row.draft.comment}`;
+  }
+  function inheritedOrder(row) {
+    const orders = Array.from(row.sourceEntryIds).map((id) => rows.get(id)?.storyOrder).filter((value) => typeof value === "number" && Number.isFinite(value));
+    return orders.length > 0 ? Math.min(...orders) : null;
+  }
+  function prepareHierarchy() {
+    const ordered = orderedRows();
+    const assigned = new Map;
+    for (let parentIndex = 0;parentIndex < ordered.length; parentIndex++) {
+      const parent = ordered[parentIndex];
+      if (parent.tier !== 2 && parent.tier !== 3) {
+        parent.sourceEntryIds.clear();
+        continue;
+      }
+      const sourceTier = parent.tier - 1;
+      const eligible = new Set(ordered.filter((candidate) => candidate.tier === sourceTier).map((candidate) => candidate.draft.entryId));
+      const selected = Array.from(parent.sourceEntryIds).filter((id) => eligible.has(id));
+      if (!parent.sourcesTouched && selected.length === 0) {
+        let startIndex = 0;
+        for (let index = parentIndex - 1;index >= 0; index--) {
+          if (ordered[index].tier === parent.tier) {
+            startIndex = index + 1;
+            break;
+          }
+        }
+        for (let index = startIndex;index < parentIndex; index++) {
+          const candidate = ordered[index];
+          if (candidate.tier === sourceTier && !assigned.has(candidate.draft.entryId)) {
+            selected.push(candidate.draft.entryId);
+          }
+        }
+      }
+      parent.sourceEntryIds = new Set(selected.filter((id) => {
+        const owner = assigned.get(id);
+        if (owner && owner !== parent.draft.entryId)
+          return false;
+        assigned.set(id, parent.draft.entryId);
+        return true;
+      }));
+    }
+    for (const tier of [2, 3]) {
+      for (const parent of ordered.filter((row) => row.tier === tier)) {
+        const order = inheritedOrder(parent);
+        if (order !== null)
+          parent.storyOrder = order;
+      }
+    }
+  }
+  function renderClassification() {
     list.replaceChildren();
-    const book = selectedBook();
-    book.entries.forEach((entry, index) => {
+    for (const row of orderedRows()) {
+      const entry = row.draft;
       const card = document.createElement("div");
       card.className = "lmb-preview-card";
       const head = document.createElement("div");
-      head.style.display = "grid";
-      head.style.gridTemplateColumns = "minmax(0, 1fr) 130px 90px";
-      head.style.gap = "8px";
-      head.style.alignItems = "center";
+      head.className = "lmb-adopt-classification-row";
       const title = document.createElement("div");
       title.className = "lmb-entry-title";
       title.textContent = entry.comment;
@@ -1136,22 +1285,33 @@ function openAdoptLorebookModal(ctx, chatId, books, send) {
       else if (entry.alreadyManaged)
         title.textContent += " (from another chat)";
       const tier = select({
-        value: belongsToThisChat ? "0" : "1",
+        value: String(row.tier),
         options: [
           { value: "1", label: "Chapter" },
           { value: "2", label: "Arc" },
           { value: "3", label: "Volume" },
           { value: "0", label: "Skip" }
-        ]
+        ],
+        onChange: (value) => {
+          const next = Number(value);
+          row.tier = next === 1 || next === 2 || next === 3 ? next : 0;
+          row.sourceEntryIds.clear();
+          row.sourcesTouched = false;
+          renderClassification();
+        }
       });
+      tier.setAttribute("aria-label", `Tier for ${entry.comment}`);
       if (belongsToThisChat)
         tier.disabled = true;
       const order = numberInput({
-        value: index + 1,
+        value: row.storyOrder,
         min: 1,
         step: 1,
-        disabled: belongsToThisChat
+        disabled: belongsToThisChat || row.sourceEntryIds.size > 0,
+        onBlur: (value) => setStoryOrder(row, value)
       });
+      order.setAttribute("aria-label", `Story order for ${entry.comment}`);
+      order.title = row.sourceEntryIds.size > 0 ? "Inherited from the first selected source" : "Story order";
       head.append(title, tier, order);
       card.appendChild(head);
       if (entry.preview) {
@@ -1161,30 +1321,141 @@ function openAdoptLorebookModal(ctx, chatId, books, send) {
         card.appendChild(preview);
       }
       list.appendChild(card);
-      rows.set(entry.entryId, { tier, order });
-    });
-  }
-  const actions = document.createElement("div");
-  actions.className = "lmb-modal-actions";
-  actions.append(makeButton("Cancel", () => handle.dismiss()), makeButton("Adopt", () => {
-    const entries = [];
-    for (const entry of selectedBook().entries) {
-      const row = rows.get(entry.entryId);
-      if (!row)
-        continue;
-      const tier = Number(row.tier.value);
-      const storyOrder = Number(row.order.value);
-      entries.push({
-        entryId: entry.entryId,
-        tier: tier === 1 || tier === 2 || tier === 3 ? tier : 0,
-        storyOrder: Number.isFinite(storyOrder) && storyOrder > 0 ? Math.floor(storyOrder) : entries.length + 1
-      });
     }
+  }
+  function renderHierarchy() {
+    prepareHierarchy();
+    list.replaceChildren();
+    const ordered = orderedRows();
+    const parents = ordered.filter((row) => row.tier === 2 || row.tier === 3);
+    if (parents.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "lmb-empty";
+      empty.textContent = "No arcs or volumes selected. The chapters can be adopted as standalone entries.";
+      list.appendChild(empty);
+      return;
+    }
+    const assigned = new Map;
+    for (const parent of parents) {
+      for (const sourceId of parent.sourceEntryIds)
+        assigned.set(sourceId, parent.draft.entryId);
+    }
+    for (const parent of parents) {
+      const card = document.createElement("div");
+      card.className = "lmb-preview-card";
+      const head = document.createElement("div");
+      head.className = "lmb-adopt-hierarchy-head";
+      const titleWrap = document.createElement("div");
+      titleWrap.className = "lmb-adopt-hierarchy-title";
+      const badge = document.createElement("span");
+      badge.className = "lmb-pill";
+      badge.textContent = parent.tier === 3 ? "VOLUME" : "ARC";
+      const title = document.createElement("div");
+      title.className = "lmb-entry-title";
+      title.textContent = parent.draft.comment;
+      titleWrap.append(badge, title);
+      const orderField = document.createElement("label");
+      orderField.className = "lmb-adopt-order-field";
+      const orderLabel = document.createElement("span");
+      orderLabel.textContent = "Order";
+      const inherited = parent.sourceEntryIds.size > 0;
+      const orderInput = numberInput({
+        value: parent.storyOrder,
+        min: 1,
+        step: 1,
+        disabled: inherited,
+        onBlur: (value) => setStoryOrder(parent, value)
+      });
+      orderInput.title = inherited ? "Inherited from the first selected source" : "Standalone story order";
+      orderField.append(orderLabel, orderInput);
+      head.append(titleWrap, orderField);
+      card.appendChild(head);
+      const sourceTitle = document.createElement("div");
+      sourceTitle.className = "lmb-field-label";
+      sourceTitle.textContent = parent.tier === 3 ? "Arcs included" : "Chapters included";
+      card.appendChild(sourceTitle);
+      const sourceTier = parent.tier - 1;
+      const candidates = ordered.filter((candidate) => candidate.tier === sourceTier);
+      const sourceList = document.createElement("div");
+      sourceList.className = "lmb-adopt-source-list";
+      if (candidates.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "lmb-empty";
+        empty.textContent = parent.tier === 3 ? "No arcs are available." : "No chapters are available.";
+        sourceList.appendChild(empty);
+      } else {
+        for (const candidate of candidates) {
+          const sourceId = candidate.draft.entryId;
+          const claimedBy = assigned.get(sourceId);
+          const unavailable = !!claimedBy && claimedBy !== parent.draft.entryId;
+          const sourceRow = document.createElement("label");
+          sourceRow.className = `lmb-adopt-source-row${unavailable ? " disabled" : ""}`;
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.checked = parent.sourceEntryIds.has(sourceId);
+          input.disabled = unavailable;
+          input.addEventListener("change", () => {
+            parent.sourcesTouched = true;
+            if (input.checked)
+              parent.sourceEntryIds.add(sourceId);
+            else
+              parent.sourceEntryIds.delete(sourceId);
+            const order = inheritedOrder(parent);
+            if (order !== null)
+              parent.storyOrder = order;
+            renderHierarchy();
+          });
+          const label = document.createElement("span");
+          label.textContent = unavailable ? `${sourceLabel(candidate)} (already assigned)` : sourceLabel(candidate);
+          sourceRow.append(input, label);
+          sourceList.appendChild(sourceRow);
+        }
+      }
+      card.appendChild(sourceList);
+      const hint = document.createElement("div");
+      hint.className = "lmb-field-hint";
+      hint.textContent = parent.sourceEntryIds.size > 0 ? `Order inherited from the first selected ${parent.tier === 3 ? "arc" : "chapter"}.` : `No sources selected: this ${parent.tier === 3 ? "volume" : "arc"} will remain standalone.`;
+      card.appendChild(hint);
+      list.appendChild(card);
+    }
+  }
+  function submit() {
+    prepareHierarchy();
+    const entries = orderedRows().map((row, index) => ({
+      entryId: row.draft.entryId,
+      tier: row.tier,
+      storyOrder: Number.isFinite(row.storyOrder) && row.storyOrder > 0 ? Math.floor(row.storyOrder) : index + 1,
+      sourceEntryIds: Array.from(row.sourceEntryIds).sort((left, right) => {
+        return (rows.get(left)?.storyOrder ?? 0) - (rows.get(right)?.storyOrder ?? 0);
+      })
+    }));
     send({ type: "confirm_adopt_lorebook", chatId, bookId: selectedBookId, entries });
     handle.dismiss();
-  }, { primary: true }));
-  root.append(bookField, help, list, actions);
-  renderEntries();
+  }
+  function render() {
+    bookSelect.disabled = step === "hierarchy";
+    actions.replaceChildren();
+    if (step === "classification") {
+      stepLabel.textContent = "Step 1 of 2 - Classify entries";
+      help.textContent = "Choose which entries to adopt, their tier, and the chronological order of standalone entries. The lorebook is modified in-place.";
+      renderClassification();
+      actions.append(makeButton("Cancel", () => handle.dismiss()), makeButton("Review hierarchy", () => {
+        step = "hierarchy";
+        render();
+      }, { primary: true }));
+    } else {
+      stepLabel.textContent = "Step 2 of 2 - Define hierarchy";
+      help.textContent = "Select the chapters inside each arc and the arcs inside each volume. Leave a source list empty for standalone entries.";
+      renderHierarchy();
+      actions.append(makeButton("Back", () => {
+        step = "classification";
+        render();
+      }), makeButton("Adopt", submit, { primary: true }));
+    }
+  }
+  root.append(bookField, stepLabel, help, list, actions);
+  initializeRows();
+  render();
 }
 function openBindMessagesModal(ctx, chatId, chapters, messageIds, send, onBound) {
   const bindable = chapters;
