@@ -3,7 +3,7 @@ declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 import { findBookForChat, invalidateBookCache, listLmbEntries, makeBookMetadata } from "./world-book";
 import { copyLmbEntries, type CopyTransform } from "./book-copy";
 import { loadSettings } from "./storage";
-import { resyncVisibility } from "./coverage";
+import { reconcileVisibility, VISIBILITY_IDS_KEY } from "./coverage";
 import { describeError, info, warn } from "./runtime";
 import { formatBookName } from "./naming";
 
@@ -91,9 +91,10 @@ async function cloneShelfForFork(
     return "done";
   }
 
-  const [forkMsgs, parentMsgs] = await Promise.all([
+  const [forkMsgs, parentMsgs, parentChat] = await Promise.all([
     spindle.chat.getMessages(forkChatId),
     spindle.chat.getMessages(parentChatId),
+    spindle.chats.get(parentChatId, userId),
   ]);
   const parentIdxById = new Map<string, number>();
   for (const m of parentMsgs) parentIdxById.set(m.id, m.index_in_chat);
@@ -105,6 +106,17 @@ async function cloneShelfForFork(
     }
     forkIdByIdx.set(m.index_in_chat, m.id);
   }
+  const parentMetadata = parentChat?.metadata && typeof parentChat.metadata === "object"
+    ? (parentChat.metadata as Record<string, unknown>)
+    : {};
+  const parentOwnedIds = Array.isArray(parentMetadata[VISIBILITY_IDS_KEY])
+    ? (parentMetadata[VISIBILITY_IDS_KEY] as unknown[]).filter((id): id is string => typeof id === "string")
+    : [];
+  const forkOwnedIds = parentOwnedIds
+    .map((id) => parentIdxById.get(id))
+    .filter((index): index is number => typeof index === "number")
+    .map((index) => forkIdByIdx.get(index))
+    .filter((id): id is string => typeof id === "string");
 
   const remap = (msgIds: string[]): { ids: string[]; first?: number; last?: number } => {
     const ids: string[] = [];
@@ -189,7 +201,7 @@ async function cloneShelfForFork(
     const idMap = await copyLmbEntries(newBook.id, parentEntries, userId, forkTransform);
     cloned = idMap.size;
     if (cloned > 0) {
-      await rebindForkShelf(forkChatId, newBook.id, userId);
+      await rebindForkShelf(forkChatId, newBook.id, forkOwnedIds, userId);
     }
   } catch (err) {
     await spindle.world_books.delete(newBook.id, userId).catch(() => {});
@@ -200,7 +212,11 @@ async function cloneShelfForFork(
     await spindle.world_books.delete(newBook.id, userId).catch((err) => {
       warn(`fork adoption: failed to delete unused book ${newBook.id}: ${describeError(err)}`);
     });
+    await setForkVisibilityLedger(forkChatId, forkOwnedIds, userId);
     await markForkAdoptionComplete(forkChatId, userId);
+    await reconcileVisibility(forkChatId, userId).catch((err) => {
+      warn(`fork adoption: visibility cleanup failed: ${describeError(err)}`);
+    });
     info(`checked fork ${forkChatId.slice(0, 8)} from ${parentChatId.slice(0, 8)} (no entries belonged before the fork)`);
     return "done";
   }
@@ -208,9 +224,7 @@ async function cloneShelfForFork(
   invalidateBookCache(userId, forkChatId);
 
   try {
-    const profile = settings.profiles.find((p) => p.id === settings.activeProfileId);
-    const desiredHidden = profile ? profile.hideCoveredMessages : true;
-    await resyncVisibility(forkChatId, userId, desiredHidden);
+    await reconcileVisibility(forkChatId, userId);
   } catch (err) {
     warn(`fork adoption: visibility resync failed: ${describeError(err)}`);
   }
@@ -229,7 +243,12 @@ async function markForkAdoptionComplete(forkChatId: string, userId: string): Pro
   await spindle.chats.update(forkChatId, { metadata }, userId);
 }
 
-async function rebindForkShelf(forkChatId: string, newBookId: string, userId: string): Promise<void> {
+async function rebindForkShelf(
+  forkChatId: string,
+  newBookId: string,
+  forkOwnedIds: string[],
+  userId: string,
+): Promise<void> {
   const chat = await spindle.chats.get(forkChatId, userId).catch(() => null);
   if (!chat) return;
   const metadata = chat.metadata && typeof chat.metadata === "object"
@@ -245,5 +264,18 @@ async function rebindForkShelf(forkChatId: string, newBookId: string, userId: st
   metadata["chat_world_book_ids"] = nextBookIds;
   metadata["lumibooks_book_id"] = newBookId;
   metadata[FORK_ADOPTED_FLAG] = true;
+  if (forkOwnedIds.length > 0) metadata[VISIBILITY_IDS_KEY] = forkOwnedIds;
+  else delete metadata[VISIBILITY_IDS_KEY];
+  await spindle.chats.update(forkChatId, { metadata }, userId);
+}
+
+async function setForkVisibilityLedger(forkChatId: string, forkOwnedIds: string[], userId: string): Promise<void> {
+  const chat = await spindle.chats.get(forkChatId, userId);
+  if (!chat) throw new Error(`Fork chat ${forkChatId} disappeared during visibility remap`);
+  const metadata = chat.metadata && typeof chat.metadata === "object"
+    ? { ...(chat.metadata as Record<string, unknown>) }
+    : {};
+  if (forkOwnedIds.length > 0) metadata[VISIBILITY_IDS_KEY] = forkOwnedIds;
+  else delete metadata[VISIBILITY_IDS_KEY];
   await spindle.chats.update(forkChatId, { metadata }, userId);
 }

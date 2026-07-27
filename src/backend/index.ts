@@ -48,7 +48,7 @@ import {
   patchPendingPreview,
   registerPipelineCallbacks,
 } from "./pipeline";
-import { buildCoverage, resyncVisibility, syncHiddenForCoveredMessages, unhideCoveredMessages } from "./coverage";
+import { buildCoverage, reconcileVisibility } from "./coverage";
 import { invalidateConnectionsCache } from "./summarizer";
 import { invalidateRegexCache } from "./regex";
 import { registerHookEndpoints } from "./hooks";
@@ -191,6 +191,11 @@ spindle.on("CHAT_SWITCHED", async (payload: unknown, hostUserId?: string) => {
   if (!userId) return;
   if (p?.chatId) rememberChatUser(p.chatId, userId);
   invalidateConnectionsCache(userId);
+  if (p?.chatId) {
+    await reconcileVisibility(p.chatId, userId).catch((err) => {
+      warn(`chat switch visibility reconciliation failed: ${describeError(err)}`);
+    });
+  }
   await pushState(userId, p?.chatId ?? null);
 });
 
@@ -201,6 +206,9 @@ spindle.on("MESSAGE_DELETED", async (payload: unknown, hostUserId?: string) => {
   if (!userId) return;
   rememberChatUser(p.chatId, userId);
   invalidateBookCache(userId, p.chatId);
+  await reconcileVisibility(p.chatId, userId).catch((err) => {
+    warn(`message deletion visibility reconciliation failed: ${describeError(err)}`);
+  });
   await pushState(userId, p.chatId);
 });
 
@@ -208,14 +216,21 @@ spindle.on("WORLD_BOOK_ENTRY_DELETED", async (payload: unknown, hostUserId?: str
   if (!hostUserId) return;
   const p = payload as { worldBookId?: string };
   if (!p?.worldBookId) return;
-  await handleExternalEntryDeletion(hostUserId, p.worldBookId, false);
+  await handleExternalBookChange(hostUserId, p.worldBookId, false);
+});
+
+spindle.on("WORLD_BOOK_ENTRY_CHANGED", async (payload: unknown, hostUserId?: string) => {
+  if (!hostUserId) return;
+  const p = payload as { worldBookId?: string };
+  if (!p?.worldBookId) return;
+  await handleExternalBookChange(hostUserId, p.worldBookId, false);
 });
 
 spindle.on("WORLD_BOOK_DELETED", async (payload: unknown, hostUserId?: string) => {
   if (!hostUserId) return;
   const p = payload as { id?: string };
   if (!p?.id) return;
-  await handleExternalEntryDeletion(hostUserId, p.id, true);
+  await handleExternalBookChange(hostUserId, p.id, true);
 });
 
 spindle.on("REGEX_SCRIPT_CHANGED", (_payload: unknown, hostUserId?: string) => {
@@ -231,7 +246,7 @@ spindle.on("MAIN_API_CHANGED", (_payload: unknown, hostUserId?: string) => {
   if (hostUserId) invalidateConnectionsCache(hostUserId);
 });
 
-async function handleExternalEntryDeletion(userId: string, bookId: string, isBookDeletion: boolean): Promise<void> {
+async function handleExternalBookChange(userId: string, bookId: string, isBookDeletion: boolean): Promise<void> {
   const chatId = isBookDeletion
     ? findCachedChatIdForBook(userId, bookId)
     : await findChatIdForBook(userId, bookId).catch(() => null);
@@ -239,15 +254,12 @@ async function handleExternalEntryDeletion(userId: string, bookId: string, isBoo
   if (isBookDeletion) invalidateAllBookCacheEntriesForBook(userId, bookId);
   else invalidateBookCache(userId, chatId);
   try {
-    const settings = await loadSettings(userId);
-    const profile = settings.profiles.find((p) => p.id === settings.activeProfileId);
-    const desiredHidden = profile ? profile.hideCoveredMessages : true;
-    const { unhidden } = await resyncVisibility(chatId, userId, desiredHidden);
+    const { unhidden } = await reconcileVisibility(chatId, userId);
     if (unhidden > 0) {
       await notify(userId, "info", `LumiBooks unhid ${unhidden} message${unhidden === 1 ? "" : "s"} after an external lorebook change`);
     }
   } catch (err) {
-    warn(`external deletion resync failed: ${describeError(err)}`);
+    warn(`external lorebook visibility reconciliation failed: ${describeError(err)}`);
   }
   await pushState(userId, chatId);
 }
@@ -310,6 +322,14 @@ spindle.onFrontendMessage(async (raw, userId) => {
     await ensureUserFolders(userId);
     switch (msg.type) {
       case "ready":
+        if (msg.chatId) {
+          await reconcileVisibility(msg.chatId, userId).catch((err) => {
+            warn(`initial visibility reconciliation failed: ${describeError(err)}`);
+          });
+        }
+        await pushState(userId, msg.chatId);
+        break;
+
       case "refresh":
         await pushState(userId, msg.chatId);
         break;
@@ -352,12 +372,8 @@ spindle.onFrontendMessage(async (raw, userId) => {
           send({ type: "error", text: "Invalid profile payload." }, userId);
           break;
         }
-        let prevHide: boolean | null = null;
-        let nextHide: boolean | null = null;
-        let activeBefore: string | null = null;
         let missing = false;
         await mutateSettings(userId, (cur) => {
-          activeBefore = cur.activeProfileId;
           const existing = cur.profiles.find((p) => p.id === id);
           if (!existing) {
             missing = true;
@@ -365,29 +381,12 @@ spindle.onFrontendMessage(async (raw, userId) => {
           }
           const merged = normalizeProfile({ ...existing, ...incoming, id });
           if (!merged) return cur;
-          prevHide = existing.hideCoveredMessages;
-          nextHide = merged.hideCoveredMessages;
           return { ...cur, profiles: cur.profiles.map((p) => (p.id === id ? merged : p)) };
         });
         if (missing) {
           warn(`save_profile dropped: no profile with id "${id}"`);
           send({ type: "error", text: `Profile ${id} no longer exists.` }, userId);
           break;
-        }
-        if (
-          prevHide !== null
-          && nextHide !== null
-          && prevHide !== nextHide
-          && id === activeBefore
-          && msg.chatId
-        ) {
-          try {
-            const messages = await spindle.chat.getMessages(msg.chatId);
-            const coverage = await buildCoverage(msg.chatId, userId);
-            await syncHiddenForCoveredMessages(msg.chatId, messages, coverage, userId, nextHide);
-          } catch (err) {
-            warn(`hideCoveredMessages re-sync failed: ${describeError(err)}`);
-          }
         }
         await pushState(userId, msg.chatId);
         break;
@@ -534,14 +533,9 @@ spindle.onFrontendMessage(async (raw, userId) => {
         }
         await deleteEntry(msg.entryId, userId);
         invalidateBookCache(userId, msg.chatId);
-        if (entry) {
-          const remaining = entries.filter((e) => e.raw.id !== msg.entryId);
-          const newCoverage = await buildCoverage(msg.chatId, userId, remaining);
-          const toUnhide = entry.meta.msgIds.filter((id) => !newCoverage.coveredBy.has(id));
-          if (toUnhide.length > 0) {
-            await unhideCoveredMessages(msg.chatId, toUnhide, userId).catch(() => {});
-          }
-        }
+        await reconcileVisibility(msg.chatId, userId).catch((err) => {
+          warn(`delete entry visibility reconciliation failed: ${describeError(err)}`);
+        });
         await pushState(userId, msg.chatId);
         break;
       }
@@ -571,12 +565,9 @@ spindle.onFrontendMessage(async (raw, userId) => {
         }
         await releaseEntry(entry, userId);
         invalidateBookCache(userId, msg.chatId);
-        const remaining = entries.filter((e) => e.raw.id !== msg.entryId);
-        const newCoverage = await buildCoverage(msg.chatId, userId, remaining);
-        const toUnhide = entry.meta.msgIds.filter((id) => !newCoverage.coveredBy.has(id));
-        if (toUnhide.length > 0) {
-          await unhideCoveredMessages(msg.chatId, toUnhide, userId).catch(() => {});
-        }
+        await reconcileVisibility(msg.chatId, userId).catch((err) => {
+          warn(`release entry visibility reconciliation failed: ${describeError(err)}`);
+        });
         await notify(userId, "success", "LumiBooks released the entry to your lorebook");
         await pushState(userId, msg.chatId);
         break;
@@ -650,7 +641,12 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const messages = await spindle.chat.getMessages(msg.chatId);
         const selected = new Set(msg.messageIds);
         const ordered = messages
-          .map((message, index) => ({ message, index }))
+          .map((message, fallbackIndex) => ({
+            message,
+            index: typeof message.index_in_chat === "number" && Number.isFinite(message.index_in_chat)
+              ? message.index_in_chat
+              : fallbackIndex,
+          }))
           .filter(({ message }) => selected.has(message.id));
         if (ordered.length === 0) {
           await notify(userId, "warn", "No matching chat messages were found to bind");
@@ -679,9 +675,8 @@ spindle.onFrontendMessage(async (raw, userId) => {
           userId,
         );
         invalidateBookCache(userId, msg.chatId);
-        const coverage = await buildCoverage(msg.chatId, userId);
-        await syncHiddenForCoveredMessages(msg.chatId, messages, coverage, userId, true, lastMsgIdx).catch((err) => {
-          warn(`bind_messages_to_entry hide sync failed: ${describeError(err)}`);
+        await reconcileVisibility(msg.chatId, userId).catch((err) => {
+          warn(`bind_messages_to_entry visibility reconciliation failed: ${describeError(err)}`);
         });
         await notify(userId, "success", `Bound ${msgIds.length} message${msgIds.length === 1 ? "" : "s"} to that chapter`);
         await pushState(userId, msg.chatId);
@@ -696,6 +691,9 @@ spindle.onFrontendMessage(async (raw, userId) => {
 
       case "confirm_adopt_lorebook": {
         const result = await confirmAdoptLorebook(msg.chatId, userId, msg.bookId, msg.entries);
+        await reconcileVisibility(msg.chatId, userId).catch((err) => {
+          warn(`adopt lorebook visibility reconciliation failed: ${describeError(err)}`);
+        });
         const text = result.adopted > 0
           ? `Adopted ${result.adopted} entr${result.adopted === 1 ? "y" : "ies"} in-place${result.skipped ? ` (${result.skipped} skipped)` : ""}`
           : "No entries were adopted";
@@ -827,8 +825,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
         if (ids.length === 0) break;
         const messages = await spindle.chat.getMessages(msg.chatId);
         const byId = new Map(messages.map((m) => [m.id, m] as const));
-        const coveredNow = msg.excluded ? (await buildCoverage(msg.chatId, userId)).coveredBy : null;
-        const hideToUnhide: string[] = [];
         for (const id of ids) {
           const m = byId.get(id);
           if (!m) continue;
@@ -836,8 +832,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
           const next: Record<string, unknown> = cur && typeof cur === "object" ? { ...cur } : {};
           if (msg.excluded) {
             next["lmb_excluded"] = true;
-            const hidden = !!(m.extra && (m.extra as Record<string, unknown>).hidden);
-            if (hidden && coveredNow?.has(id)) hideToUnhide.push(id);
           } else {
             delete next["lmb_excluded"];
           }
@@ -845,22 +839,9 @@ spindle.onFrontendMessage(async (raw, userId) => {
             warn(`set_message_excluded: updateMessage failed for ${id}: ${describeError(err)}`);
           });
         }
-        if (hideToUnhide.length > 0) {
-          await unhideCoveredMessages(msg.chatId, hideToUnhide, userId).catch(() => {});
-        }
-        if (!msg.excluded) {
-          const cur = await loadSettings(userId);
-          const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
-          if (profile?.hideCoveredMessages) {
-            const fresh = await spindle.chat.getMessages(msg.chatId);
-            const coverage = await buildCoverage(msg.chatId, userId);
-            const idSet = new Set(ids);
-            const reincluded = fresh.filter((m) => idSet.has(m.id) && coverage.coveredBy.has(m.id));
-            if (reincluded.length > 0) {
-              await syncHiddenForCoveredMessages(msg.chatId, reincluded, coverage, userId, true).catch(() => {});
-            }
-          }
-        }
+        await reconcileVisibility(msg.chatId, userId).catch((err) => {
+          warn(`message exclusion visibility reconciliation failed: ${describeError(err)}`);
+        });
         await notify(userId, "info", msg.excluded
           ? `LumiBooks will leave ${ids.length} message${ids.length === 1 ? "" : "s"} untouched`
           : `LumiBooks will compress ${ids.length} message${ids.length === 1 ? "" : "s"} again`);

@@ -2055,7 +2055,6 @@ function makeDefaultProfile(id, name) {
     regexIncomingScriptIds: [],
     connectionId: null,
     samplers: { ...DEFAULT_SAMPLERS },
-    hideCoveredMessages: true,
     showMemoryPreviews: false,
     retryCount: 3,
     ttftTimeoutSecs: 60

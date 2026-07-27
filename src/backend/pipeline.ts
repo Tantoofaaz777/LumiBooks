@@ -7,7 +7,7 @@ import { approximateTokensFromChars } from "../shared";
 import {
   buildCoverage,
   isExcluded,
-  syncHiddenForCoveredMessages,
+  reconcileVisibility,
 } from "./coverage";
 import { createChapterEntry, deleteEntry, ensureBookForChat, invalidateBookCache, listLmbEntries, patchEntryMeta, type LMBEntry } from "./world-book";
 import { loadSettings } from "./storage";
@@ -523,22 +523,9 @@ async function commitChapter(
   }
 
   try {
-    await syncHiddenForCoveredMessages(
-      chatId,
-      allMessages,
-      {
-        coveredBy: new Map(window.map((m) => [m.id, entry.id])),
-        activeEntries: [],
-        volumes: [],
-        arcs: [],
-        chapters: [],
-      },
-      userId,
-      true,
-      meta.lastMsgIdx,
-    );
+    await reconcileVisibility(chatId, userId);
   } catch (err) {
-    warn(`setMessagesHidden failed: ${describeError(err)}`);
+    warn(`chapter visibility reconciliation failed: ${describeError(err)}`);
   }
   publishChapterCreated(userId, {
     chatId,
@@ -744,6 +731,9 @@ async function commitArc(
       warn(`regen: failed to delete replaced arc ${replacesEntryId}: ${describeError(err)}`);
     }
   }
+  await reconcileVisibility(chatId, userId).catch((err) => {
+    warn(`arc visibility reconciliation failed: ${describeError(err)}`);
+  });
   publishArcCreated(userId, {
     chatId,
     arcEntryId: arcEntry.id,
@@ -948,6 +938,9 @@ async function commitVolume(
       warn(`regen: failed to delete replaced volume ${replacesEntryId}: ${describeError(err)}`);
     }
   }
+  await reconcileVisibility(chatId, userId).catch((err) => {
+    warn(`volume visibility reconciliation failed: ${describeError(err)}`);
+  });
   publishVolumeCreated(userId, {
     chatId,
     volumeEntryId: volumeEntry.id,

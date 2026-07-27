@@ -3,6 +3,7 @@ declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 import type { CoverageStats } from "../types";
 import { approximateTokensFromChars } from "../shared";
 import { listLmbEntries, type LMBEntry } from "./world-book";
+import { describeError, warn } from "./runtime";
 
 export type ChatMessage = Awaited<ReturnType<typeof spindle.chat.getMessages>>[number];
 type ChatMessageDTO = ChatMessage;
@@ -14,6 +15,18 @@ export interface CoverageMap {
   arcs: LMBEntry[];
   chapters: LMBEntry[];
 }
+
+export interface ReconcileVisibilityResult {
+  frontier: number | null;
+  hidden: number;
+  unhidden: number;
+}
+
+export const VISIBILITY_FRONTIER_KEY = "lumibooks_hide_frontier";
+export const VISIBILITY_IDS_KEY = "lumibooks_hidden_message_ids";
+
+const VISIBILITY_CHUNK_SIZE = 500;
+const visibilityChains = new Map<string, Promise<unknown>>();
 
 export async function buildCoverage(chatId: string, userId: string, preloadedEntries?: LMBEntry[]): Promise<CoverageMap> {
   const allEntries = preloadedEntries ?? (await listLmbEntries(chatId, userId));
@@ -121,95 +134,176 @@ export function computeCoverageStats(
   };
 }
 
-export async function syncHiddenForCoveredMessages(
+function messageIndex(message: ChatMessageDTO, fallback: number): number {
+  const index = (message as { index_in_chat?: number }).index_in_chat;
+  return typeof index === "number" && Number.isFinite(index) ? index : fallback;
+}
+
+function isHidden(message: ChatMessageDTO): boolean {
+  return !!(message.extra && (message.extra as Record<string, unknown>).hidden);
+}
+
+function readOwnedIds(value: unknown): Set<string> {
+  if (!Array.isArray(value)) return new Set();
+  return new Set(value.filter((id): id is string => typeof id === "string" && id.length > 0));
+}
+
+function sameStringArray(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+async function setHiddenState(
   chatId: string,
-  messages: ChatMessageDTO[],
-  coverage: CoverageMap,
-  userId: string,
-  desiredHidden: boolean,
-  hideThroughIdx?: number,
-): Promise<void> {
-  void userId;
-  const toFlip: string[] = [];
-  for (const m of messages) {
-    if (isExcluded(m)) continue;
-    const idx = typeof m.index_in_chat === "number" ? m.index_in_chat : messages.indexOf(m);
-    const isCovered = typeof hideThroughIdx === "number"
-      ? idx <= hideThroughIdx
-      : coverage.coveredBy.has(m.id);
-    if (!isCovered) continue;
-    const currentlyHidden = !!(m.extra && (m.extra as Record<string, unknown>).hidden);
-    if (desiredHidden && !currentlyHidden) toFlip.push(m.id);
-    else if (!desiredHidden && currentlyHidden) toFlip.push(m.id);
-  }
-  if (toFlip.length === 0) return;
-  const CHUNK = 500;
-  for (let i = 0; i < toFlip.length; i += CHUNK) {
-    const slice = toFlip.slice(i, i + CHUNK);
+  messageIds: string[],
+  hidden: boolean,
+): Promise<Set<string>> {
+  const changed = new Set<string>();
+  for (let i = 0; i < messageIds.length; i += VISIBILITY_CHUNK_SIZE) {
+    const slice = messageIds.slice(i, i + VISIBILITY_CHUNK_SIZE);
     try {
-      await spindle.chat.setMessagesHidden(chatId, slice, desiredHidden);
-    } catch {
+      await spindle.chat.setMessagesHidden(chatId, slice, hidden);
+      for (const id of slice) changed.add(id);
+    } catch (batchError) {
+      let failed = 0;
+      let firstError: unknown = batchError;
       for (const id of slice) {
-        await spindle.chat.setMessageHidden(chatId, id, desiredHidden).catch(() => {});
+        try {
+          await spindle.chat.setMessageHidden(chatId, id, hidden);
+          changed.add(id);
+        } catch (error) {
+          if (failed === 0) firstError = error;
+          failed++;
+        }
+      }
+      if (failed > 0) {
+        warn(
+          `visibility ${hidden ? "hide" : "unhide"} failed for ${failed} message${failed === 1 ? "" : "s"}: `
+          + describeError(firstError),
+        );
       }
     }
   }
+  return changed;
 }
 
-export function pickOrphanedHiddenIds(messages: ChatMessageDTO[], coverage: CoverageMap): string[] {
-  const out: string[] = [];
-  for (const m of messages) {
-    if (isExcluded(m)) continue;
-    const currentlyHidden = !!(m.extra && (m.extra as Record<string, unknown>).hidden);
-    if (!currentlyHidden) continue;
-    if (coverage.coveredBy.has(m.id)) continue;
-    out.push(m.id);
-  }
-  return out;
-}
-
-export async function unhideCoveredMessages(
-  chatId: string,
-  msgIds: string[],
-  userId: string,
-): Promise<void> {
-  void userId;
-  if (msgIds.length === 0) return;
-  const CHUNK = 500;
-  for (let i = 0; i < msgIds.length; i += CHUNK) {
-    const slice = msgIds.slice(i, i + CHUNK);
-    try {
-      await spindle.chat.setMessagesHidden(chatId, slice, false);
-    } catch {
-      for (const id of slice) {
-        await spindle.chat.setMessageHidden(chatId, id, false).catch(() => {});
-      }
-    }
-  }
-}
-
-export async function resyncVisibility(
+async function reconcileVisibilityNow(
   chatId: string,
   userId: string,
-  desiredHiddenForCovered: boolean,
-): Promise<{ unhidden: number; hidden: number }> {
+): Promise<ReconcileVisibilityResult> {
+  const chat = await spindle.chats.get(chatId, userId);
+  if (!chat) return { frontier: null, hidden: 0, unhidden: 0 };
+
   const messages = await spindle.chat.getMessages(chatId);
   const coverage = await buildCoverage(chatId, userId);
-  const orphanedHidden = pickOrphanedHiddenIds(messages, coverage);
-  let hiddenBefore = 0;
-  let unhiddenAfter = 0;
-  if (orphanedHidden.length > 0) {
-    await unhideCoveredMessages(chatId, orphanedHidden, userId).catch(() => {});
-    unhiddenAfter = orphanedHidden.length;
+  const frontierValues = coverage.activeEntries
+    .map((entry) => entry.meta.lastMsgIdx)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const frontier = frontierValues.length > 0 ? Math.max(...frontierValues) : null;
+
+  const metadata = chat.metadata && typeof chat.metadata === "object"
+    ? (chat.metadata as Record<string, unknown>)
+    : {};
+  const ownedIds = readOwnedIds(metadata[VISIBILITY_IDS_KEY]);
+  const messageById = new Map(messages.map((message) => [message.id, message] as const));
+  const indexById = new Map(messages.map((message, index) => [message.id, messageIndex(message, index)] as const));
+  const desiredIds = new Set<string>();
+
+  if (frontier !== null) {
+    for (let index = 0; index < messages.length; index++) {
+      const message = messages[index]!;
+      if (!isExcluded(message) && messageIndex(message, index) <= frontier) desiredIds.add(message.id);
+    }
   }
-  for (const m of messages) {
-    if (isExcluded(m)) continue;
-    if (!coverage.coveredBy.has(m.id)) continue;
-    const currentlyHidden = !!(m.extra && (m.extra as Record<string, unknown>).hidden);
-    if (currentlyHidden !== desiredHiddenForCovered) hiddenBefore++;
+
+  const toUnhide: string[] = [];
+  for (const id of Array.from(ownedIds)) {
+    const message = messageById.get(id);
+    if (!message) {
+      ownedIds.delete(id);
+      continue;
+    }
+    if (desiredIds.has(id)) continue;
+    if (isHidden(message)) toUnhide.push(id);
+    else ownedIds.delete(id);
   }
-  if (hiddenBefore > 0) {
-    await syncHiddenForCoveredMessages(chatId, messages, coverage, userId, desiredHiddenForCovered).catch(() => {});
+
+  const unhiddenIds = await setHiddenState(chatId, toUnhide, false);
+  for (const id of unhiddenIds) ownedIds.delete(id);
+
+  const toHide: string[] = [];
+  for (const id of desiredIds) {
+    const message = messageById.get(id);
+    if (!message) continue;
+    // An already-hidden, unowned message may have been hidden manually.
+    if (isHidden(message)) continue;
+    toHide.push(id);
   }
-  return { unhidden: unhiddenAfter, hidden: desiredHiddenForCovered ? hiddenBefore : 0 };
+
+  const hiddenIds = await setHiddenState(chatId, toHide, true);
+  for (const id of hiddenIds) ownedIds.add(id);
+
+  const sortedOwnedIds = Array.from(ownedIds).sort((left, right) => {
+    const leftIndex = indexById.get(left) ?? Number.MAX_SAFE_INTEGER;
+    const rightIndex = indexById.get(right) ?? Number.MAX_SAFE_INTEGER;
+    return leftIndex - rightIndex || left.localeCompare(right);
+  });
+
+  const freshChat = await spindle.chats.get(chatId, userId);
+  if (!freshChat) {
+    await setHiddenState(chatId, Array.from(hiddenIds), false);
+    await setHiddenState(chatId, Array.from(unhiddenIds), true);
+    throw new Error(`Chat ${chatId} disappeared while LumiBooks reconciled visibility`);
+  }
+
+  const freshMetadata = freshChat.metadata && typeof freshChat.metadata === "object"
+    ? { ...(freshChat.metadata as Record<string, unknown>) }
+    : {};
+  const oldFrontier = typeof freshMetadata[VISIBILITY_FRONTIER_KEY] === "number"
+    ? (freshMetadata[VISIBILITY_FRONTIER_KEY] as number)
+    : null;
+  const oldOwnedIds = Array.from(readOwnedIds(freshMetadata[VISIBILITY_IDS_KEY])).sort((left, right) => {
+    const leftIndex = indexById.get(left) ?? Number.MAX_SAFE_INTEGER;
+    const rightIndex = indexById.get(right) ?? Number.MAX_SAFE_INTEGER;
+    return leftIndex - rightIndex || left.localeCompare(right);
+  });
+
+  if (frontier === null) delete freshMetadata[VISIBILITY_FRONTIER_KEY];
+  else freshMetadata[VISIBILITY_FRONTIER_KEY] = frontier;
+  if (sortedOwnedIds.length === 0) delete freshMetadata[VISIBILITY_IDS_KEY];
+  else freshMetadata[VISIBILITY_IDS_KEY] = sortedOwnedIds;
+
+  if (oldFrontier !== frontier || !sameStringArray(oldOwnedIds, sortedOwnedIds)) {
+    try {
+      await spindle.chats.update(chatId, { metadata: freshMetadata }, userId);
+    } catch (error) {
+      // Do not leave visibility changes behind without their ownership ledger.
+      await setHiddenState(chatId, Array.from(hiddenIds), false);
+      await setHiddenState(chatId, Array.from(unhiddenIds), true);
+      throw error;
+    }
+  }
+
+  return {
+    frontier,
+    hidden: hiddenIds.size,
+    unhidden: unhiddenIds.size,
+  };
+}
+
+export function reconcileVisibility(
+  chatId: string,
+  userId: string,
+): Promise<ReconcileVisibilityResult> {
+  const chainKey = `${userId}::${chatId}`;
+  const previous = visibilityChains.get(chainKey) ?? Promise.resolve();
+  const current = previous.then(
+    () => reconcileVisibilityNow(chatId, userId),
+    () => reconcileVisibilityNow(chatId, userId),
+  );
+  const guarded = current.catch(() => undefined);
+  visibilityChains.set(chainKey, guarded);
+  void guarded.finally(() => {
+    if (visibilityChains.get(chainKey) === guarded) visibilityChains.delete(chainKey);
+  });
+  return current;
 }

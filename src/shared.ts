@@ -29,7 +29,6 @@ export interface LMBProfile {
   regexIncomingScriptIds: string[];
   connectionId: string | null;
   samplers: SamplerSet;
-  hideCoveredMessages: boolean;
   showMemoryPreviews: boolean;
   retryCount: number;
   ttftTimeoutSecs: number;
@@ -116,7 +115,6 @@ export function makeDefaultProfile(id: string, name: string): LMBProfile {
     regexIncomingScriptIds: [],
     connectionId: null,
     samplers: { ...DEFAULT_SAMPLERS },
-    hideCoveredMessages: true,
     showMemoryPreviews: false,
     retryCount: 3,
     ttftTimeoutSecs: 60,
@@ -206,7 +204,6 @@ export function normalizeProfile(raw: unknown): LMBProfile | null {
       : base.regexIncomingScriptIds,
     connectionId: typeof v.connectionId === "string" && v.connectionId.trim() ? v.connectionId : null,
     samplers: normalizeSamplers(v.samplers),
-    hideCoveredMessages: true,
     showMemoryPreviews: typeof v.showMemoryPreviews === "boolean" ? v.showMemoryPreviews : base.showMemoryPreviews,
     retryCount: clampInt(v.retryCount, 0, 10, base.retryCount),
     ttftTimeoutSecs: clampInt(v.ttftTimeoutSecs, 10, 600, base.ttftTimeoutSecs),

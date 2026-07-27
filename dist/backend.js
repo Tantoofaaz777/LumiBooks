@@ -37,7 +37,6 @@ function makeDefaultProfile(id, name) {
     regexIncomingScriptIds: [],
     connectionId: null,
     samplers: { ...DEFAULT_SAMPLERS },
-    hideCoveredMessages: true,
     showMemoryPreviews: false,
     retryCount: 3,
     ttftTimeoutSecs: 60
@@ -115,7 +114,6 @@ function normalizeProfile(raw) {
     regexIncomingScriptIds: Array.isArray(v.regexIncomingScriptIds) ? v.regexIncomingScriptIds.filter((x) => typeof x === "string") : base.regexIncomingScriptIds,
     connectionId: typeof v.connectionId === "string" && v.connectionId.trim() ? v.connectionId : null,
     samplers: normalizeSamplers(v.samplers),
-    hideCoveredMessages: true,
     showMemoryPreviews: typeof v.showMemoryPreviews === "boolean" ? v.showMemoryPreviews : base.showMemoryPreviews,
     retryCount: clampInt(v.retryCount, 0, 10, base.retryCount),
     ttftTimeoutSecs: clampInt(v.ttftTimeoutSecs, 10, 600, base.ttftTimeoutSecs)
@@ -887,6 +885,10 @@ function invalidateAllBookCacheEntriesForBook(userId, bookId) {
 }
 
 // src/backend/coverage.ts
+var VISIBILITY_FRONTIER_KEY = "lumibooks_hide_frontier";
+var VISIBILITY_IDS_KEY = "lumibooks_hidden_message_ids";
+var VISIBILITY_CHUNK_SIZE = 500;
+var visibilityChains = new Map;
 async function buildCoverage(chatId, userId, preloadedEntries) {
   const allEntries = preloadedEntries ?? await listLmbEntries(chatId, userId);
   const entries = allEntries.filter((e) => !e.raw.disabled);
@@ -987,87 +989,152 @@ function computeCoverageStats(messages, coverage) {
     approxUncoveredTokens
   };
 }
-async function syncHiddenForCoveredMessages(chatId, messages, coverage, userId, desiredHidden, hideThroughIdx) {
-  const toFlip = [];
-  for (const m of messages) {
-    if (isExcluded(m))
-      continue;
-    const idx = typeof m.index_in_chat === "number" ? m.index_in_chat : messages.indexOf(m);
-    const isCovered = typeof hideThroughIdx === "number" ? idx <= hideThroughIdx : coverage.coveredBy.has(m.id);
-    if (!isCovered)
-      continue;
-    const currentlyHidden = !!(m.extra && m.extra.hidden);
-    if (desiredHidden && !currentlyHidden)
-      toFlip.push(m.id);
-    else if (!desiredHidden && currentlyHidden)
-      toFlip.push(m.id);
-  }
-  if (toFlip.length === 0)
-    return;
-  const CHUNK = 500;
-  for (let i = 0;i < toFlip.length; i += CHUNK) {
-    const slice = toFlip.slice(i, i + CHUNK);
+function messageIndex(message, fallback) {
+  const index = message.index_in_chat;
+  return typeof index === "number" && Number.isFinite(index) ? index : fallback;
+}
+function isHidden(message) {
+  return !!(message.extra && message.extra.hidden);
+}
+function readOwnedIds(value) {
+  if (!Array.isArray(value))
+    return new Set;
+  return new Set(value.filter((id) => typeof id === "string" && id.length > 0));
+}
+function sameStringArray(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+async function setHiddenState(chatId, messageIds, hidden) {
+  const changed = new Set;
+  for (let i = 0;i < messageIds.length; i += VISIBILITY_CHUNK_SIZE) {
+    const slice = messageIds.slice(i, i + VISIBILITY_CHUNK_SIZE);
     try {
-      await spindle.chat.setMessagesHidden(chatId, slice, desiredHidden);
-    } catch {
+      await spindle.chat.setMessagesHidden(chatId, slice, hidden);
+      for (const id of slice)
+        changed.add(id);
+    } catch (batchError) {
+      let failed = 0;
+      let firstError = batchError;
       for (const id of slice) {
-        await spindle.chat.setMessageHidden(chatId, id, desiredHidden).catch(() => {});
+        try {
+          await spindle.chat.setMessageHidden(chatId, id, hidden);
+          changed.add(id);
+        } catch (error2) {
+          if (failed === 0)
+            firstError = error2;
+          failed++;
+        }
+      }
+      if (failed > 0) {
+        warn(`visibility ${hidden ? "hide" : "unhide"} failed for ${failed} message${failed === 1 ? "" : "s"}: ` + describeError(firstError));
       }
     }
   }
+  return changed;
 }
-function pickOrphanedHiddenIds(messages, coverage) {
-  const out = [];
-  for (const m of messages) {
-    if (isExcluded(m))
-      continue;
-    const currentlyHidden = !!(m.extra && m.extra.hidden);
-    if (!currentlyHidden)
-      continue;
-    if (coverage.coveredBy.has(m.id))
-      continue;
-    out.push(m.id);
-  }
-  return out;
-}
-async function unhideCoveredMessages(chatId, msgIds, userId) {
-  if (msgIds.length === 0)
-    return;
-  const CHUNK = 500;
-  for (let i = 0;i < msgIds.length; i += CHUNK) {
-    const slice = msgIds.slice(i, i + CHUNK);
-    try {
-      await spindle.chat.setMessagesHidden(chatId, slice, false);
-    } catch {
-      for (const id of slice) {
-        await spindle.chat.setMessageHidden(chatId, id, false).catch(() => {});
-      }
-    }
-  }
-}
-async function resyncVisibility(chatId, userId, desiredHiddenForCovered) {
+async function reconcileVisibilityNow(chatId, userId) {
+  const chat = await spindle.chats.get(chatId, userId);
+  if (!chat)
+    return { frontier: null, hidden: 0, unhidden: 0 };
   const messages = await spindle.chat.getMessages(chatId);
   const coverage = await buildCoverage(chatId, userId);
-  const orphanedHidden = pickOrphanedHiddenIds(messages, coverage);
-  let hiddenBefore = 0;
-  let unhiddenAfter = 0;
-  if (orphanedHidden.length > 0) {
-    await unhideCoveredMessages(chatId, orphanedHidden, userId).catch(() => {});
-    unhiddenAfter = orphanedHidden.length;
+  const frontierValues = coverage.activeEntries.map((entry) => entry.meta.lastMsgIdx).filter((value) => typeof value === "number" && Number.isFinite(value));
+  const frontier = frontierValues.length > 0 ? Math.max(...frontierValues) : null;
+  const metadata = chat.metadata && typeof chat.metadata === "object" ? chat.metadata : {};
+  const ownedIds = readOwnedIds(metadata[VISIBILITY_IDS_KEY]);
+  const messageById = new Map(messages.map((message) => [message.id, message]));
+  const indexById = new Map(messages.map((message, index) => [message.id, messageIndex(message, index)]));
+  const desiredIds = new Set;
+  if (frontier !== null) {
+    for (let index = 0;index < messages.length; index++) {
+      const message = messages[index];
+      if (!isExcluded(message) && messageIndex(message, index) <= frontier)
+        desiredIds.add(message.id);
+    }
   }
-  for (const m of messages) {
-    if (isExcluded(m))
+  const toUnhide = [];
+  for (const id of Array.from(ownedIds)) {
+    const message = messageById.get(id);
+    if (!message) {
+      ownedIds.delete(id);
       continue;
-    if (!coverage.coveredBy.has(m.id))
+    }
+    if (desiredIds.has(id))
       continue;
-    const currentlyHidden = !!(m.extra && m.extra.hidden);
-    if (currentlyHidden !== desiredHiddenForCovered)
-      hiddenBefore++;
+    if (isHidden(message))
+      toUnhide.push(id);
+    else
+      ownedIds.delete(id);
   }
-  if (hiddenBefore > 0) {
-    await syncHiddenForCoveredMessages(chatId, messages, coverage, userId, desiredHiddenForCovered).catch(() => {});
+  const unhiddenIds = await setHiddenState(chatId, toUnhide, false);
+  for (const id of unhiddenIds)
+    ownedIds.delete(id);
+  const toHide = [];
+  for (const id of desiredIds) {
+    const message = messageById.get(id);
+    if (!message)
+      continue;
+    if (isHidden(message))
+      continue;
+    toHide.push(id);
   }
-  return { unhidden: unhiddenAfter, hidden: desiredHiddenForCovered ? hiddenBefore : 0 };
+  const hiddenIds = await setHiddenState(chatId, toHide, true);
+  for (const id of hiddenIds)
+    ownedIds.add(id);
+  const sortedOwnedIds = Array.from(ownedIds).sort((left, right) => {
+    const leftIndex = indexById.get(left) ?? Number.MAX_SAFE_INTEGER;
+    const rightIndex = indexById.get(right) ?? Number.MAX_SAFE_INTEGER;
+    return leftIndex - rightIndex || left.localeCompare(right);
+  });
+  const freshChat = await spindle.chats.get(chatId, userId);
+  if (!freshChat) {
+    await setHiddenState(chatId, Array.from(hiddenIds), false);
+    await setHiddenState(chatId, Array.from(unhiddenIds), true);
+    throw new Error(`Chat ${chatId} disappeared while LumiBooks reconciled visibility`);
+  }
+  const freshMetadata = freshChat.metadata && typeof freshChat.metadata === "object" ? { ...freshChat.metadata } : {};
+  const oldFrontier = typeof freshMetadata[VISIBILITY_FRONTIER_KEY] === "number" ? freshMetadata[VISIBILITY_FRONTIER_KEY] : null;
+  const oldOwnedIds = Array.from(readOwnedIds(freshMetadata[VISIBILITY_IDS_KEY])).sort((left, right) => {
+    const leftIndex = indexById.get(left) ?? Number.MAX_SAFE_INTEGER;
+    const rightIndex = indexById.get(right) ?? Number.MAX_SAFE_INTEGER;
+    return leftIndex - rightIndex || left.localeCompare(right);
+  });
+  if (frontier === null)
+    delete freshMetadata[VISIBILITY_FRONTIER_KEY];
+  else
+    freshMetadata[VISIBILITY_FRONTIER_KEY] = frontier;
+  if (sortedOwnedIds.length === 0)
+    delete freshMetadata[VISIBILITY_IDS_KEY];
+  else
+    freshMetadata[VISIBILITY_IDS_KEY] = sortedOwnedIds;
+  if (oldFrontier !== frontier || !sameStringArray(oldOwnedIds, sortedOwnedIds)) {
+    try {
+      await spindle.chats.update(chatId, { metadata: freshMetadata }, userId);
+    } catch (error2) {
+      await setHiddenState(chatId, Array.from(hiddenIds), false);
+      await setHiddenState(chatId, Array.from(unhiddenIds), true);
+      throw error2;
+    }
+  }
+  return {
+    frontier,
+    hidden: hiddenIds.size,
+    unhidden: unhiddenIds.size
+  };
+}
+function reconcileVisibility(chatId, userId) {
+  const chainKey = `${userId}::${chatId}`;
+  const previous = visibilityChains.get(chainKey) ?? Promise.resolve();
+  const current = previous.then(() => reconcileVisibilityNow(chatId, userId), () => reconcileVisibilityNow(chatId, userId));
+  const guarded = current.catch(() => {
+    return;
+  });
+  visibilityChains.set(chainKey, guarded);
+  guarded.finally(() => {
+    if (visibilityChains.get(chainKey) === guarded)
+      visibilityChains.delete(chainKey);
+  });
+  return current;
 }
 
 // src/backend/story-order.ts
@@ -2401,15 +2468,9 @@ async function commitChapter(chatId, profile, userId, window, result, firstIdx, 
       }
     }
     try {
-      await syncHiddenForCoveredMessages(chatId, allMessages, {
-        coveredBy: new Map(window.map((m) => [m.id, entry.id])),
-        activeEntries: [],
-        volumes: [],
-        arcs: [],
-        chapters: []
-      }, userId, true, meta.lastMsgIdx);
+      await reconcileVisibility(chatId, userId);
     } catch (err) {
-      warn(`setMessagesHidden failed: ${describeError(err)}`);
+      warn(`chapter visibility reconciliation failed: ${describeError(err)}`);
     }
     publishChapterCreated(userId, {
       chatId,
@@ -2571,6 +2632,9 @@ async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, re
         warn(`regen: failed to delete replaced arc ${replacesEntryId}: ${describeError(err)}`);
       }
     }
+    await reconcileVisibility(chatId, userId).catch((err) => {
+      warn(`arc visibility reconciliation failed: ${describeError(err)}`);
+    });
     publishArcCreated(userId, {
       chatId,
       arcEntryId: arcEntry.id,
@@ -2731,6 +2795,9 @@ async function commitVolume(chatId, userId, selected, result, firstIdx, lastIdx,
         warn(`regen: failed to delete replaced volume ${replacesEntryId}: ${describeError(err)}`);
       }
     }
+    await reconcileVisibility(chatId, userId).catch((err) => {
+      warn(`volume visibility reconciliation failed: ${describeError(err)}`);
+    });
     publishVolumeCreated(userId, {
       chatId,
       volumeEntryId: volumeEntry.id,
@@ -3076,9 +3143,10 @@ async function cloneShelfForFork(forkChatId, forkChatName, parentChatId, userId)
     info(`checked fork ${forkChatId.slice(0, 8)} from ${parentChatId.slice(0, 8)} (ancestor book was empty)`);
     return "done";
   }
-  const [forkMsgs, parentMsgs] = await Promise.all([
+  const [forkMsgs, parentMsgs, parentChat] = await Promise.all([
     spindle.chat.getMessages(forkChatId),
-    spindle.chat.getMessages(parentChatId)
+    spindle.chat.getMessages(parentChatId),
+    spindle.chats.get(parentChatId, userId)
   ]);
   const parentIdxById = new Map;
   for (const m of parentMsgs)
@@ -3091,6 +3159,9 @@ async function cloneShelfForFork(forkChatId, forkChatName, parentChatId, userId)
     }
     forkIdByIdx.set(m.index_in_chat, m.id);
   }
+  const parentMetadata = parentChat?.metadata && typeof parentChat.metadata === "object" ? parentChat.metadata : {};
+  const parentOwnedIds = Array.isArray(parentMetadata[VISIBILITY_IDS_KEY]) ? parentMetadata[VISIBILITY_IDS_KEY].filter((id) => typeof id === "string") : [];
+  const forkOwnedIds = parentOwnedIds.map((id) => parentIdxById.get(id)).filter((index) => typeof index === "number").map((index) => forkIdByIdx.get(index)).filter((id) => typeof id === "string");
   const remap = (msgIds) => {
     const ids = [];
     let first = Number.POSITIVE_INFINITY;
@@ -3175,7 +3246,7 @@ async function cloneShelfForFork(forkChatId, forkChatName, parentChatId, userId)
     const idMap = await copyLmbEntries(newBook.id, parentEntries, userId, forkTransform);
     cloned = idMap.size;
     if (cloned > 0) {
-      await rebindForkShelf(forkChatId, newBook.id, userId);
+      await rebindForkShelf(forkChatId, newBook.id, forkOwnedIds, userId);
     }
   } catch (err) {
     await spindle.world_books.delete(newBook.id, userId).catch(() => {});
@@ -3185,15 +3256,17 @@ async function cloneShelfForFork(forkChatId, forkChatName, parentChatId, userId)
     await spindle.world_books.delete(newBook.id, userId).catch((err) => {
       warn(`fork adoption: failed to delete unused book ${newBook.id}: ${describeError(err)}`);
     });
+    await setForkVisibilityLedger(forkChatId, forkOwnedIds, userId);
     await markForkAdoptionComplete(forkChatId, userId);
+    await reconcileVisibility(forkChatId, userId).catch((err) => {
+      warn(`fork adoption: visibility cleanup failed: ${describeError(err)}`);
+    });
     info(`checked fork ${forkChatId.slice(0, 8)} from ${parentChatId.slice(0, 8)} (no entries belonged before the fork)`);
     return "done";
   }
   invalidateBookCache(userId, forkChatId);
   try {
-    const profile = settings.profiles.find((p) => p.id === settings.activeProfileId);
-    const desiredHidden = profile ? profile.hideCoveredMessages : true;
-    await resyncVisibility(forkChatId, userId, desiredHidden);
+    await reconcileVisibility(forkChatId, userId);
   } catch (err) {
     warn(`fork adoption: visibility resync failed: ${describeError(err)}`);
   }
@@ -3208,7 +3281,7 @@ async function markForkAdoptionComplete(forkChatId, userId) {
   metadata[FORK_ADOPTED_FLAG] = true;
   await spindle.chats.update(forkChatId, { metadata }, userId);
 }
-async function rebindForkShelf(forkChatId, newBookId, userId) {
+async function rebindForkShelf(forkChatId, newBookId, forkOwnedIds, userId) {
   const chat = await spindle.chats.get(forkChatId, userId).catch(() => null);
   if (!chat)
     return;
@@ -3220,6 +3293,21 @@ async function rebindForkShelf(forkChatId, newBookId, userId) {
   metadata["chat_world_book_ids"] = nextBookIds;
   metadata["lumibooks_book_id"] = newBookId;
   metadata[FORK_ADOPTED_FLAG] = true;
+  if (forkOwnedIds.length > 0)
+    metadata[VISIBILITY_IDS_KEY] = forkOwnedIds;
+  else
+    delete metadata[VISIBILITY_IDS_KEY];
+  await spindle.chats.update(forkChatId, { metadata }, userId);
+}
+async function setForkVisibilityLedger(forkChatId, forkOwnedIds, userId) {
+  const chat = await spindle.chats.get(forkChatId, userId);
+  if (!chat)
+    throw new Error(`Fork chat ${forkChatId} disappeared during visibility remap`);
+  const metadata = chat.metadata && typeof chat.metadata === "object" ? { ...chat.metadata } : {};
+  if (forkOwnedIds.length > 0)
+    metadata[VISIBILITY_IDS_KEY] = forkOwnedIds;
+  else
+    delete metadata[VISIBILITY_IDS_KEY];
   await spindle.chats.update(forkChatId, { metadata }, userId);
 }
 
@@ -3762,6 +3850,11 @@ spindle.on("CHAT_SWITCHED", async (payload, hostUserId) => {
   if (p?.chatId)
     rememberChatUser(p.chatId, userId);
   invalidateConnectionsCache(userId);
+  if (p?.chatId) {
+    await reconcileVisibility(p.chatId, userId).catch((err) => {
+      warn(`chat switch visibility reconciliation failed: ${describeError(err)}`);
+    });
+  }
   await pushState(userId, p?.chatId ?? null);
 });
 spindle.on("MESSAGE_DELETED", async (payload, hostUserId) => {
@@ -3773,6 +3866,9 @@ spindle.on("MESSAGE_DELETED", async (payload, hostUserId) => {
     return;
   rememberChatUser(p.chatId, userId);
   invalidateBookCache(userId, p.chatId);
+  await reconcileVisibility(p.chatId, userId).catch((err) => {
+    warn(`message deletion visibility reconciliation failed: ${describeError(err)}`);
+  });
   await pushState(userId, p.chatId);
 });
 spindle.on("WORLD_BOOK_ENTRY_DELETED", async (payload, hostUserId) => {
@@ -3781,7 +3877,15 @@ spindle.on("WORLD_BOOK_ENTRY_DELETED", async (payload, hostUserId) => {
   const p = payload;
   if (!p?.worldBookId)
     return;
-  await handleExternalEntryDeletion(hostUserId, p.worldBookId, false);
+  await handleExternalBookChange(hostUserId, p.worldBookId, false);
+});
+spindle.on("WORLD_BOOK_ENTRY_CHANGED", async (payload, hostUserId) => {
+  if (!hostUserId)
+    return;
+  const p = payload;
+  if (!p?.worldBookId)
+    return;
+  await handleExternalBookChange(hostUserId, p.worldBookId, false);
 });
 spindle.on("WORLD_BOOK_DELETED", async (payload, hostUserId) => {
   if (!hostUserId)
@@ -3789,7 +3893,7 @@ spindle.on("WORLD_BOOK_DELETED", async (payload, hostUserId) => {
   const p = payload;
   if (!p?.id)
     return;
-  await handleExternalEntryDeletion(hostUserId, p.id, true);
+  await handleExternalBookChange(hostUserId, p.id, true);
 });
 spindle.on("REGEX_SCRIPT_CHANGED", (_payload, hostUserId) => {
   if (hostUserId)
@@ -3807,7 +3911,7 @@ spindle.on("MAIN_API_CHANGED", (_payload, hostUserId) => {
   if (hostUserId)
     invalidateConnectionsCache(hostUserId);
 });
-async function handleExternalEntryDeletion(userId, bookId, isBookDeletion) {
+async function handleExternalBookChange(userId, bookId, isBookDeletion) {
   const chatId = isBookDeletion ? findCachedChatIdForBook(userId, bookId) : await findChatIdForBook(userId, bookId).catch(() => null);
   if (!chatId)
     return;
@@ -3816,15 +3920,12 @@ async function handleExternalEntryDeletion(userId, bookId, isBookDeletion) {
   else
     invalidateBookCache(userId, chatId);
   try {
-    const settings = await loadSettings(userId);
-    const profile = settings.profiles.find((p) => p.id === settings.activeProfileId);
-    const desiredHidden = profile ? profile.hideCoveredMessages : true;
-    const { unhidden } = await resyncVisibility(chatId, userId, desiredHidden);
+    const { unhidden } = await reconcileVisibility(chatId, userId);
     if (unhidden > 0) {
       await notify(userId, "info", `LumiBooks unhid ${unhidden} message${unhidden === 1 ? "" : "s"} after an external lorebook change`);
     }
   } catch (err) {
-    warn(`external deletion resync failed: ${describeError(err)}`);
+    warn(`external lorebook visibility reconciliation failed: ${describeError(err)}`);
   }
   await pushState(userId, chatId);
 }
@@ -3872,6 +3973,13 @@ spindle.onFrontendMessage(async (raw, userId) => {
     await ensureUserFolders(userId);
     switch (msg.type) {
       case "ready":
+        if (msg.chatId) {
+          await reconcileVisibility(msg.chatId, userId).catch((err) => {
+            warn(`initial visibility reconciliation failed: ${describeError(err)}`);
+          });
+        }
+        await pushState(userId, msg.chatId);
+        break;
       case "refresh":
         await pushState(userId, msg.chatId);
         break;
@@ -3911,12 +4019,8 @@ spindle.onFrontendMessage(async (raw, userId) => {
           send({ type: "error", text: "Invalid profile payload." }, userId);
           break;
         }
-        let prevHide = null;
-        let nextHide = null;
-        let activeBefore = null;
         let missing = false;
         await mutateSettings(userId, (cur) => {
-          activeBefore = cur.activeProfileId;
           const existing = cur.profiles.find((p) => p.id === id);
           if (!existing) {
             missing = true;
@@ -3925,23 +4029,12 @@ spindle.onFrontendMessage(async (raw, userId) => {
           const merged = normalizeProfile({ ...existing, ...incoming, id });
           if (!merged)
             return cur;
-          prevHide = existing.hideCoveredMessages;
-          nextHide = merged.hideCoveredMessages;
           return { ...cur, profiles: cur.profiles.map((p) => p.id === id ? merged : p) };
         });
         if (missing) {
           warn(`save_profile dropped: no profile with id "${id}"`);
           send({ type: "error", text: `Profile ${id} no longer exists.` }, userId);
           break;
-        }
-        if (prevHide !== null && nextHide !== null && prevHide !== nextHide && id === activeBefore && msg.chatId) {
-          try {
-            const messages = await spindle.chat.getMessages(msg.chatId);
-            const coverage = await buildCoverage(msg.chatId, userId);
-            await syncHiddenForCoveredMessages(msg.chatId, messages, coverage, userId, nextHide);
-          } catch (err) {
-            warn(`hideCoveredMessages re-sync failed: ${describeError(err)}`);
-          }
         }
         await pushState(userId, msg.chatId);
         break;
@@ -4077,14 +4170,9 @@ spindle.onFrontendMessage(async (raw, userId) => {
         }
         await deleteEntry(msg.entryId, userId);
         invalidateBookCache(userId, msg.chatId);
-        if (entry) {
-          const remaining = entries.filter((e) => e.raw.id !== msg.entryId);
-          const newCoverage = await buildCoverage(msg.chatId, userId, remaining);
-          const toUnhide = entry.meta.msgIds.filter((id) => !newCoverage.coveredBy.has(id));
-          if (toUnhide.length > 0) {
-            await unhideCoveredMessages(msg.chatId, toUnhide, userId).catch(() => {});
-          }
-        }
+        await reconcileVisibility(msg.chatId, userId).catch((err) => {
+          warn(`delete entry visibility reconciliation failed: ${describeError(err)}`);
+        });
         await pushState(userId, msg.chatId);
         break;
       }
@@ -4111,12 +4199,9 @@ spindle.onFrontendMessage(async (raw, userId) => {
         }
         await releaseEntry(entry, userId);
         invalidateBookCache(userId, msg.chatId);
-        const remaining = entries.filter((e) => e.raw.id !== msg.entryId);
-        const newCoverage = await buildCoverage(msg.chatId, userId, remaining);
-        const toUnhide = entry.meta.msgIds.filter((id) => !newCoverage.coveredBy.has(id));
-        if (toUnhide.length > 0) {
-          await unhideCoveredMessages(msg.chatId, toUnhide, userId).catch(() => {});
-        }
+        await reconcileVisibility(msg.chatId, userId).catch((err) => {
+          warn(`release entry visibility reconciliation failed: ${describeError(err)}`);
+        });
         await notify(userId, "success", "LumiBooks released the entry to your lorebook");
         await pushState(userId, msg.chatId);
         break;
@@ -4185,7 +4270,10 @@ spindle.onFrontendMessage(async (raw, userId) => {
       case "bind_messages_to_entry": {
         const messages = await spindle.chat.getMessages(msg.chatId);
         const selected = new Set(msg.messageIds);
-        const ordered = messages.map((message, index) => ({ message, index })).filter(({ message }) => selected.has(message.id));
+        const ordered = messages.map((message, fallbackIndex) => ({
+          message,
+          index: typeof message.index_in_chat === "number" && Number.isFinite(message.index_in_chat) ? message.index_in_chat : fallbackIndex
+        })).filter(({ message }) => selected.has(message.id));
         if (ordered.length === 0) {
           await notify(userId, "warn", "No matching chat messages were found to bind");
           break;
@@ -4206,9 +4294,8 @@ spindle.onFrontendMessage(async (raw, userId) => {
         const tokenCountInput = ordered.reduce((sum, { message }) => sum + approximateTokensFromChars((message.content || "").length), 0);
         await patchEntryMeta(entry, { msgIds, firstMsgIdx, lastMsgIdx, tokenCountInput, forkMode: "range" }, userId);
         invalidateBookCache(userId, msg.chatId);
-        const coverage = await buildCoverage(msg.chatId, userId);
-        await syncHiddenForCoveredMessages(msg.chatId, messages, coverage, userId, true, lastMsgIdx).catch((err) => {
-          warn(`bind_messages_to_entry hide sync failed: ${describeError(err)}`);
+        await reconcileVisibility(msg.chatId, userId).catch((err) => {
+          warn(`bind_messages_to_entry visibility reconciliation failed: ${describeError(err)}`);
         });
         await notify(userId, "success", `Bound ${msgIds.length} message${msgIds.length === 1 ? "" : "s"} to that chapter`);
         await pushState(userId, msg.chatId);
@@ -4221,6 +4308,9 @@ spindle.onFrontendMessage(async (raw, userId) => {
       }
       case "confirm_adopt_lorebook": {
         const result = await confirmAdoptLorebook(msg.chatId, userId, msg.bookId, msg.entries);
+        await reconcileVisibility(msg.chatId, userId).catch((err) => {
+          warn(`adopt lorebook visibility reconciliation failed: ${describeError(err)}`);
+        });
         const text = result.adopted > 0 ? `Adopted ${result.adopted} entr${result.adopted === 1 ? "y" : "ies"} in-place${result.skipped ? ` (${result.skipped} skipped)` : ""}` : "No entries were adopted";
         await notify(userId, result.adopted > 0 ? "success" : "info", text);
         await pushState(userId, msg.chatId);
@@ -4344,8 +4434,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
           break;
         const messages = await spindle.chat.getMessages(msg.chatId);
         const byId = new Map(messages.map((m) => [m.id, m]));
-        const coveredNow = msg.excluded ? (await buildCoverage(msg.chatId, userId)).coveredBy : null;
-        const hideToUnhide = [];
         for (const id of ids) {
           const m = byId.get(id);
           if (!m)
@@ -4354,9 +4442,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
           const next = cur && typeof cur === "object" ? { ...cur } : {};
           if (msg.excluded) {
             next["lmb_excluded"] = true;
-            const hidden = !!(m.extra && m.extra.hidden);
-            if (hidden && coveredNow?.has(id))
-              hideToUnhide.push(id);
           } else {
             delete next["lmb_excluded"];
           }
@@ -4364,22 +4449,9 @@ spindle.onFrontendMessage(async (raw, userId) => {
             warn(`set_message_excluded: updateMessage failed for ${id}: ${describeError(err)}`);
           });
         }
-        if (hideToUnhide.length > 0) {
-          await unhideCoveredMessages(msg.chatId, hideToUnhide, userId).catch(() => {});
-        }
-        if (!msg.excluded) {
-          const cur = await loadSettings(userId);
-          const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
-          if (profile?.hideCoveredMessages) {
-            const fresh = await spindle.chat.getMessages(msg.chatId);
-            const coverage = await buildCoverage(msg.chatId, userId);
-            const idSet = new Set(ids);
-            const reincluded = fresh.filter((m) => idSet.has(m.id) && coverage.coveredBy.has(m.id));
-            if (reincluded.length > 0) {
-              await syncHiddenForCoveredMessages(msg.chatId, reincluded, coverage, userId, true).catch(() => {});
-            }
-          }
-        }
+        await reconcileVisibility(msg.chatId, userId).catch((err) => {
+          warn(`message exclusion visibility reconciliation failed: ${describeError(err)}`);
+        });
         await notify(userId, "info", msg.excluded ? `LumiBooks will leave ${ids.length} message${ids.length === 1 ? "" : "s"} untouched` : `LumiBooks will compress ${ids.length} message${ids.length === 1 ? "" : "s"} again`);
         await pushState(userId, msg.chatId);
         break;
