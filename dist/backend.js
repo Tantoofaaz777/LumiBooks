@@ -3917,6 +3917,31 @@ spindle.onFrontendMessage(async (raw, userId) => {
       case "refresh":
         await pushState(userId, msg.chatId);
         break;
+      case "open_text_editor": {
+        try {
+          const result = await spindle.textEditor.open({
+            title: msg.title || "Edit text",
+            value: msg.value,
+            placeholder: msg.placeholder ?? "",
+            userId
+          });
+          send({
+            type: "text_editor_result",
+            requestId: msg.requestId,
+            text: result.text,
+            cancelled: result.cancelled
+          }, userId);
+        } catch (err) {
+          send({
+            type: "text_editor_result",
+            requestId: msg.requestId,
+            text: msg.value,
+            cancelled: true,
+            error: describeError(err)
+          }, userId);
+        }
+        break;
+      }
       case "save_settings":
         await patchSettings(userId, msg.patch);
         await pushState(userId, msg.chatId);

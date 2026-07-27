@@ -360,19 +360,6 @@ export const STYLES = `
   stroke-linejoin: round;
 }
 
-.lmb-expanded-editor {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 8px 12px 12px 12px;
-  height: min(760px, calc(100vh - 120px));
-}
-.lmb-expanded-editor__textarea {
-  flex: 1 1 auto;
-  min-height: 0;
-  resize: none;
-}
-
 .lmb-select {
   width: 100%;
   appearance: none;

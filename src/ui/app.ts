@@ -2,7 +2,12 @@ import type { SpindleFrontendContext } from "lumiverse-spindle-types";
 import type { BackendToFrontend, FrontendState, FrontendToBackend } from "../types";
 import { ICON_SVG, STYLES } from "./styles";
 import { preserveScroll } from "./components";
-import { openAdoptLorebookModal, showDryRunModal } from "./modals";
+import {
+  clearPendingTextEditors,
+  handleTextEditorResult,
+  openAdoptLorebookModal,
+  showDryRunModal,
+} from "./modals";
 import { renderBooksTab, tryUpdateBusyLabelsInPlace } from "./tabs/books-tab";
 import { renderMakeTab } from "./tabs/make-tab";
 import { renderProfileTab } from "./tabs/profile-tab";
@@ -167,6 +172,11 @@ export function setup(ctx: SpindleFrontendContext): () => void {
       case "adopt_lorebook_candidates":
         openAdoptLorebookModal(ctx, msg.chatId, msg.books, send);
         break;
+      case "text_editor_result": {
+        const editorError = handleTextEditorResult(msg);
+        if (editorError) showInlineToast(root, "error", `Expanded editor failed: ${editorError}`);
+        break;
+      }
     }
   });
 
@@ -177,6 +187,7 @@ export function setup(ctx: SpindleFrontendContext): () => void {
     try { unsub(); } catch (_) { void _; }
     try { unsubActivate?.(); } catch (_) { void _; }
     try { tab.destroy?.(); } catch (_) { void _; }
+    clearPendingTextEditors();
   };
 }
 

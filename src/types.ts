@@ -181,6 +181,7 @@ export type FrontendToBackend =
   | { type: "rebase_root"; chatId: string; sourceChatId: string }
   | { type: "rebuild_root"; chatId: string; sourceChatId: string }
   | { type: "detach_root"; chatId: string }
+  | { type: "open_text_editor"; requestId: string; title: string; value: string; placeholder?: string }
   | { type: "set_message_excluded"; chatId: string; messageIds: string[]; excluded: boolean };
 
 export interface DryRunMessage {
@@ -198,4 +199,5 @@ export type BackendToFrontend =
   | { type: "busy"; entries: BusyEntry[] }
   | { type: "error"; text: string }
   | { type: "adopt_lorebook_candidates"; chatId: string; books: AdoptLorebookCandidate[] }
+  | { type: "text_editor_result"; requestId: string; text: string; cancelled: boolean; error?: string }
   | { type: "dry_run_result"; kind: "chapter" | "arc" | "volume"; messages: DryRunMessage[]; diagnostics: DryRunDiagnostic[] };

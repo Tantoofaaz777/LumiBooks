@@ -2,6 +2,7 @@ import type { SpindleFrontendContext } from "lumiverse-spindle-types";
 import type {
   AdoptLorebookCandidate,
   AdoptLorebookPlanEntry,
+  BackendToFrontend,
   ChapterView,
   DryRunDiagnostic,
   DryRunMessage,
@@ -13,6 +14,9 @@ export interface EditEntryFields {
   comment: string;
   content: string;
 }
+
+let textEditorRequestSeq = 0;
+const pendingTextEditors = new Map<string, HTMLTextAreaElement>();
 
 export function expandableTextArea(
   ctx: SpindleFrontendContext,
@@ -42,35 +46,31 @@ export function expandableTextArea(
 }
 
 function openExpandedTextEditor(ctx: SpindleFrontendContext, title: string, source: HTMLTextAreaElement): void {
-  const handle = ctx.ui.showModal({ title, width: 980, maxHeight: 820 });
-  const root = document.createElement("div");
-  root.className = "lmb-expanded-editor";
-  handle.root.appendChild(root);
+  const requestId = `text-editor-${Date.now()}-${++textEditorRequestSeq}`;
+  pendingTextEditors.set(requestId, source);
+  ctx.sendToBackend({
+    type: "open_text_editor",
+    requestId,
+    title,
+    value: source.value,
+    placeholder: source.placeholder,
+  } satisfies FrontendToBackend);
+}
 
-  const editor = textArea({ value: source.value, rows: 28 });
-  editor.classList.add("lmb-expanded-editor__textarea");
-  editor.selectionStart = source.selectionStart;
-  editor.selectionEnd = source.selectionEnd;
-  editor.addEventListener("input", () => {
-    source.value = editor.value;
-    source.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  editor.addEventListener("select", () => {
-    source.selectionStart = editor.selectionStart;
-    source.selectionEnd = editor.selectionEnd;
-  });
-  root.appendChild(editor);
+export function handleTextEditorResult(
+  msg: Extract<BackendToFrontend, { type: "text_editor_result" }>,
+): string | null {
+  const source = pendingTextEditors.get(msg.requestId);
+  pendingTextEditors.delete(msg.requestId);
+  if (!source || msg.cancelled) return msg.error ?? null;
+  source.value = msg.text;
+  source.dispatchEvent(new Event("input", { bubbles: true }));
+  source.dispatchEvent(new FocusEvent("blur", { bubbles: false }));
+  return msg.error ?? null;
+}
 
-  const actions = document.createElement("div");
-  actions.className = "lmb-modal-actions";
-  actions.append(makeButton("Close", () => {
-    source.selectionStart = editor.selectionStart;
-    source.selectionEnd = editor.selectionEnd;
-    source.dispatchEvent(new FocusEvent("blur", { bubbles: false }));
-    handle.dismiss();
-  }, { primary: true }));
-  root.appendChild(actions);
-  setTimeout(() => editor.focus(), 0);
+export function clearPendingTextEditors(): void {
+  pendingTextEditors.clear();
 }
 
 export function openEditModal(

@@ -361,19 +361,6 @@ var STYLES = `
   stroke-linejoin: round;
 }
 
-.lmb-expanded-editor {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 8px 12px 12px 12px;
-  height: min(760px, calc(100vh - 120px));
-}
-.lmb-expanded-editor__textarea {
-  flex: 1 1 auto;
-  min-height: 0;
-  resize: none;
-}
-
 .lmb-select {
   width: 100%;
   appearance: none;
@@ -913,6 +900,8 @@ function preserveScroll(anchor, fn) {
 var HIDDEN_ICON = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a19.77 19.77 0 0 1 4.22-5.42"/><path d="M22.54 16.88A10.94 10.94 0 0 0 23 12s-4-8-11-8a10.84 10.84 0 0 0-5.34 1.4"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
 
 // src/ui/modals.ts
+var textEditorRequestSeq = 0;
+var pendingTextEditors = new Map;
 function expandableTextArea(ctx, title, opts) {
   const wrap = document.createElement("div");
   wrap.className = "lmb-textarea-expand-wrap";
@@ -936,33 +925,28 @@ function expandableTextArea(ctx, title, opts) {
   return { wrap, textarea };
 }
 function openExpandedTextEditor(ctx, title, source) {
-  const handle = ctx.ui.showModal({ title, width: 980, maxHeight: 820 });
-  const root = document.createElement("div");
-  root.className = "lmb-expanded-editor";
-  handle.root.appendChild(root);
-  const editor = textArea({ value: source.value, rows: 28 });
-  editor.classList.add("lmb-expanded-editor__textarea");
-  editor.selectionStart = source.selectionStart;
-  editor.selectionEnd = source.selectionEnd;
-  editor.addEventListener("input", () => {
-    source.value = editor.value;
-    source.dispatchEvent(new Event("input", { bubbles: true }));
+  const requestId = `text-editor-${Date.now()}-${++textEditorRequestSeq}`;
+  pendingTextEditors.set(requestId, source);
+  ctx.sendToBackend({
+    type: "open_text_editor",
+    requestId,
+    title,
+    value: source.value,
+    placeholder: source.placeholder
   });
-  editor.addEventListener("select", () => {
-    source.selectionStart = editor.selectionStart;
-    source.selectionEnd = editor.selectionEnd;
-  });
-  root.appendChild(editor);
-  const actions = document.createElement("div");
-  actions.className = "lmb-modal-actions";
-  actions.append(makeButton("Close", () => {
-    source.selectionStart = editor.selectionStart;
-    source.selectionEnd = editor.selectionEnd;
-    source.dispatchEvent(new FocusEvent("blur", { bubbles: false }));
-    handle.dismiss();
-  }, { primary: true }));
-  root.appendChild(actions);
-  setTimeout(() => editor.focus(), 0);
+}
+function handleTextEditorResult(msg) {
+  const source = pendingTextEditors.get(msg.requestId);
+  pendingTextEditors.delete(msg.requestId);
+  if (!source || msg.cancelled)
+    return msg.error ?? null;
+  source.value = msg.text;
+  source.dispatchEvent(new Event("input", { bubbles: true }));
+  source.dispatchEvent(new FocusEvent("blur", { bubbles: false }));
+  return msg.error ?? null;
+}
+function clearPendingTextEditors() {
+  pendingTextEditors.clear();
 }
 function openEditModal(ctx, title, fields, onSave) {
   const handle = ctx.ui.showModal({ title, width: 640, maxHeight: 720 });
@@ -2844,6 +2828,12 @@ function setup(ctx) {
       case "adopt_lorebook_candidates":
         openAdoptLorebookModal(ctx, msg.chatId, msg.books, send);
         break;
+      case "text_editor_result": {
+        const editorError = handleTextEditorResult(msg);
+        if (editorError)
+          showInlineToast(root, "error", `Expanded editor failed: ${editorError}`);
+        break;
+      }
     }
   });
   send({ type: "ready", chatId: null });
@@ -2858,6 +2848,7 @@ function setup(ctx) {
     try {
       tab.destroy?.();
     } catch (_) {}
+    clearPendingTextEditors();
   };
 }
 var TOAST_STACK_CAP = 5;
