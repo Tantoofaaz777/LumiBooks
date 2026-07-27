@@ -399,6 +399,10 @@ async function formatEntryName(settings, ctx) {
   const fallback = fallbackEntryName(ctx);
   return resolveTemplate(template, ctx, fallback);
 }
+async function resolveChatName(chatId, userId) {
+  const chat = await spindle.chats.get(chatId, userId);
+  return chat?.name?.trim() || null;
+}
 async function formatBookName(settings, chatId, userId, chatName) {
   return resolveTemplate(settings.bookNameTemplate, {
     chatId,
@@ -406,7 +410,7 @@ async function formatBookName(settings, chatId, userId, chatName) {
     tier: "chapter",
     title: chatName?.trim() || chatId.slice(0, 8),
     sceneNumber: 1,
-    chatName
+    chatName: chatName ?? null
   }, bookNameFor(chatName, chatId));
 }
 async function resolveTemplate(template, ctx, fallback) {
@@ -542,11 +546,11 @@ async function listAllEntries(bookId, userId) {
   }
   return out;
 }
-async function findBookForChat(chatId, userId) {
+async function findBookForChat(chatId, userId, preloadedChat) {
   const cached = chatBookCache.get(cacheKey(userId, chatId));
   if (cached && cached.expiresAt > Date.now())
     return cached.bookId;
-  const chat = await spindle.chats.get(chatId, userId).catch(() => null);
+  const chat = preloadedChat === undefined ? await spindle.chats.get(chatId, userId).catch(() => null) : preloadedChat;
   const fromMeta = chat?.metadata && typeof chat.metadata === "object" ? chat.metadata : null;
   const claimed = fromMeta && typeof fromMeta["lumibooks_book_id"] === "string" ? fromMeta["lumibooks_book_id"] : null;
   if (claimed) {
@@ -2158,6 +2162,14 @@ function withCommitMutex(userId, chatId, tier, fn) {
   });
   return tail;
 }
+async function chatNameForNewEntry(chatId, userId) {
+  try {
+    return await resolveChatName(chatId, userId);
+  } catch (err) {
+    warn(`chat name lookup failed for new entry: ${describeError(err)}`);
+    return null;
+  }
+}
 var FAILURE_MAP_CAP = 500;
 var PREVIEW_MAP_CAP = 500;
 function capMap(map, cap) {
@@ -2525,9 +2537,11 @@ async function commitChapter(chatId, profile, userId, window, result, firstIdx, 
       rawOutput: result.rawOutput
     };
     const settings = await loadSettings(userId);
+    const chatName = await chatNameForNewEntry(chatId, userId);
     const comment = await formatEntryName(settings, {
       chatId,
       userId,
+      chatName,
       tier: "chapter",
       title: meta.title ?? "",
       sceneNumber,
@@ -2677,9 +2691,11 @@ async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, re
       rawOutput: result.rawOutput
     };
     const arcSettings = await loadSettings(userId);
+    const chatName = await chatNameForNewEntry(chatId, userId);
     const comment = await formatEntryName(arcSettings, {
       chatId,
       userId,
+      chatName,
       tier: "arc",
       title: meta.title ?? "",
       sceneNumber,
@@ -2840,9 +2856,11 @@ async function commitVolume(chatId, userId, selected, result, firstIdx, lastIdx,
       rawOutput: result.rawOutput
     };
     const volumeSettings = await loadSettings(userId);
+    const chatName = await chatNameForNewEntry(chatId, userId);
     const comment = await formatEntryName(volumeSettings, {
       chatId,
       userId,
+      chatName,
       tier: "volume",
       title: meta.title ?? "",
       sceneNumber,
@@ -3605,9 +3623,16 @@ async function syncProjectionEntry(chatId, userId) {
 // src/backend/naming-sync.ts
 async function syncNamingForChat(chatId, userId) {
   const settings = await loadSettings(userId);
-  const bookId = await findBookForChat(chatId, userId);
+  const chat = await spindle.chats.get(chatId, userId).catch((err) => {
+    warn(`chat name lookup failed during naming sync: ${describeError(err)}`);
+    return;
+  });
+  if (chat === undefined)
+    return;
+  const bookId = await findBookForChat(chatId, userId, chat);
   if (!bookId)
     return;
+  const chatName = chat?.name?.trim() || null;
   const book = await spindle.world_books.get(bookId, userId).catch(() => null);
   if (book) {
     const bookMeta = book.metadata && typeof book.metadata === "object" ? book.metadata : {};
@@ -3629,6 +3654,7 @@ async function syncNamingForChat(chatId, userId) {
     const nextComment = await formatEntryName(settings, {
       chatId,
       userId,
+      chatName,
       tier,
       title: entry.meta.title ?? "",
       sceneNumber: entry.meta.sceneNumber ?? 1,

@@ -9,6 +9,7 @@ export type EntryNameTier = "chapter" | "arc" | "volume";
 export interface EntryNameContext {
   chatId: string;
   userId: string;
+  chatName: string | null;
   tier: EntryNameTier;
   title: string;
   sceneNumber: number;
@@ -17,10 +18,6 @@ export interface EntryNameContext {
   lastMsgIdx?: number;
   sourceCount?: number;
   turnCount?: number;
-}
-
-interface TemplateContext extends EntryNameContext {
-  chatName?: string | null;
 }
 
 const LOCAL_MACRO_RE = /\{\{\s*([a-zA-Z][\w-]*)\s*\}\}/g;
@@ -47,6 +44,11 @@ export async function formatEntryName(settings: LMBSettings, ctx: EntryNameConte
   return resolveTemplate(template, ctx, fallback);
 }
 
+export async function resolveChatName(chatId: string, userId: string): Promise<string | null> {
+  const chat = await spindle.chats.get(chatId, userId);
+  return chat?.name?.trim() || null;
+}
+
 export async function formatBookName(
   settings: LMBSettings,
   chatId: string,
@@ -61,13 +63,13 @@ export async function formatBookName(
       tier: "chapter",
       title: chatName?.trim() || chatId.slice(0, 8),
       sceneNumber: 1,
-      chatName,
+      chatName: chatName ?? null,
     },
     bookNameFor(chatName, chatId),
   );
 }
 
-async function resolveTemplate(template: string, ctx: TemplateContext, fallback: string): Promise<string> {
+async function resolveTemplate(template: string, ctx: EntryNameContext, fallback: string): Promise<string> {
   const local = applyLocalMacros(template, ctx).trim();
   const candidate = local || fallback;
   try {
@@ -83,7 +85,7 @@ async function resolveTemplate(template: string, ctx: TemplateContext, fallback:
   }
 }
 
-function applyLocalMacros(template: string, ctx: TemplateContext): string {
+function applyLocalMacros(template: string, ctx: EntryNameContext): string {
   const range = sceneRange(ctx.firstMsgIdx, ctx.lastMsgIdx);
   const chatLabel = ctx.chatName?.trim() || ctx.chatId.slice(0, 8);
   const values: Record<string, string> = {

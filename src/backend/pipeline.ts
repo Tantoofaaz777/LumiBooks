@@ -11,7 +11,7 @@ import {
 } from "./coverage";
 import { createChapterEntry, deleteEntry, ensureBookForChat, invalidateBookCache, listLmbEntries, patchEntryMeta, type LMBEntry } from "./world-book";
 import { loadSettings } from "./storage";
-import { formatEntryName, savedMemoryContent } from "./naming";
+import { formatEntryName, resolveChatName, savedMemoryContent } from "./naming";
 import { inheritedStoryOrder, nextStoryOrder, storyOrderOf } from "./story-order";
 import { selectPreviousContextEntries } from "./previous-context";
 import {
@@ -57,6 +57,16 @@ function withCommitMutex<T>(userId: string, chatId: string, tier: 1 | 2 | 3, fn:
   });
   return tail;
 }
+
+async function chatNameForNewEntry(chatId: string, userId: string): Promise<string | null> {
+  try {
+    return await resolveChatName(chatId, userId);
+  } catch (err) {
+    warn(`chat name lookup failed for new entry: ${describeError(err)}`);
+    return null;
+  }
+}
+
 const FAILURE_MAP_CAP = 500;
 const PREVIEW_MAP_CAP = 500;
 
@@ -499,9 +509,11 @@ async function commitChapter(
     rawOutput: result.rawOutput,
   };
   const settings = await loadSettings(userId);
+  const chatName = await chatNameForNewEntry(chatId, userId);
   const comment = await formatEntryName(settings, {
     chatId,
     userId,
+    chatName,
     tier: "chapter",
     title: meta.title ?? "",
     sceneNumber,
@@ -693,9 +705,11 @@ async function commitArc(
     rawOutput: result.rawOutput,
   };
   const arcSettings = await loadSettings(userId);
+  const chatName = await chatNameForNewEntry(chatId, userId);
   const comment = await formatEntryName(arcSettings, {
     chatId,
     userId,
+    chatName,
     tier: "arc",
     title: meta.title ?? "",
     sceneNumber,
@@ -900,9 +914,11 @@ async function commitVolume(
     rawOutput: result.rawOutput,
   };
   const volumeSettings = await loadSettings(userId);
+  const chatName = await chatNameForNewEntry(chatId, userId);
   const comment = await formatEntryName(volumeSettings, {
     chatId,
     userId,
+    chatName,
     tier: "volume",
     title: meta.title ?? "",
     sceneNumber,

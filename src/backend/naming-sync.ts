@@ -8,8 +8,15 @@ import { findBookForChat, invalidateBookCache, listLmbEntries, updateEntry } fro
 
 export async function syncNamingForChat(chatId: string, userId: string): Promise<void> {
   const settings = await loadSettings(userId);
-  const bookId = await findBookForChat(chatId, userId);
+  const chat = await spindle.chats.get(chatId, userId).catch((err) => {
+    warn(`chat name lookup failed during naming sync: ${describeError(err)}`);
+    return undefined;
+  });
+  if (chat === undefined) return;
+
+  const bookId = await findBookForChat(chatId, userId, chat);
   if (!bookId) return;
+  const chatName = chat?.name?.trim() || null;
 
   const book = await spindle.world_books.get(bookId, userId).catch(() => null);
   if (book) {
@@ -37,6 +44,7 @@ export async function syncNamingForChat(chatId: string, userId: string): Promise
     const nextComment = await formatEntryName(settings, {
       chatId,
       userId,
+      chatName,
       tier,
       title: entry.meta.title ?? "",
       sceneNumber: entry.meta.sceneNumber ?? 1,

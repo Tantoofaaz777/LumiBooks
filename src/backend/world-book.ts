@@ -1,6 +1,6 @@
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
-import type { WorldBookDTO, WorldBookEntryDTO } from "lumiverse-spindle-types";
+import type { ChatDTO, WorldBookDTO, WorldBookEntryDTO } from "lumiverse-spindle-types";
 import type { LMBEntryMeta } from "../shared";
 import { EXTENSION_KEY, WORLD_BOOK_NAME_PREFIX, normalizeEntryMeta, normalizeOutletName } from "../shared";
 import { formatBookName } from "./naming";
@@ -94,11 +94,17 @@ export async function listAllEntries(bookId: string, userId: string): Promise<Wo
   return out;
 }
 
-export async function findBookForChat(chatId: string, userId: string): Promise<string | null> {
+export async function findBookForChat(
+  chatId: string,
+  userId: string,
+  preloadedChat?: ChatDTO | null,
+): Promise<string | null> {
   const cached = chatBookCache.get(cacheKey(userId, chatId));
   if (cached && cached.expiresAt > Date.now()) return cached.bookId;
 
-  const chat = await spindle.chats.get(chatId, userId).catch(() => null);
+  const chat = preloadedChat === undefined
+    ? await spindle.chats.get(chatId, userId).catch(() => null)
+    : preloadedChat;
   const fromMeta = chat?.metadata && typeof chat.metadata === "object" ? (chat.metadata as Record<string, unknown>) : null;
   const claimed = fromMeta && typeof fromMeta["lumibooks_book_id"] === "string" ? (fromMeta["lumibooks_book_id"] as string) : null;
   if (claimed) {
