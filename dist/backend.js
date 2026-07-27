@@ -444,6 +444,7 @@ function registerBookAnomalyCallback(cb) {
 var CHAT_BOOK_CACHE_CAP = 1000;
 var chatBookCache = new Map;
 var ensureInflight = new Map;
+var ownershipTransferChains = new Map;
 function setBookCache(key, value) {
   if (chatBookCache.has(key))
     chatBookCache.delete(key);
@@ -457,6 +458,22 @@ function setBookCache(key, value) {
 }
 function cacheKey(userId, chatId) {
   return `${userId}::${chatId}`;
+}
+function isArchivedBookMetadata(metadata) {
+  return !!metadata && typeof metadata["lumibooks_archived_at"] === "number";
+}
+function withOwnershipTransferLock(userId, fn) {
+  const previous = ownershipTransferChains.get(userId) ?? Promise.resolve();
+  const current = previous.then(fn, fn);
+  const guarded = current.catch(() => {
+    return;
+  });
+  ownershipTransferChains.set(userId, guarded);
+  guarded.finally(() => {
+    if (ownershipTransferChains.get(userId) === guarded)
+      ownershipTransferChains.delete(userId);
+  });
+  return current;
 }
 function makeBookMetadata(chatId, bookName, extra = {}) {
   return {
@@ -503,7 +520,7 @@ async function findBookForChat(chatId, userId) {
     if (exists) {
       const bookMeta = exists.metadata && typeof exists.metadata === "object" ? exists.metadata : null;
       const bookChatId = bookMeta ? bookMeta["lumibooks_chat_id"] : undefined;
-      if (bookChatId === chatId) {
+      if (bookChatId === chatId && !isArchivedBookMetadata(bookMeta)) {
         setBookCache(cacheKey(userId, chatId), { bookId: claimed, expiresAt: Date.now() + BOOK_INDEX_CACHE_TTL_MS });
         return claimed;
       }
@@ -512,7 +529,7 @@ async function findBookForChat(chatId, userId) {
   const books = await listAllBooks(userId);
   for (const book of books) {
     const meta = book.metadata;
-    if (meta && meta["lumibooks_chat_id"] === chatId) {
+    if (meta && meta["lumibooks_chat_id"] === chatId && !isArchivedBookMetadata(meta)) {
       setBookCache(cacheKey(userId, chatId), { bookId: book.id, expiresAt: Date.now() + BOOK_INDEX_CACHE_TTL_MS });
       return book.id;
     }
@@ -583,6 +600,8 @@ async function recoverBookForChat(chatId, userId) {
   const matches = [];
   for (const book of books) {
     const meta = book.metadata;
+    if (isArchivedBookMetadata(meta))
+      continue;
     const bookChatId = meta && typeof meta["lumibooks_chat_id"] === "string" ? meta["lumibooks_chat_id"] : null;
     if (bookChatId && bookChatId !== chatId)
       continue;
@@ -625,20 +644,102 @@ async function bindBookToChat(chatId, bookId, userId) {
   }, userId);
 }
 async function adoptBookForChat(chatId, bookId, userId) {
+  return withOwnershipTransferLock(userId, () => doAdoptBookForChat(chatId, bookId, userId));
+}
+async function doAdoptBookForChat(chatId, bookId, userId) {
   const book = await spindle.world_books.get(bookId, userId);
   if (!book)
     throw new Error(`World book ${bookId} not found`);
-  const metadata = book.metadata && typeof book.metadata === "object" ? book.metadata : {};
-  await spindle.world_books.update(bookId, {
-    metadata: {
-      ...metadata,
-      lumibooks_chat_id: chatId,
-      lumibooks_adopted_at: Date.now(),
-      lumibooks_preserve_name: true
+  const targetChat = await spindle.chats.get(chatId, userId);
+  if (!targetChat)
+    throw new Error(`Chat ${chatId} not found for user`);
+  const bookMetadata = { ...book.metadata || {} };
+  const targetMetadata = { ...targetChat.metadata || {} };
+  const sourceChatId = typeof bookMetadata["lumibooks_chat_id"] === "string" ? bookMetadata["lumibooks_chat_id"] : null;
+  invalidateAllBookCacheEntriesForBook(userId, bookId);
+  invalidateBookCache(userId, chatId);
+  if (sourceChatId)
+    invalidateBookCache(userId, sourceChatId);
+  const resolvedTargetBookId = await findBookForChat(chatId, userId);
+  const claimedTargetBookId = typeof targetMetadata["lumibooks_book_id"] === "string" ? targetMetadata["lumibooks_book_id"] : null;
+  const previousTargetBookId = resolvedTargetBookId && resolvedTargetBookId !== bookId ? resolvedTargetBookId : claimedTargetBookId && claimedTargetBookId !== bookId ? claimedTargetBookId : null;
+  const previousTargetBook = previousTargetBookId ? await spindle.world_books.get(previousTargetBookId, userId) : null;
+  const sourceChat = sourceChatId && sourceChatId !== chatId ? await spindle.chats.get(sourceChatId, userId) : null;
+  if (previousTargetBookId)
+    invalidateAllBookCacheEntriesForBook(userId, previousTargetBookId);
+  const sourceMetadata = sourceChat ? { ...sourceChat.metadata || {} } : null;
+  const previousTargetBookMetadata = previousTargetBook ? { ...previousTargetBook.metadata || {} } : null;
+  const nextBookMetadata = {
+    ...bookMetadata,
+    lumibooks_chat_id: chatId,
+    lumibooks_adopted_at: Date.now(),
+    lumibooks_preserve_name: true
+  };
+  delete nextBookMetadata["lumibooks_archived_at"];
+  delete nextBookMetadata["lumibooks_archived_from_chat_id"];
+  delete nextBookMetadata["lumibooks_replaced_by"];
+  const targetAttached = Array.isArray(targetMetadata["chat_world_book_ids"]) ? targetMetadata["chat_world_book_ids"].filter((x) => typeof x === "string") : [];
+  const nextTargetAttached = targetAttached.filter((id) => id !== bookId && id !== previousTargetBookId);
+  nextTargetAttached.push(bookId);
+  const nextTargetMetadata = {
+    ...targetMetadata,
+    chat_world_book_ids: nextTargetAttached,
+    lumibooks_book_id: bookId
+  };
+  let nextSourceMetadata = null;
+  if (sourceMetadata) {
+    const sourceAttached = Array.isArray(sourceMetadata["chat_world_book_ids"]) ? sourceMetadata["chat_world_book_ids"].filter((x) => typeof x === "string") : [];
+    nextSourceMetadata = {
+      ...sourceMetadata,
+      chat_world_book_ids: sourceAttached.filter((id) => id !== bookId)
+    };
+    if (nextSourceMetadata["lumibooks_book_id"] === bookId) {
+      delete nextSourceMetadata["lumibooks_book_id"];
     }
-  }, userId);
-  await bindBookToChat(chatId, bookId, userId);
-  setBookCache(cacheKey(userId, chatId), { bookId, expiresAt: Date.now() + BOOK_INDEX_CACHE_TTL_MS });
+  }
+  let archivedTargetBookMetadata = null;
+  if (previousTargetBookMetadata && previousTargetBookId) {
+    archivedTargetBookMetadata = {
+      ...previousTargetBookMetadata,
+      lumibooks_archived_at: Date.now(),
+      lumibooks_archived_from_chat_id: chatId,
+      lumibooks_replaced_by: bookId
+    };
+    delete archivedTargetBookMetadata["lumibooks_chat_id"];
+  }
+  const rollbacks = [];
+  try {
+    await spindle.world_books.update(bookId, { metadata: nextBookMetadata }, userId);
+    rollbacks.push(() => spindle.world_books.update(bookId, { metadata: bookMetadata }, userId));
+    if (sourceChat && sourceMetadata && nextSourceMetadata) {
+      await spindle.chats.update(sourceChat.id, { metadata: nextSourceMetadata }, userId);
+      rollbacks.push(() => spindle.chats.update(sourceChat.id, { metadata: sourceMetadata }, userId));
+    }
+    await spindle.chats.update(chatId, { metadata: nextTargetMetadata }, userId);
+    rollbacks.push(() => spindle.chats.update(chatId, { metadata: targetMetadata }, userId));
+    if (previousTargetBook && previousTargetBookMetadata && archivedTargetBookMetadata) {
+      await spindle.world_books.update(previousTargetBook.id, { metadata: archivedTargetBookMetadata }, userId);
+      rollbacks.push(() => spindle.world_books.update(previousTargetBook.id, { metadata: previousTargetBookMetadata }, userId));
+    }
+  } catch (err) {
+    for (let i = rollbacks.length - 1;i >= 0; i--) {
+      await rollbacks[i]().catch((rollbackErr) => {
+        warn(`book adoption rollback failed: ${describeError(rollbackErr)}`);
+      });
+    }
+    throw err;
+  } finally {
+    invalidateAllBookCacheEntriesForBook(userId, bookId);
+    invalidateBookCache(userId, chatId);
+    if (sourceChatId)
+      invalidateBookCache(userId, sourceChatId);
+    if (previousTargetBookId)
+      invalidateAllBookCacheEntriesForBook(userId, previousTargetBookId);
+  }
+  setBookCache(cacheKey(userId, chatId), {
+    bookId,
+    expiresAt: Date.now() + BOOK_INDEX_CACHE_TTL_MS
+  });
 }
 async function getChatAttachedBookIds(chatId, userId) {
   const chat = await spindle.chats.get(chatId, userId).catch(() => null);
@@ -3383,63 +3484,86 @@ async function listAdoptLorebookCandidates(chatId, userId) {
 }
 async function confirmAdoptLorebook(chatId, userId, bookId, plan) {
   const settings = await loadSettings(userId);
-  await adoptBookForChat(chatId, bookId, userId);
-  const existing = await listLmbEntries(chatId, userId);
+  const entries = await listAllEntries(bookId, userId);
   const sceneCounts = new Map([
     [1, 0],
     [2, 0],
     [3, 0]
   ]);
-  for (const entry of existing) {
-    sceneCounts.set(entry.meta.tier, Math.max(sceneCounts.get(entry.meta.tier) ?? 0, entry.meta.sceneNumber ?? 0));
+  for (const entry of entries) {
+    const ext = entry.extensions || {};
+    const meta = normalizeEntryMeta(ext[EXTENSION_KEY]);
+    if (!meta || meta.chatId !== chatId)
+      continue;
+    sceneCounts.set(meta.tier, Math.max(sceneCounts.get(meta.tier) ?? 0, meta.sceneNumber ?? 0));
   }
-  const entries = await listAllEntries(bookId, userId);
   const byId = new Map(entries.map((entry) => [entry.id, entry]));
   const orderedPlan = plan.filter((entry) => entry.tier === 1 || entry.tier === 2 || entry.tier === 3).slice().sort((a, b) => a.storyOrder - b.storyOrder);
   let adopted = 0;
   let skipped = 0;
-  for (const item of orderedPlan) {
-    const source = byId.get(item.entryId);
-    if (!source || source.disabled) {
-      skipped++;
-      continue;
+  const updatedEntries = [];
+  try {
+    for (const item of orderedPlan) {
+      const source = byId.get(item.entryId);
+      if (!source || source.disabled) {
+        skipped++;
+        continue;
+      }
+      const ext = source.extensions || {};
+      const existingMeta = normalizeEntryMeta(ext[EXTENSION_KEY]);
+      if (existingMeta?.chatId === chatId) {
+        skipped++;
+        continue;
+      }
+      const tier = item.tier;
+      const sceneNumber = (sceneCounts.get(tier) ?? 0) + 1;
+      sceneCounts.set(tier, sceneNumber);
+      const title = existingMeta?.title || cleanTitle(source.comment) || cleanTitle(source.content.split(/\n+/, 1)[0] || "") || "Imported entry";
+      const meta = {
+        ...existingMeta,
+        tier,
+        chatId,
+        msgIds: [],
+        firstMsgIdx: undefined,
+        lastMsgIdx: undefined,
+        tokenCountInput: 0,
+        tokenCountOutput: approximateTokensFromChars((source.content || "").length),
+        model: existingMeta?.model || "adopted",
+        connectionId: existingMeta?.connectionId || "adopted",
+        createdAt: existingMeta?.createdAt || source.created_at || Date.now(),
+        title,
+        sceneNumber,
+        storyOrder: item.storyOrder,
+        preserveComment: true,
+        supersededByEntryId: null
+      };
+      await spindle.world_books.entries.update(source.id, {
+        constant: true,
+        position: 8,
+        outlet_name: normalizeOutletName(settings.memoryOutletName),
+        order_value: item.storyOrder,
+        extensions: { ...ext, [EXTENSION_KEY]: meta }
+      }, userId);
+      updatedEntries.push(source);
+      adopted++;
     }
-    const ext = source.extensions || {};
-    const existingMeta = normalizeEntryMeta(ext[EXTENSION_KEY]);
-    if (existingMeta?.chatId === chatId) {
-      skipped++;
-      continue;
+    await adoptBookForChat(chatId, bookId, userId);
+  } catch (err) {
+    for (let i = updatedEntries.length - 1;i >= 0; i--) {
+      const source = updatedEntries[i];
+      const outletName = source.outlet_name;
+      await spindle.world_books.entries.update(source.id, {
+        constant: source.constant,
+        position: source.position,
+        outlet_name: typeof outletName === "string" ? outletName : "",
+        order_value: source.order_value,
+        extensions: source.extensions || {}
+      }, userId).catch((rollbackErr) => {
+        warn(`entry adoption rollback failed for ${source.id}: ${describeError(rollbackErr)}`);
+      });
     }
-    const tier = item.tier;
-    const sceneNumber = (sceneCounts.get(tier) ?? 0) + 1;
-    sceneCounts.set(tier, sceneNumber);
-    const title = existingMeta?.title || cleanTitle(source.comment) || cleanTitle(source.content.split(/\n+/, 1)[0] || "") || "Imported entry";
-    const meta = {
-      ...existingMeta,
-      tier,
-      chatId,
-      msgIds: [],
-      firstMsgIdx: undefined,
-      lastMsgIdx: undefined,
-      tokenCountInput: 0,
-      tokenCountOutput: approximateTokensFromChars((source.content || "").length),
-      model: existingMeta?.model || "adopted",
-      connectionId: existingMeta?.connectionId || "adopted",
-      createdAt: existingMeta?.createdAt || source.created_at || Date.now(),
-      title,
-      sceneNumber,
-      storyOrder: item.storyOrder,
-      preserveComment: true,
-      supersededByEntryId: null
-    };
-    await spindle.world_books.entries.update(source.id, {
-      constant: true,
-      position: 8,
-      outlet_name: normalizeOutletName(settings.memoryOutletName),
-      order_value: item.storyOrder,
-      extensions: { ...ext, [EXTENSION_KEY]: meta }
-    }, userId);
-    adopted++;
+    invalidateBookCache(userId, chatId);
+    throw err;
   }
   invalidateBookCache(userId, chatId);
   return { adopted, skipped };

@@ -5,13 +5,13 @@ import type { AdoptLorebookCandidate, AdoptLorebookPlanEntry } from "../types";
 import type { LMBEntryMeta } from "../shared";
 import { EXTENSION_KEY, approximateTokensFromChars, normalizeEntryMeta, normalizeOutletName } from "../shared";
 import { loadSettings } from "./storage";
+import { describeError, warn } from "./runtime";
 import {
   adoptBookForChat,
   findBookForChat,
   getChatAttachedBookIds,
   invalidateBookCache,
   listAllEntries,
-  listLmbEntries,
 } from "./world-book";
 
 export async function listAdoptLorebookCandidates(chatId: string, userId: string): Promise<AdoptLorebookCandidate[]> {
@@ -54,18 +54,19 @@ export async function confirmAdoptLorebook(
   plan: AdoptLorebookPlanEntry[],
 ): Promise<{ adopted: number; skipped: number }> {
   const settings = await loadSettings(userId);
-  await adoptBookForChat(chatId, bookId, userId);
-  const existing = await listLmbEntries(chatId, userId);
+  const entries = await listAllEntries(bookId, userId);
   const sceneCounts = new Map<1 | 2 | 3, number>([
     [1, 0],
     [2, 0],
     [3, 0],
   ]);
-  for (const entry of existing) {
-    sceneCounts.set(entry.meta.tier, Math.max(sceneCounts.get(entry.meta.tier) ?? 0, entry.meta.sceneNumber ?? 0));
+  for (const entry of entries) {
+    const ext = (entry.extensions || {}) as Record<string, unknown>;
+    const meta = normalizeEntryMeta(ext[EXTENSION_KEY]);
+    if (!meta || meta.chatId !== chatId) continue;
+    sceneCounts.set(meta.tier, Math.max(sceneCounts.get(meta.tier) ?? 0, meta.sceneNumber ?? 0));
   }
 
-  const entries = await listAllEntries(bookId, userId);
   const byId = new Map(entries.map((entry) => [entry.id, entry] as const));
   const orderedPlan = plan
     .filter((entry) => entry.tier === 1 || entry.tier === 2 || entry.tier === 3)
@@ -73,52 +74,77 @@ export async function confirmAdoptLorebook(
     .sort((a, b) => a.storyOrder - b.storyOrder);
   let adopted = 0;
   let skipped = 0;
-  for (const item of orderedPlan) {
-    const source = byId.get(item.entryId);
-    if (!source || source.disabled) {
-      skipped++;
-      continue;
+  const updatedEntries: WorldBookEntryDTO[] = [];
+  try {
+    for (const item of orderedPlan) {
+      const source = byId.get(item.entryId);
+      if (!source || source.disabled) {
+        skipped++;
+        continue;
+      }
+      const ext = (source.extensions || {}) as Record<string, unknown>;
+      const existingMeta = normalizeEntryMeta(ext[EXTENSION_KEY]);
+      if (existingMeta?.chatId === chatId) {
+        skipped++;
+        continue;
+      }
+      const tier = item.tier as 1 | 2 | 3;
+      const sceneNumber = (sceneCounts.get(tier) ?? 0) + 1;
+      sceneCounts.set(tier, sceneNumber);
+      const title = existingMeta?.title || cleanTitle(source.comment) || cleanTitle(source.content.split(/\n+/, 1)[0] || "") || "Imported entry";
+      const meta: LMBEntryMeta = {
+        ...existingMeta,
+        tier,
+        chatId,
+        msgIds: [],
+        firstMsgIdx: undefined,
+        lastMsgIdx: undefined,
+        tokenCountInput: 0,
+        tokenCountOutput: approximateTokensFromChars((source.content || "").length),
+        model: existingMeta?.model || "adopted",
+        connectionId: existingMeta?.connectionId || "adopted",
+        createdAt: existingMeta?.createdAt || source.created_at || Date.now(),
+        title,
+        sceneNumber,
+        storyOrder: item.storyOrder,
+        preserveComment: true,
+        supersededByEntryId: null,
+      };
+      await spindle.world_books.entries.update(
+        source.id,
+        {
+          constant: true,
+          position: 8,
+          outlet_name: normalizeOutletName(settings.memoryOutletName),
+          order_value: item.storyOrder,
+          extensions: { ...ext, [EXTENSION_KEY]: meta },
+        } as never,
+        userId,
+      );
+      updatedEntries.push(source);
+      adopted++;
     }
-    const ext = (source.extensions || {}) as Record<string, unknown>;
-    const existingMeta = normalizeEntryMeta(ext[EXTENSION_KEY]);
-    if (existingMeta?.chatId === chatId) {
-      skipped++;
-      continue;
+    await adoptBookForChat(chatId, bookId, userId);
+  } catch (err) {
+    for (let i = updatedEntries.length - 1; i >= 0; i--) {
+      const source = updatedEntries[i]!;
+      const outletName = (source as unknown as { outlet_name?: string }).outlet_name;
+      await spindle.world_books.entries.update(
+        source.id,
+        {
+          constant: source.constant,
+          position: source.position,
+          outlet_name: typeof outletName === "string" ? outletName : "",
+          order_value: source.order_value,
+          extensions: source.extensions || {},
+        } as never,
+        userId,
+      ).catch((rollbackErr) => {
+        warn(`entry adoption rollback failed for ${source.id}: ${describeError(rollbackErr)}`);
+      });
     }
-    const tier = item.tier as 1 | 2 | 3;
-    const sceneNumber = (sceneCounts.get(tier) ?? 0) + 1;
-    sceneCounts.set(tier, sceneNumber);
-    const title = existingMeta?.title || cleanTitle(source.comment) || cleanTitle(source.content.split(/\n+/, 1)[0] || "") || "Imported entry";
-    const meta: LMBEntryMeta = {
-      ...existingMeta,
-      tier,
-      chatId,
-      msgIds: [],
-      firstMsgIdx: undefined,
-      lastMsgIdx: undefined,
-      tokenCountInput: 0,
-      tokenCountOutput: approximateTokensFromChars((source.content || "").length),
-      model: existingMeta?.model || "adopted",
-      connectionId: existingMeta?.connectionId || "adopted",
-      createdAt: existingMeta?.createdAt || source.created_at || Date.now(),
-      title,
-      sceneNumber,
-      storyOrder: item.storyOrder,
-      preserveComment: true,
-      supersededByEntryId: null,
-    };
-    await spindle.world_books.entries.update(
-      source.id,
-      {
-        constant: true,
-        position: 8,
-        outlet_name: normalizeOutletName(settings.memoryOutletName),
-        order_value: item.storyOrder,
-        extensions: { ...ext, [EXTENSION_KEY]: meta },
-      } as never,
-      userId,
-    );
-    adopted++;
+    invalidateBookCache(userId, chatId);
+    throw err;
   }
   invalidateBookCache(userId, chatId);
   return { adopted, skipped };
