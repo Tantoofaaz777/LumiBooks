@@ -416,6 +416,8 @@ async function formatBookName(settings, chatId, userId, chatName) {
 async function resolveTemplate(template, ctx, fallback) {
   const local = applyLocalMacros(template, ctx).trim();
   const candidate = local || fallback;
+  if (!candidate.includes("{{"))
+    return candidate;
   try {
     const resolved = await spindle.macros.resolve(candidate, {
       chatId: ctx.chatId,
@@ -807,6 +809,9 @@ async function listLmbEntries(chatId, userId) {
   if (!bookId)
     return [];
   const raw = await listAllEntries(bookId, userId);
+  return lmbEntriesFromRaw(raw, chatId);
+}
+function lmbEntriesFromRaw(raw, chatId) {
   const out = [];
   for (const entry of raw) {
     const ext = entry.extensions || {};
@@ -1226,8 +1231,8 @@ function inheritedStoryOrder(sources, fallbackEntries = []) {
     return Math.min(...values);
   return nextStoryOrder(fallbackEntries);
 }
-async function syncStoryOrderForChat(chatId, userId) {
-  const entries = await listLmbEntries(chatId, userId).catch(() => []);
+async function syncStoryOrderForChat(chatId, userId, preloadedEntries) {
+  const entries = preloadedEntries ?? await listLmbEntries(chatId, userId).catch(() => []);
   if (entries.length === 0)
     return;
   let next = nextStoryOrder(entries.filter((entry) => typeof entry.meta.storyOrder === "number"));
@@ -1248,23 +1253,25 @@ async function syncStoryOrderForChat(chatId, userId) {
     if (typeof storyOrder !== "number") {
       const sourceOrders = (entry.meta.sourceChapterEntryIds ?? []).map((id) => metaById.get(id)?.storyOrder).filter((n) => typeof n === "number");
       storyOrder = sourceOrders.length ? Math.min(...sourceOrders) : next++;
-      entry.meta.storyOrder = storyOrder;
-      metaById.set(entry.raw.id, entry.meta);
     }
     if (hadStoryOrder && entry.raw.order_value === storyOrder)
       continue;
     const ext = entry.raw.extensions || {};
+    const nextMeta = { ...entry.meta, storyOrder };
     try {
-      await spindle.world_books.entries.update(entry.raw.id, {
+      const updated = await spindle.world_books.entries.update(entry.raw.id, {
         order_value: storyOrder,
-        extensions: { ...ext, [EXTENSION_KEY]: { ...entry.meta, storyOrder } }
+        extensions: { ...ext, [EXTENSION_KEY]: nextMeta }
       }, userId);
+      Object.assign(entry.raw, updated);
+      entry.meta = nextMeta;
+      metaById.set(entry.raw.id, nextMeta);
       touched = true;
     } catch (err) {
       warn(`storyOrder sync failed for ${entry.raw.id}: ${describeError(err)}`);
     }
   }
-  if (touched)
+  if (touched && !preloadedEntries)
     invalidateBookCache(userId, chatId);
 }
 
@@ -3410,15 +3417,10 @@ async function setForkVisibilityLedger(forkChatId, forkOwnedIds, userId) {
 }
 
 // src/backend/state.ts
-async function buildState(userId, requestedChatId) {
-  const settings = await loadSettings(userId);
+async function buildState(userId, requestedChatId, context) {
+  const settings = context?.settings ?? await loadSettings(userId);
   const activeProfile = settings.profiles.find((p) => p.id === settings.activeProfileId) ?? settings.profiles[0];
-  let chat;
-  if (requestedChatId) {
-    chat = await spindle.chats.get(requestedChatId, userId).catch(() => null);
-  } else {
-    chat = await spindle.chats.getActive(userId).catch(() => null);
-  }
+  const chat = context ? context.chat : requestedChatId ? await spindle.chats.get(requestedChatId, userId).catch(() => null) : await spindle.chats.getActive(userId).catch(() => null);
   const [connectionsRaw, regexScriptsRaw] = await Promise.all([
     listConnections(userId),
     listRegexScripts(userId)
@@ -3465,19 +3467,19 @@ async function buildState(userId, requestedChatId) {
   };
   if (!chat)
     return baseState;
-  if (settings.enabled) {
+  if (!context && settings.enabled) {
     await ensureForkAdoption(chat.id, userId).catch(() => {});
     await reassertChatBinding(chat.id, userId).catch(() => {});
   }
-  const bookId = await findBookForChat(chat.id, userId);
-  const bookName = bookId !== null ? (await spindle.world_books.get(bookId, userId).catch(() => null))?.name ?? null : null;
+  const bookId = context ? context.bookId : await findBookForChat(chat.id, userId);
+  const bookName = context ? context.book?.name ?? null : bookId !== null ? (await spindle.world_books.get(bookId, userId).catch(() => null))?.name ?? null : null;
   let messages = [];
   try {
     messages = await spindle.chat.getMessages(chat.id);
   } catch (err) {
     warn(`failed to read messages for chat ${chat.id.slice(0, 8)}: ${describeError(err)}`);
   }
-  const entries = await listLmbEntries(chat.id, userId).catch(() => []);
+  const entries = context?.entries ?? await listLmbEntries(chat.id, userId).catch(() => []);
   const coverage = await buildCoverage(chat.id, userId, entries);
   const stats = computeCoverageStats(messages, coverage);
   const supersededIds = new Set;
@@ -3569,18 +3571,18 @@ function orderValueFor(meta, fallback) {
   return storyOrderFromMeta(meta, fallback);
 }
 async function updateEntry2(entry, patch, userId) {
-  await spindle.world_books.entries.update(entry.id, patch, userId);
+  return spindle.world_books.entries.update(entry.id, patch, userId);
 }
-async function syncProjectionEntry(chatId, userId) {
+async function syncProjectionEntry(chatId, userId, context) {
   try {
-    const bookId = await findBookForChat(chatId, userId).catch(() => null);
+    const bookId = context ? context.bookId : await findBookForChat(chatId, userId).catch(() => null);
     if (!bookId)
       return;
-    const settings = await loadSettings(userId);
+    const settings = context?.settings ?? await loadSettings(userId);
     const outletMode = settings.enabled;
     const outletName = normalizeOutletName(settings.memoryOutletName);
     const desiredConstant = settings.forceConstantEntries;
-    const entries = await listAllEntries(bookId, userId);
+    const entries = context?.rawEntries ?? await listAllEntries(bookId, userId);
     let touched = false;
     for (const entry of entries) {
       if (!isProjection(entry, chatId))
@@ -3610,10 +3612,11 @@ async function syncProjectionEntry(chatId, userId) {
       const needsPatch = entry.position !== patch.position || entry.order_value !== orderValue || outletMode && entry.constant !== desiredConstant || currentOutletName !== patch.outlet_name;
       if (!needsPatch)
         continue;
-      await updateEntry2(entry, patch, userId);
+      const updated = await updateEntry2(entry, patch, userId);
+      Object.assign(entry, updated);
       touched = true;
     }
-    if (touched)
+    if (touched && !context)
       invalidateBookCache(userId, chatId);
   } catch (err) {
     warn(`syncProjectionEntry failed: ${describeError(err)}`);
@@ -3621,23 +3624,30 @@ async function syncProjectionEntry(chatId, userId) {
 }
 
 // src/backend/naming-sync.ts
-async function syncNamingForChat(chatId, userId) {
-  const settings = await loadSettings(userId);
-  const chat = await spindle.chats.get(chatId, userId).catch((err) => {
-    warn(`chat name lookup failed during naming sync: ${describeError(err)}`);
+var NAME_SYNC_CONCURRENCY = 4;
+async function syncNamingForChat(chatId, userId, context) {
+  const settings = context?.settings ?? await loadSettings(userId);
+  let chat = context?.chat;
+  if (!context) {
+    chat = await spindle.chats.get(chatId, userId).catch((err) => {
+      warn(`chat name lookup failed during naming sync: ${describeError(err)}`);
+      return;
+    });
+    if (chat === undefined)
+      return;
+  }
+  if (!chat)
     return;
-  });
-  if (chat === undefined)
-    return;
-  const bookId = await findBookForChat(chatId, userId, chat);
+  const bookId = context ? context.bookId : await findBookForChat(chatId, userId, chat);
   if (!bookId)
     return;
   const chatName = chat?.name?.trim() || null;
-  const book = await spindle.world_books.get(bookId, userId).catch(() => null);
+  const book = context ? context.book : await spindle.world_books.get(bookId, userId).catch(() => null);
+  let touched = false;
   if (book) {
     const bookMeta = book.metadata && typeof book.metadata === "object" ? book.metadata : {};
     if (bookMeta["lumibooks_preserve_name"] !== true || typeof bookMeta["lumibooks_initial_name"] !== "string") {
-      await spindle.world_books.update(book.id, {
+      const updated = await spindle.world_books.update(book.id, {
         metadata: {
           ...bookMeta,
           lumibooks_preserve_name: true,
@@ -3645,11 +3655,43 @@ async function syncNamingForChat(chatId, userId) {
         }
       }, userId).catch((err) => {
         warn(`book name snapshot failed: ${describeError(err)}`);
+        return null;
       });
+      if (updated) {
+        Object.assign(book, updated);
+        touched = true;
+      }
     }
   }
-  const entries = await listLmbEntries(chatId, userId).catch(() => []);
+  const entries = context?.entries ?? await listLmbEntries(chatId, userId).catch(() => []);
+  const renameCandidates = [];
   for (const entry of entries) {
+    const patch = {};
+    if (isAdoptedEntry(entry.meta)) {
+      const ext = entry.raw.extensions || {};
+      const nextMeta = { ...entry.meta, preserveComment: true };
+      const repaired = repairLegacyAdoptedComment(entry.raw.comment || "");
+      if (!entry.meta.preserveComment)
+        patch.extensions = { ...ext, [EXTENSION_KEY]: nextMeta };
+      if (repaired && repaired !== entry.raw.comment)
+        patch.comment = repaired;
+      if (Object.keys(patch).length === 0)
+        continue;
+      const updated = await updateEntry(entry.raw.id, patch, userId).catch((err) => {
+        warn(`entry rename failed for ${entry.raw.id}: ${describeError(err)}`);
+        return null;
+      });
+      if (!updated)
+        continue;
+      Object.assign(entry.raw, updated);
+      entry.meta = nextMeta;
+      touched = true;
+      continue;
+    }
+    if (!entry.meta.preserveComment)
+      renameCandidates.push(entry);
+  }
+  await forEachConcurrent(renameCandidates, NAME_SYNC_CONCURRENCY, async (entry) => {
     const tier = entry.meta.tier === 3 ? "volume" : entry.meta.tier === 2 ? "arc" : "chapter";
     const nextComment = await formatEntryName(settings, {
       chatId,
@@ -3664,25 +3706,30 @@ async function syncNamingForChat(chatId, userId) {
       sourceCount: entry.meta.sourceChapterEntryIds?.length,
       turnCount: entry.meta.msgIds.length
     });
-    const patch = {};
-    if (isAdoptedEntry(entry.meta)) {
-      const ext = entry.raw.extensions || {};
-      const nextMeta = { ...entry.meta, preserveComment: true };
-      const repaired = repairLegacyAdoptedComment(entry.raw.comment || "");
-      if (!entry.meta.preserveComment)
-        patch.extensions = { ...ext, [EXTENSION_KEY]: nextMeta };
-      if (repaired && repaired !== entry.raw.comment)
-        patch.comment = repaired;
-    } else if (!entry.meta.preserveComment && nextComment && nextComment !== entry.raw.comment) {
-      patch.comment = nextComment;
-    }
-    if (Object.keys(patch).length === 0)
-      continue;
-    await updateEntry(entry.raw.id, patch, userId).catch((err) => {
+    if (!nextComment || nextComment === entry.raw.comment)
+      return;
+    const updated = await updateEntry(entry.raw.id, { comment: nextComment }, userId).catch((err) => {
       warn(`entry rename failed for ${entry.raw.id}: ${describeError(err)}`);
+      return null;
     });
-  }
-  invalidateBookCache(userId, chatId);
+    if (!updated)
+      return;
+    Object.assign(entry.raw, updated);
+    touched = true;
+  });
+  if (touched && !context)
+    invalidateBookCache(userId, chatId);
+}
+async function forEachConcurrent(items, concurrency, fn) {
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < items.length) {
+      const item = items[nextIndex++];
+      if (item !== undefined)
+        await fn(item);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
 }
 function isAdoptedEntry(meta) {
   return meta.model === "adopted" || meta.connectionId === "adopted";
@@ -3900,6 +3947,26 @@ function cleanTitle(text) {
   return text.trim();
 }
 
+// src/backend/refresh-context.ts
+async function loadChatRefreshContext(userId, requestedChatId) {
+  const [settings, chat] = await Promise.all([
+    loadSettings(userId),
+    requestedChatId ? spindle.chats.get(requestedChatId, userId).catch(() => null) : spindle.chats.getActive(userId).catch(() => null)
+  ]);
+  if (!chat) {
+    return { settings, chat: null, bookId: null, book: null, rawEntries: [], entries: [] };
+  }
+  if (settings.enabled) {
+    await ensureForkAdoption(chat.id, userId).catch(() => {});
+    await reassertChatBinding(chat.id, userId).catch(() => {});
+  }
+  const bookId = await findBookForChat(chat.id, userId, chat);
+  const book = bookId ? await spindle.world_books.get(bookId, userId).catch(() => null) : null;
+  const rawEntries = bookId ? await listAllEntries(bookId, userId).catch(() => []) : [];
+  const entries = lmbEntriesFromRaw(rawEntries, chat.id);
+  return { settings, chat, bookId, book, rawEntries, entries };
+}
+
 // src/backend/index.ts
 async function notify(userId, tone, text) {
   try {
@@ -3915,21 +3982,25 @@ var pendingPushChatIds = new Map;
 var pendingPushResolvers = new Map;
 async function doPushState(userId, chatId) {
   try {
+    let refreshContext;
     if (chatId) {
       const active = await spindle.chats.getActive(userId).catch(() => null);
       if (active && active.id !== chatId)
         return;
-      await syncStoryOrderForChat(chatId, userId).catch((err) => {
-        warn(`story order sync before state failed: ${describeError(err)}`);
-      });
-      await syncNamingForChat(chatId, userId).catch((err) => {
-        warn(`naming sync before state failed: ${describeError(err)}`);
-      });
-      await syncProjectionEntry(chatId, userId).catch((err) => {
-        warn(`projection sync before state failed: ${describeError(err)}`);
-      });
+      refreshContext = await loadChatRefreshContext(userId, chatId);
+      if (refreshContext.chat) {
+        await syncStoryOrderForChat(chatId, userId, refreshContext.entries).catch((err) => {
+          warn(`story order sync before state failed: ${describeError(err)}`);
+        });
+        await syncNamingForChat(chatId, userId, refreshContext).catch((err) => {
+          warn(`naming sync before state failed: ${describeError(err)}`);
+        });
+        await syncProjectionEntry(chatId, userId, refreshContext).catch((err) => {
+          warn(`projection sync before state failed: ${describeError(err)}`);
+        });
+      }
     }
-    const state = await buildState(userId, chatId);
+    const state = await buildState(userId, chatId, refreshContext);
     if (chatId) {
       const active = await spindle.chats.getActive(userId).catch(() => null);
       if (active && active.id !== chatId)

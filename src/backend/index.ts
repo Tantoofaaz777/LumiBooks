@@ -57,6 +57,7 @@ import { syncProjectionEntry } from "./projection";
 import { syncNamingForChat } from "./naming-sync";
 import { confirmAdoptLorebook, listAdoptLorebookCandidates } from "./import-lorebook";
 import { syncStoryOrderForChat } from "./story-order";
+import { loadChatRefreshContext, type ChatRefreshContext } from "./refresh-context";
 
 async function notify(
   userId: string,
@@ -78,20 +79,24 @@ const pendingPushResolvers = new Map<string, Array<() => void>>();
 
 async function doPushState(userId: string, chatId?: string | null): Promise<void> {
   try {
+    let refreshContext: ChatRefreshContext | undefined;
     if (chatId) {
       const active = await spindle.chats.getActive(userId).catch(() => null);
       if (active && active.id !== chatId) return;
-      await syncStoryOrderForChat(chatId, userId).catch((err) => {
-        warn(`story order sync before state failed: ${describeError(err)}`);
-      });
-      await syncNamingForChat(chatId, userId).catch((err) => {
-        warn(`naming sync before state failed: ${describeError(err)}`);
-      });
-      await syncProjectionEntry(chatId, userId).catch((err) => {
-        warn(`projection sync before state failed: ${describeError(err)}`);
-      });
+      refreshContext = await loadChatRefreshContext(userId, chatId);
+      if (refreshContext.chat) {
+        await syncStoryOrderForChat(chatId, userId, refreshContext.entries).catch((err) => {
+          warn(`story order sync before state failed: ${describeError(err)}`);
+        });
+        await syncNamingForChat(chatId, userId, refreshContext).catch((err) => {
+          warn(`naming sync before state failed: ${describeError(err)}`);
+        });
+        await syncProjectionEntry(chatId, userId, refreshContext).catch((err) => {
+          warn(`projection sync before state failed: ${describeError(err)}`);
+        });
+      }
     }
-    const state = await buildState(userId, chatId);
+    const state = await buildState(userId, chatId, refreshContext);
     if (chatId) {
       const active = await spindle.chats.getActive(userId).catch(() => null);
       if (active && active.id !== chatId) return;

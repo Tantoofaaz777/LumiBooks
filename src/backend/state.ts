@@ -13,20 +13,24 @@ import { ensureForkAdoption } from "./fork";
 import { describeError, warn } from "./runtime";
 import { BUILTIN_ARC_PRESETS, BUILTIN_CHAPTER_PRESETS, BUILTIN_VOLUME_PRESETS } from "./presets";
 import { storyOrderFromMeta } from "./story-order";
+import type { ChatRefreshContext } from "./refresh-context";
 
 type ChatMessageDTO = ChatMessage;
 
-export async function buildState(userId: string, requestedChatId?: string | null): Promise<FrontendState> {
-  const settings = await loadSettings(userId);
+export async function buildState(
+  userId: string,
+  requestedChatId?: string | null,
+  context?: ChatRefreshContext,
+): Promise<FrontendState> {
+  const settings = context?.settings ?? await loadSettings(userId);
   const activeProfile =
     settings.profiles.find((p) => p.id === settings.activeProfileId) ?? settings.profiles[0]!;
 
-  let chat;
-  if (requestedChatId) {
-    chat = await spindle.chats.get(requestedChatId, userId).catch(() => null);
-  } else {
-    chat = await spindle.chats.getActive(userId).catch(() => null);
-  }
+  const chat = context
+    ? context.chat
+    : requestedChatId
+      ? await spindle.chats.get(requestedChatId, userId).catch(() => null)
+      : await spindle.chats.getActive(userId).catch(() => null);
 
   const [connectionsRaw, regexScriptsRaw] = await Promise.all([
     listConnections(userId),
@@ -76,14 +80,17 @@ export async function buildState(userId: string, requestedChatId?: string | null
 
   if (!chat) return baseState;
 
-  if (settings.enabled) {
+  if (!context && settings.enabled) {
     await ensureForkAdoption(chat.id, userId).catch(() => {});
     await reassertChatBinding(chat.id, userId).catch(() => {});
   }
 
-  const bookId = await findBookForChat(chat.id, userId);
-  const bookName =
-    bookId !== null ? (await spindle.world_books.get(bookId, userId).catch(() => null))?.name ?? null : null;
+  const bookId = context ? context.bookId : await findBookForChat(chat.id, userId);
+  const bookName = context
+    ? context.book?.name ?? null
+    : bookId !== null
+      ? (await spindle.world_books.get(bookId, userId).catch(() => null))?.name ?? null
+      : null;
 
   let messages: ChatMessageDTO[] = [];
   try {
@@ -92,7 +99,7 @@ export async function buildState(userId: string, requestedChatId?: string | null
     warn(`failed to read messages for chat ${chat.id.slice(0, 8)}: ${describeError(err)}`);
   }
 
-  const entries = await listLmbEntries(chat.id, userId).catch(() => []);
+  const entries = context?.entries ?? await listLmbEntries(chat.id, userId).catch(() => []);
   const coverage = await buildCoverage(chat.id, userId, entries);
   const stats = computeCoverageStats(messages, coverage);
 

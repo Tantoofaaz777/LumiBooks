@@ -6,6 +6,7 @@ import { findBookForChat, invalidateBookCache, listAllEntries } from "./world-bo
 import { loadSettings } from "./storage";
 import { describeError, warn } from "./runtime";
 import { storyOrderFromMeta } from "./story-order";
+import type { ChatRefreshContext } from "./refresh-context";
 
 interface ProjectionMeta {
   chatId: string;
@@ -23,20 +24,28 @@ function orderValueFor(meta: ReturnType<typeof normalizeEntryMeta>, fallback: nu
   return storyOrderFromMeta(meta, fallback);
 }
 
-async function updateEntry(entry: WorldBookEntryDTO, patch: Record<string, unknown>, userId: string): Promise<void> {
-  await spindle.world_books.entries.update(entry.id, patch as never, userId);
+async function updateEntry(
+  entry: WorldBookEntryDTO,
+  patch: Record<string, unknown>,
+  userId: string,
+): Promise<WorldBookEntryDTO> {
+  return spindle.world_books.entries.update(entry.id, patch as never, userId);
 }
 
-export async function syncProjectionEntry(chatId: string, userId: string): Promise<void> {
+export async function syncProjectionEntry(
+  chatId: string,
+  userId: string,
+  context?: ChatRefreshContext,
+): Promise<void> {
   try {
-    const bookId = await findBookForChat(chatId, userId).catch(() => null);
+    const bookId = context ? context.bookId : await findBookForChat(chatId, userId).catch(() => null);
     if (!bookId) return;
 
-    const settings = await loadSettings(userId);
+    const settings = context?.settings ?? await loadSettings(userId);
     const outletMode = settings.enabled;
     const outletName = normalizeOutletName(settings.memoryOutletName);
     const desiredConstant = settings.forceConstantEntries;
-    const entries = await listAllEntries(bookId, userId);
+    const entries = context?.rawEntries ?? await listAllEntries(bookId, userId);
     let touched = false;
 
     for (const entry of entries) {
@@ -72,11 +81,12 @@ export async function syncProjectionEntry(chatId: string, userId: string): Promi
         (outletMode && entry.constant !== desiredConstant) ||
         currentOutletName !== patch.outlet_name;
       if (!needsPatch) continue;
-      await updateEntry(entry, patch, userId);
+      const updated = await updateEntry(entry, patch, userId);
+      Object.assign(entry, updated);
       touched = true;
     }
 
-    if (touched) invalidateBookCache(userId, chatId);
+    if (touched && !context) invalidateBookCache(userId, chatId);
   } catch (err) {
     warn(`syncProjectionEntry failed: ${describeError(err)}`);
   }

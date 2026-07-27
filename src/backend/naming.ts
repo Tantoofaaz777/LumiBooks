@@ -72,6 +72,7 @@ export async function formatBookName(
 async function resolveTemplate(template: string, ctx: EntryNameContext, fallback: string): Promise<string> {
   const local = applyLocalMacros(template, ctx).trim();
   const candidate = local || fallback;
+  if (!candidate.includes("{{")) return candidate;
   try {
     const resolved = await spindle.macros.resolve(candidate, {
       chatId: ctx.chatId,

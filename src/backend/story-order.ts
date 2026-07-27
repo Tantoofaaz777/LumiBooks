@@ -33,8 +33,12 @@ export function inheritedStoryOrder(sources: LMBEntry[], fallbackEntries: LMBEnt
   return nextStoryOrder(fallbackEntries);
 }
 
-export async function syncStoryOrderForChat(chatId: string, userId: string): Promise<void> {
-  const entries = await listLmbEntries(chatId, userId).catch(() => [] as LMBEntry[]);
+export async function syncStoryOrderForChat(
+  chatId: string,
+  userId: string,
+  preloadedEntries?: LMBEntry[],
+): Promise<void> {
+  const entries = preloadedEntries ?? await listLmbEntries(chatId, userId).catch(() => [] as LMBEntry[]);
   if (entries.length === 0) return;
 
   let next = nextStoryOrder(entries.filter((entry) => typeof entry.meta.storyOrder === "number"));
@@ -58,25 +62,27 @@ export async function syncStoryOrderForChat(chatId: string, userId: string): Pro
         .map((id) => metaById.get(id)?.storyOrder)
         .filter((n): n is number => typeof n === "number");
       storyOrder = sourceOrders.length ? Math.min(...sourceOrders) : next++;
-      entry.meta.storyOrder = storyOrder;
-      metaById.set(entry.raw.id, entry.meta);
     }
     if (hadStoryOrder && entry.raw.order_value === storyOrder) continue;
     const ext = (entry.raw.extensions || {}) as Record<string, unknown>;
+    const nextMeta = { ...entry.meta, storyOrder };
     try {
-      await spindle.world_books.entries.update(
+      const updated = await spindle.world_books.entries.update(
         entry.raw.id,
         {
           order_value: storyOrder,
-          extensions: { ...ext, [EXTENSION_KEY]: { ...entry.meta, storyOrder } },
+          extensions: { ...ext, [EXTENSION_KEY]: nextMeta },
         },
         userId,
       );
+      Object.assign(entry.raw, updated);
+      entry.meta = nextMeta;
+      metaById.set(entry.raw.id, nextMeta);
       touched = true;
     } catch (err) {
       warn(`storyOrder sync failed for ${entry.raw.id}: ${describeError(err)}`);
     }
   }
 
-  if (touched) invalidateBookCache(userId, chatId);
+  if (touched && !preloadedEntries) invalidateBookCache(userId, chatId);
 }

@@ -459,6 +459,10 @@ export async function listLmbEntries(chatId: string, userId: string): Promise<LM
   const bookId = await findBookForChat(chatId, userId);
   if (!bookId) return [];
   const raw = await listAllEntries(bookId, userId);
+  return lmbEntriesFromRaw(raw, chatId);
+}
+
+export function lmbEntriesFromRaw(raw: WorldBookEntryDTO[], chatId: string): LMBEntry[] {
   const out: LMBEntry[] = [];
   for (const entry of raw) {
     const ext = (entry.extensions || {}) as Record<string, unknown>;
