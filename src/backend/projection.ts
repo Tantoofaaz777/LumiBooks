@@ -35,6 +35,7 @@ export async function syncProjectionEntry(chatId: string, userId: string): Promi
     const settings = await loadSettings(userId);
     const outletMode = settings.enabled;
     const outletName = normalizeOutletName(settings.memoryOutletName);
+    const desiredConstant = settings.forceConstantEntries;
     const entries = await listAllEntries(bookId, userId);
     let touched = false;
 
@@ -57,7 +58,7 @@ export async function syncProjectionEntry(chatId: string, userId: string): Promi
         ? {
             position: 8,
             outlet_name: outletName,
-            constant: true,
+            constant: desiredConstant,
             order_value: orderValue,
           }
         : {
@@ -68,7 +69,7 @@ export async function syncProjectionEntry(chatId: string, userId: string): Promi
       const needsPatch =
         entry.position !== patch.position ||
         entry.order_value !== orderValue ||
-        (outletMode && entry.constant !== true) ||
+        (outletMode && entry.constant !== desiredConstant) ||
         currentOutletName !== patch.outlet_name;
       if (!needsPatch) continue;
       await updateEntry(entry, patch, userId);

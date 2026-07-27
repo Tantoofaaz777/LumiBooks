@@ -3481,6 +3481,7 @@ async function syncProjectionEntry(chatId, userId) {
     const settings = await loadSettings(userId);
     const outletMode = settings.enabled;
     const outletName = normalizeOutletName(settings.memoryOutletName);
+    const desiredConstant = settings.forceConstantEntries;
     const entries = await listAllEntries(bookId, userId);
     let touched = false;
     for (const entry of entries) {
@@ -3501,14 +3502,14 @@ async function syncProjectionEntry(chatId, userId) {
       const patch = outletMode ? {
         position: 8,
         outlet_name: outletName,
-        constant: true,
+        constant: desiredConstant,
         order_value: orderValue
       } : {
         position: 0,
         outlet_name: "",
         order_value: orderValue
       };
-      const needsPatch = entry.position !== patch.position || entry.order_value !== orderValue || outletMode && entry.constant !== true || currentOutletName !== patch.outlet_name;
+      const needsPatch = entry.position !== patch.position || entry.order_value !== orderValue || outletMode && entry.constant !== desiredConstant || currentOutletName !== patch.outlet_name;
       if (!needsPatch)
         continue;
       await updateEntry2(entry, patch, userId);
