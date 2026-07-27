@@ -291,7 +291,7 @@ var STYLES = `
 
 .lmb-input {
   width: 100%;
-  background: var(--lumiverse-fill-strong, rgba(0,0,0,0.25));
+  background-color: var(--lumiverse-secondary, rgba(128,128,128,0.15));
   color: var(--lumiverse-text, #dde2ea);
   border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.12));
   border-radius: var(--lumiverse-radius, 4px);
@@ -303,7 +303,8 @@ var STYLES = `
 }
 .lmb-input:focus {
   border-color: var(--lumiverse-primary-050, rgba(107, 143, 240, 0.6));
-  background: var(--lumiverse-fill, rgba(0,0,0,0.18));
+  background-color: var(--lumiverse-secondary, rgba(128,128,128,0.15));
+  box-shadow: 0 0 0 1px var(--lumiverse-primary-020, transparent);
 }
 .lmb-input:disabled { opacity: 0.5; cursor: not-allowed; }
 
