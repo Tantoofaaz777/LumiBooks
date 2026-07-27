@@ -212,7 +212,6 @@ var STYLES = `
 .lmb-entry.superseded { opacity: 0.45; }
 .lmb-entry.arc { border-left: 3px solid var(--lumiverse-primary, #6b8ff0); }
 .lmb-entry.volume { border-left: 3px solid var(--lumiverse-warning, #d4a73a); }
-.lmb-entry.root { border-left: 3px solid var(--lumiverse-muted, #8a7fb0); opacity: 0.8; }
 .lmb-entry-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .lmb-entry-title {
   flex: 1 1 120px;
@@ -1188,7 +1187,7 @@ function openAdoptLorebookModal(ctx, chatId, books, send) {
   renderEntries();
 }
 function openBindMessagesModal(ctx, chatId, chapters, messageIds, send, onBound) {
-  const bindable = chapters.filter((chapter) => !chapter.isRoot);
+  const bindable = chapters;
   const handle = ctx.ui.showModal({ title: "Bind messages to chapter", width: 520, maxHeight: 520 });
   const root = document.createElement("div");
   root.className = "lmb-modal-form";
@@ -1436,9 +1435,9 @@ function renderEntries(host, state, ctx, send) {
     host.appendChild(sec.wrap);
     return;
   }
-  const chapters = state.chapters.filter((c) => !c.isRoot);
-  const arcs = state.arcs.filter((a) => !a.isRoot);
-  const volumes = state.volumes.filter((v) => !v.isRoot);
+  const chapters = state.chapters;
+  const arcs = state.arcs;
+  const volumes = state.volumes;
   if (chapters.length + arcs.length + volumes.length === 0) {
     sec.body.appendChild(textNode("No entries yet. File or adopt a chapter to begin.", "lmb-empty"));
     host.appendChild(sec.wrap);
@@ -1484,9 +1483,9 @@ function buildSubtitle(text) {
   d.textContent = text;
   return d;
 }
-function renderEntryItem(view, kind, state, ctx, send, readOnly = false) {
+function renderEntryItem(view, kind, state, ctx, send) {
   const li = document.createElement("li");
-  li.className = `lmb-entry ${kind}${view.active ? "" : " superseded"}${readOnly ? " root" : ""}`;
+  li.className = `lmb-entry ${kind}${view.active ? "" : " superseded"}`;
   const head = document.createElement("div");
   head.className = "lmb-entry-head";
   const tag = document.createElement("span");
@@ -1497,49 +1496,47 @@ function renderEntryItem(view, kind, state, ctx, send, readOnly = false) {
   title.textContent = view.comment || view.meta.title || `${kind} ${view.entryId.slice(0, 6)}`;
   head.append(tag, title);
   li.appendChild(head);
-  if (!readOnly) {
-    const chatId = state.activeChatId;
-    const actions = document.createElement("div");
-    actions.className = "lmb-entry-actions";
-    actions.append(makeButton("Edit", () => {
-      openEditModal(ctx, kind === "arc" ? "Edit arc" : kind === "volume" ? "Edit volume" : "Edit chapter", {
-        comment: view.comment,
-        content: view.content
-      }, (next) => {
-        if (!chatId)
-          return;
-        const patch = {};
-        if (typeof next.comment === "string" && next.comment !== view.comment) {
-          patch.comment = next.comment;
-        }
-        if (typeof next.content === "string" && next.content !== view.content) {
-          patch.content = next.content;
-        }
-        if (Object.keys(patch).length === 0)
-          return;
-        send({ type: "update_entry", chatId, entryId: view.entryId, patch });
-      });
-    }, { small: true, title: "Edit this entry's label and content" }), makeButton("Regenerate", async () => {
-      const ok = await confirmDelete(ctx, "Regenerate?", "LumiBooks will delete this entry and resummarize the same range. The old summary text will be lost.");
-      if (!ok || !chatId)
+  const chatId = state.activeChatId;
+  const actions = document.createElement("div");
+  actions.className = "lmb-entry-actions";
+  actions.append(makeButton("Edit", () => {
+    openEditModal(ctx, kind === "arc" ? "Edit arc" : kind === "volume" ? "Edit volume" : "Edit chapter", {
+      comment: view.comment,
+      content: view.content
+    }, (next) => {
+      if (!chatId)
         return;
-      send({ type: "regenerate_entry", chatId, entryId: view.entryId });
-    }, { small: true, title: "Delete and resummarize the same range" }), makeButton("Release", async () => {
-      const ok = await confirmDelete(ctx, "Release to lorebook?", "LumiBooks will hand this entry to your regular lorebook (prefixed with [orphaned]) and stop managing it. Those messages will become uncovered.");
-      if (!ok || !chatId)
+      const patch = {};
+      if (typeof next.comment === "string" && next.comment !== view.comment) {
+        patch.comment = next.comment;
+      }
+      if (typeof next.content === "string" && next.content !== view.content) {
+        patch.content = next.content;
+      }
+      if (Object.keys(patch).length === 0)
         return;
-      send({ type: "release_entry", chatId, entryId: view.entryId });
-    }, { small: true, title: "Strip the LumiBooks marker so the entry becomes a regular lorebook entry" }), makeButton("Delete", async () => {
-      const ok = await confirmDelete(ctx, "Delete?", "LumiBooks will let those messages back into the prompt.");
-      if (!ok || !chatId)
-        return;
-      send({ type: "delete_entry", chatId, entryId: view.entryId });
-    }, { small: true, danger: true }));
-    head.appendChild(actions);
-  }
+      send({ type: "update_entry", chatId, entryId: view.entryId, patch });
+    });
+  }, { small: true, title: "Edit this entry's label and content" }), makeButton("Regenerate", async () => {
+    const ok = await confirmDelete(ctx, "Regenerate?", "LumiBooks will delete this entry and resummarize the same range. The old summary text will be lost.");
+    if (!ok || !chatId)
+      return;
+    send({ type: "regenerate_entry", chatId, entryId: view.entryId });
+  }, { small: true, title: "Delete and resummarize the same range" }), makeButton("Release", async () => {
+    const ok = await confirmDelete(ctx, "Release to lorebook?", "LumiBooks will hand this entry to your regular lorebook (prefixed with [orphaned]) and stop managing it. Those messages will become uncovered.");
+    if (!ok || !chatId)
+      return;
+    send({ type: "release_entry", chatId, entryId: view.entryId });
+  }, { small: true, title: "Strip the LumiBooks marker so the entry becomes a regular lorebook entry" }), makeButton("Delete", async () => {
+    const ok = await confirmDelete(ctx, "Delete?", "LumiBooks will let those messages back into the prompt.");
+    if (!ok || !chatId)
+      return;
+    send({ type: "delete_entry", chatId, entryId: view.entryId });
+  }, { small: true, danger: true }));
+  head.appendChild(actions);
   const meta = document.createElement("div");
   meta.className = "lmb-entry-meta";
-  const range = view.isRoot ? "inherited" : view.meta.firstMsgIdx !== undefined && view.meta.lastMsgIdx !== undefined ? `msgs ${view.meta.firstMsgIdx + 1}-${view.meta.lastMsgIdx + 1}` : `${view.meta.msgIds.length} msgs`;
+  const range = view.meta.firstMsgIdx !== undefined && view.meta.lastMsgIdx !== undefined ? `msgs ${view.meta.firstMsgIdx + 1}-${view.meta.lastMsgIdx + 1}` : `${view.meta.msgIds.length} msgs`;
   const before = view.sourceTokensInput || 0;
   const tokenStr = before > 0 ? `${formatTokens(before)}→${formatTokens(view.contentTokens)} tokens` : `${formatTokens(view.contentTokens)} tokens`;
   meta.append(span(range), span(tokenStr), span(view.meta.model || ""));
@@ -1577,8 +1574,7 @@ var localState = {
   messageQuery: "",
   lastChatId: null,
   anchorMessageId: null,
-  suppressNextClick: false,
-  rebaseSourceId: ""
+  suppressNextClick: false
 };
 var LONG_PRESS_MS = 500;
 var LONG_PRESS_MOVE_PX = 10;
@@ -1588,7 +1584,6 @@ function renderMakeTab(host, state, ctx, send) {
     localState.selectedChapters.clear();
     localState.selectedArcs.clear();
     localState.anchorMessageId = null;
-    localState.rebaseSourceId = "";
     localState.lastChatId = state.activeChatId;
   }
   const draw = () => {
@@ -1610,7 +1605,6 @@ function renderMakeTab(host, state, ctx, send) {
       renderChapterPicker(host, c, ctx, send);
       renderArcPicker(host, c, send);
       renderVolumePicker(host, c, send);
-      renderContinuity(host, c, ctx, send);
     });
   };
   draw();
@@ -1689,7 +1683,7 @@ function renderChapterPicker(host, c, ctx, send) {
       c.rerender();
     });
   }, {
-    disabled: c.selectedMessages.size === 0 || c.state.chapters.filter((chapter) => !chapter.isRoot).length === 0,
+    disabled: c.selectedMessages.size === 0 || c.state.chapters.length === 0,
     title: "Mark the selected messages as already covered by an existing chapter"
   });
   const syncControls = () => {
@@ -1698,7 +1692,7 @@ function renderChapterPicker(host, c, ctx, send) {
     const empty = c.selectedMessages.size === 0;
     compressBtn.disabled = empty;
     excludeBtn.disabled = empty;
-    bindBtn.disabled = empty || c.state.chapters.filter((chapter) => !chapter.isRoot).length === 0;
+    bindBtn.disabled = empty || c.state.chapters.length === 0;
     excludeBtn.classList.toggle("active", allSelectedExcluded());
   };
   const listEl = document.createElement("div");
@@ -1957,7 +1951,7 @@ function renderArcPicker(host, c, send) {
 }
 function renderVolumePicker(host, c, send) {
   const sec = section("Press arcs into a volume");
-  const activeArcs = c.state.arcs.filter((a) => a.active && !a.isRoot);
+  const activeArcs = c.state.arcs.filter((a) => a.active);
   if (activeArcs.length === 0) {
     sec.body.appendChild(textNode("LumiBooks has no unbound arcs to press yet", "lmb-empty"));
     host.appendChild(sec.wrap);
@@ -2025,88 +2019,6 @@ function renderVolumePicker(host, c, send) {
     c.rerender();
   }));
   sec.body.appendChild(actions);
-  host.appendChild(sec.wrap);
-}
-function renderContinuity(host, c, ctx, send) {
-  const state = c.state;
-  const chatId = state.activeChatId;
-  const hasOwn = state.chapters.some((ch) => !ch.isRoot) || state.arcs.some((a) => !a.isRoot) || state.volumes.some((v) => !v.isRoot);
-  const hasRoot = state.rootEntryCount > 0;
-  const candidates = state.availableRoots;
-  if (!hasRoot && candidates.length === 0)
-    return;
-  const sec = section("Continuity (root)");
-  if (hasRoot) {
-    const status = document.createElement("div");
-    status.className = "lmb-help";
-    const originName = state.rootOriginName || state.rootOrigin?.slice(0, 8) || "another chat";
-    status.textContent = `Inherited from ${originName}: ${state.rootEntryCount} memor${state.rootEntryCount === 1 ? "y" : "ies"}, injected before the greeting.`;
-    sec.body.appendChild(status);
-    const rootEntries = [
-      ...state.volumes.filter((v) => v.isRoot),
-      ...state.arcs.filter((a) => a.isRoot),
-      ...state.chapters.filter((ch) => ch.isRoot)
-    ];
-    if (rootEntries.length) {
-      const list = document.createElement("div");
-      list.className = "lmb-multiselect";
-      for (const e of rootEntries) {
-        const rowEl = document.createElement("div");
-        rowEl.className = "lmb-multiselect-row";
-        rowEl.style.opacity = "0.75";
-        const tag = e.meta.tier === 3 ? "VOL" : e.meta.tier === 2 ? "ARC" : "CH";
-        rowEl.textContent = `[${tag}] ${e.comment || e.meta.title || e.entryId.slice(0, 6)} (${formatTokens(e.contentTokens)}t)`;
-        list.appendChild(rowEl);
-      }
-      sec.body.appendChild(list);
-    }
-    const detachRow = document.createElement("div");
-    detachRow.className = "lmb-actions";
-    detachRow.appendChild(makeButton("Detach root", async () => {
-      const ok = await confirmDelete(ctx, "Detach inherited memories?", "LumiBooks will remove the inherited memories from this chat. Your own chapters and arcs stay.");
-      if (ok)
-        send({ type: "detach_root", chatId });
-    }, { small: true, danger: true, title: "Remove the inherited root memories from this chat" }));
-    sec.body.appendChild(detachRow);
-  }
-  if (candidates.length > 0) {
-    const help = document.createElement("div");
-    help.className = "lmb-help";
-    help.textContent = hasOwn ? "This chat already has its own memories. Rebuilding deletes them and re-summarizes on top of the chosen root." : "Seed this chat with another chat's memories. They inject as a frozen prologue before the greeting.";
-    sec.body.appendChild(help);
-    const row = document.createElement("div");
-    row.className = "lmb-actions";
-    const picker = select({
-      value: localState.rebaseSourceId,
-      ariaLabel: "Source chat to inherit memories from",
-      options: [
-        { value: "", label: "Pick a source chat..." },
-        ...candidates.map((cand) => ({ value: cand.chatId, label: `${cand.chatName} (${cand.entryCount})` }))
-      ],
-      onChange: (v) => {
-        localState.rebaseSourceId = v;
-      }
-    });
-    row.appendChild(picker);
-    if (hasOwn) {
-      row.appendChild(makeButton("Rebuild from...", async () => {
-        const sourceChatId = picker.value;
-        if (!sourceChatId)
-          return;
-        const ok = await confirmDelete(ctx, "Rebuild from root?", "LumiBooks will DELETE this chat's existing chapters and arcs, seed the chosen root, then re-summarize this chat from scratch. This cannot be undone.");
-        if (ok)
-          send({ type: "rebuild_root", chatId, sourceChatId });
-      }, { danger: true, title: "Destructive: wipe this chat's memories and reseed from the chosen root" }));
-    } else {
-      row.appendChild(makeButton("Rebase", () => {
-        const sourceChatId = picker.value;
-        if (!sourceChatId)
-          return;
-        send({ type: "rebase_root", chatId, sourceChatId });
-      }, { primary: true, title: "Seed this chat with the chosen chat's memories" }));
-    }
-    sec.body.appendChild(row);
-  }
   host.appendChild(sec.wrap);
 }
 

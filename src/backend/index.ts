@@ -49,7 +49,6 @@ import {
   registerPipelineCallbacks,
 } from "./pipeline";
 import { buildCoverage, resyncVisibility, syncHiddenForCoveredMessages, unhideCoveredMessages } from "./coverage";
-import { rebaseRoot, rebuildRoot, detachRoot } from "./rebase";
 import { invalidateConnectionsCache } from "./summarizer";
 import { invalidateRegexCache } from "./regex";
 import { registerHookEndpoints } from "./hooks";
@@ -257,7 +256,7 @@ async function collectActiveChapterIds(chatId: string, userId: string): Promise<
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
   return coverage.activeEntries
-    .filter((e) => e.meta.tier === 1 && !e.meta.isRoot)
+    .filter((e) => e.meta.tier === 1)
     .map((e) => e.raw.id);
 }
 
@@ -265,7 +264,7 @@ async function collectActiveArcIds(chatId: string, userId: string): Promise<stri
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
   return coverage.activeEntries
-    .filter((e) => e.meta.tier === 2 && !e.meta.isRoot)
+    .filter((e) => e.meta.tier === 2)
     .map((e) => e.raw.id);
 }
 
@@ -599,10 +598,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
           await notify(userId, "warn", `LumiBooks is already busy with a ${busyKind}`);
           break;
         }
-        if (entry.meta.isRoot && tier === 1) {
-          await notify(userId, "warn", "LumiBooks can't regenerate inherited chapters");
-          break;
-        }
         const isArc = tier === 2;
         const isVolume = tier === 3;
         const msgIds = entry.meta.msgIds.slice();
@@ -667,8 +662,8 @@ spindle.onFrontendMessage(async (raw, userId) => {
           await notify(userId, "warn", "LumiBooks can't find that chapter anymore");
           break;
         }
-        if (entry.meta.tier !== 1 || entry.meta.isRoot) {
-          await notify(userId, "warn", "Messages can only be bound directly to a local chapter");
+        if (entry.meta.tier !== 1) {
+          await notify(userId, "warn", "Messages can only be bound directly to a chapter");
           break;
         }
         const msgIds = ordered.map(({ message }) => message.id);
@@ -823,55 +818,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
         break;
       }
 
-      case "rebase_root": {
-        if (getBusy(userId).some((b) => b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "LumiBooks is busy, wait for it to finish");
-          break;
-        }
-        const result = await rebaseRoot(msg.chatId, msg.sourceChatId, userId);
-        if (!result.ok) {
-          const text = result.reason === "has_own"
-            ? "This chat already has memories, use Rebuild instead"
-            : result.reason === "empty_source"
-              ? "That chat has no memories to inherit"
-              : result.reason === "busy"
-                ? "LumiBooks is already rebasing this chat"
-                : "LumiBooks can't rebase a chat onto itself";
-          await notify(userId, "warn", text);
-        } else {
-          await notify(userId, "success", `LumiBooks seeded ${result.count} inherited memor${result.count === 1 ? "y" : "ies"} before the greeting`);
-        }
-        await pushState(userId, msg.chatId);
-        break;
-      }
-
-      case "rebuild_root": {
-        if (getBusy(userId).some((b) => b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "LumiBooks is busy, wait for it to finish");
-          break;
-        }
-        const result = await rebuildRoot(msg.chatId, msg.sourceChatId, userId);
-        if (!result.ok) {
-          const text = result.reason === "empty_source"
-            ? "That chat has no memories to inherit"
-            : result.reason === "busy"
-              ? "LumiBooks is already rebuilding this chat"
-              : "LumiBooks can't rebuild a chat onto itself";
-          await notify(userId, "warn", text);
-          await pushState(userId, msg.chatId);
-          break;
-        }
-        await notify(userId, "success", `LumiBooks rebuilt onto ${result.count} inherited memor${result.count === 1 ? "y" : "ies"}`);
-        await pushState(userId, msg.chatId);
-        const cur = await loadSettings(userId);
-        const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
-        if (profile) {
-          await resyncVisibility(msg.chatId, userId, profile.hideCoveredMessages).catch((err) => warn(`rebuild visibility resync failed: ${describeError(err)}`));
-          await pushState(userId, msg.chatId);
-        }
-        break;
-      }
-
       case "set_message_excluded": {
         const ids = Array.isArray(msg.messageIds) ? msg.messageIds.filter((x): x is string => typeof x === "string") : [];
         if (ids.length === 0) break;
@@ -914,16 +860,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
         await notify(userId, "info", msg.excluded
           ? `LumiBooks will leave ${ids.length} message${ids.length === 1 ? "" : "s"} untouched`
           : `LumiBooks will compress ${ids.length} message${ids.length === 1 ? "" : "s"} again`);
-        await pushState(userId, msg.chatId);
-        break;
-      }
-
-      case "detach_root": {
-        const removed = await detachRoot(msg.chatId, userId);
-        const text = removed === 0
-          ? "This chat has no inherited memories to detach"
-          : `LumiBooks detached ${removed} inherited memor${removed === 1 ? "y" : "ies"}`;
-        await notify(userId, "info", text);
         await pushState(userId, msg.chatId);
         break;
       }

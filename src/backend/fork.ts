@@ -122,14 +122,6 @@ async function cloneShelfForFork(
   };
 
   const forkTransform: CopyTransform = (entry, ctx) => {
-    if (entry.meta.isRoot) {
-      return {
-        msgIds: entry.meta.msgIds.slice(),
-        firstMsgIdx: entry.meta.firstMsgIdx,
-        lastMsgIdx: entry.meta.lastMsgIdx,
-        extra: { chatId: forkChatId },
-      };
-    }
     const { ids, first, last } = remap(entry.meta.msgIds);
     if (entry.meta.tier === 1) {
       if (ids.length === 0) return null;

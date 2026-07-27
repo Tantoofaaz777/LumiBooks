@@ -359,7 +359,7 @@ export function openBindMessagesModal(
   send: (msg: FrontendToBackend) => void,
   onBound?: () => void,
 ): void {
-  const bindable = chapters.filter((chapter) => !chapter.isRoot);
+  const bindable = chapters;
   const handle = ctx.ui.showModal({ title: "Bind messages to chapter", width: 520, maxHeight: 520 });
   const root = document.createElement("div");
   root.className = "lmb-modal-form";

@@ -1,11 +1,11 @@
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
-import type { ChapterView, ArcView, FrontendState, ConnectionOption, MessageStub, RegexScriptOption, RootSourceOption } from "../types";
+import type { ChapterView, ArcView, FrontendState, ConnectionOption, MessageStub, RegexScriptOption } from "../types";
 import type { ChatMessage } from "./coverage";
 import { approximateTokensFromChars } from "../shared";
 import { loadSettings } from "./storage";
 import { buildCoverage, computeCoverageStats } from "./coverage";
-import { findBookForChat, listLmbEntries, listRootCandidates, reassertChatBinding } from "./world-book";
+import { findBookForChat, listLmbEntries, reassertChatBinding } from "./world-book";
 import { listConnections, resolveConnection } from "./summarizer";
 import { listRegexScripts } from "./regex";
 import { getBusy, getLastFailure, getPendingPreviews } from "./pipeline";
@@ -28,10 +28,9 @@ export async function buildState(userId: string, requestedChatId?: string | null
     chat = await spindle.chats.getActive(userId).catch(() => null);
   }
 
-  const [connectionsRaw, regexScriptsRaw, rootCandidatesRaw] = await Promise.all([
+  const [connectionsRaw, regexScriptsRaw] = await Promise.all([
     listConnections(userId),
     listRegexScripts(userId),
-    listRootCandidates(userId).catch(() => []),
   ]);
   const connections: ConnectionOption[] = connectionsRaw.map((c) => ({
     id: c.id,
@@ -42,11 +41,6 @@ export async function buildState(userId: string, requestedChatId?: string | null
     hasApiKey: c.has_api_key,
   }));
   const regexScripts: RegexScriptOption[] = regexScriptsRaw.map((s) => ({ id: s.id, name: s.name }));
-  const allRootCandidates: RootSourceOption[] = rootCandidatesRaw.map((c) => ({
-    chatId: c.chatId,
-    chatName: c.chatName,
-    entryCount: c.entryCount,
-  }));
   const resolved = await resolveConnection(activeProfile, userId).catch(() => null);
 
   const baseState: FrontendState = {
@@ -78,10 +72,6 @@ export async function buildState(userId: string, requestedChatId?: string | null
     customPresets: settings.customPresets,
     regexScripts,
     pendingPreviews: [],
-    rootOrigin: null,
-    rootOriginName: null,
-    rootEntryCount: 0,
-    availableRoots: allRootCandidates,
   };
 
   if (!chat) return baseState;
@@ -127,7 +117,6 @@ export async function buildState(userId: string, requestedChatId?: string | null
       contentTokens: approximateTokensFromChars((e.raw.content || "").length),
       contentChars: (e.raw.content || "").length,
       sourceTokensInput: e.meta.tokenCountInput || 0,
-      isRoot: !!e.meta.isRoot,
     };
     if (e.meta.tier === 3) {
       volumes.push({ ...view, sourceChapterEntryIds: e.meta.sourceChapterEntryIds ?? [] });
@@ -169,12 +158,6 @@ export async function buildState(userId: string, requestedChatId?: string | null
     } catch (_) { void _; }
   }
 
-  const rootEntries = entries.filter((e) => e.meta.isRoot);
-  const rootOrigin = rootEntries.find((e) => e.meta.rootOrigin)?.meta.rootOrigin ?? null;
-  const rootOriginName = rootOrigin
-    ? (allRootCandidates.find((c) => c.chatId === rootOrigin)?.chatName ?? rootOrigin.slice(0, 8))
-    : null;
-
   return {
     ...baseState,
     activeChatId: chat.id,
@@ -190,9 +173,5 @@ export async function buildState(userId: string, requestedChatId?: string | null
     lastFailure: getLastFailure(userId, chat.id),
     messages: messageStubs,
     pendingPreviews: getPendingPreviews(userId, chat.id),
-    rootOrigin,
-    rootOriginName,
-    rootEntryCount: rootEntries.length,
-    availableRoots: allRootCandidates.filter((c) => c.chatId !== chat.id),
   };
 }

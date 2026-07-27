@@ -62,7 +62,6 @@ export async function confirmAdoptLorebook(
     [3, 0],
   ]);
   for (const entry of existing) {
-    if (entry.meta.isRoot) continue;
     sceneCounts.set(entry.meta.tier, Math.max(sceneCounts.get(entry.meta.tier) ?? 0, entry.meta.sceneNumber ?? 0));
   }
 
@@ -107,8 +106,6 @@ export async function confirmAdoptLorebook(
       storyOrder: item.storyOrder,
       preserveComment: true,
       supersededByEntryId: null,
-      isRoot: undefined,
-      rootOrigin: undefined,
     };
     await spindle.world_books.entries.update(
       source.id,

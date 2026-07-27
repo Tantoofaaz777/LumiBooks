@@ -45,7 +45,6 @@ export async function syncNamingForChat(chatId: string, userId: string): Promise
       lastMsgIdx: entry.meta.lastMsgIdx,
       sourceCount: entry.meta.sourceChapterEntryIds?.length,
       turnCount: entry.meta.msgIds.length,
-      isRoot: entry.meta.isRoot,
     });
     const patch: { comment?: string; extensions?: Record<string, unknown> } = {};
     if (isAdoptedEntry(entry.meta)) {

@@ -685,20 +685,6 @@ async function commitArc(
     : inheritedStoryOrder(selected, entriesForCoverage);
   const msgIds = selected.flatMap((c) => c.meta.msgIds);
   const sourceChapterEntryIds = selected.map((c) => c.raw.id);
-  const isRootArc = selected.length > 0 && selected.every((c) => c.meta.isRoot);
-  const rootOrigin = isRootArc ? selected.find((c) => c.meta.rootOrigin)?.meta.rootOrigin : undefined;
-  if (!isRootArc && selected.some((c) => c.meta.isRoot)) {
-    const own = selected.filter((c) => !c.meta.isRoot);
-    const fs = own.map((c) => c.meta.firstMsgIdx).filter((n): n is number => typeof n === "number");
-    const ls = own.map((c) => c.meta.lastMsgIdx).filter((n): n is number => typeof n === "number");
-    if (fs.length) firstIdx = Math.min(...fs);
-    else if (firstIdx < 0) firstIdx = 0;
-    if (ls.length) lastIdx = Math.max(...ls);
-    else if (lastIdx < firstIdx) lastIdx = firstIdx;
-  }
-  const arcTitle = isRootArc
-    ? (result.title?.trim() || "Inherited Arc")
-    : deriveTitle(result);
   const meta: LMBEntryMeta = {
     tier: 2,
     chatId,
@@ -711,13 +697,12 @@ async function commitArc(
     model: result.model,
     connectionId: result.connectionId,
     createdAt: Date.now(),
-    title: arcTitle,
+    title: deriveTitle(result),
     shortComment: result.shortComment,
     presetKey: result.presetKey,
     sceneNumber,
     storyOrder,
     rawOutput: result.rawOutput,
-    ...(isRootArc ? { isRoot: true, rootOrigin } : {}),
   };
   const arcSettings = await loadSettings(userId);
   const comment = await formatEntryName(arcSettings, {
@@ -731,7 +716,6 @@ async function commitArc(
     lastMsgIdx: meta.lastMsgIdx,
     sourceCount: sourceChapterEntryIds.length,
     turnCount: msgIds.length,
-    isRoot: isRootArc,
   });
   const finalArcContent = savedMemoryContent(result.content);
   const arcEntry = await createChapterEntry(book.id, meta, finalArcContent, comment, userId, result.keywords ?? [], arcSettings.forceConstantEntries);
@@ -905,20 +889,6 @@ async function commitVolume(
     : inheritedStoryOrder(selected, entriesForCoverage);
   const msgIds = selected.flatMap((a) => a.meta.msgIds);
   const sourceArcEntryIds = selected.map((a) => a.raw.id);
-  const isRootVolume = selected.length > 0 && selected.every((a) => a.meta.isRoot);
-  const rootOrigin = isRootVolume ? selected.find((a) => a.meta.rootOrigin)?.meta.rootOrigin : undefined;
-  if (!isRootVolume && selected.some((a) => a.meta.isRoot)) {
-    const own = selected.filter((a) => !a.meta.isRoot);
-    const fs = own.map((a) => a.meta.firstMsgIdx).filter((n): n is number => typeof n === "number");
-    const ls = own.map((a) => a.meta.lastMsgIdx).filter((n): n is number => typeof n === "number");
-    if (fs.length) firstIdx = Math.min(...fs);
-    else if (firstIdx < 0) firstIdx = 0;
-    if (ls.length) lastIdx = Math.max(...ls);
-    else if (lastIdx < firstIdx) lastIdx = firstIdx;
-  }
-  const volumeTitle = isRootVolume
-    ? (result.title?.trim() || "Inherited Volume")
-    : deriveTitle(result);
   const meta: LMBEntryMeta = {
     tier: 3,
     chatId,
@@ -931,13 +901,12 @@ async function commitVolume(
     model: result.model,
     connectionId: result.connectionId,
     createdAt: Date.now(),
-    title: volumeTitle,
+    title: deriveTitle(result),
     shortComment: result.shortComment,
     presetKey: result.presetKey,
     sceneNumber,
     storyOrder,
     rawOutput: result.rawOutput,
-    ...(isRootVolume ? { isRoot: true, rootOrigin } : {}),
   };
   const volumeSettings = await loadSettings(userId);
   const comment = await formatEntryName(volumeSettings, {
@@ -951,7 +920,6 @@ async function commitVolume(
     lastMsgIdx: meta.lastMsgIdx,
     sourceCount: sourceArcEntryIds.length,
     turnCount: msgIds.length,
-    isRoot: isRootVolume,
   });
   const finalVolumeContent = savedMemoryContent(result.content);
   const volumeEntry = await createChapterEntry(book.id, meta, finalVolumeContent, comment, userId, result.keywords ?? [], volumeSettings.forceConstantEntries);
@@ -1117,7 +1085,7 @@ export async function dryRunArc(
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
   const chapters = coverage.activeEntries
-    .filter((e) => e.meta.tier === 1 && !e.meta.isRoot)
+    .filter((e) => e.meta.tier === 1)
     .sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
   if (chapters.length === 0) throw new Error("No chapters to bind yet");
   return assembleArcPrompt(profile, settings.customPresets, chatId, chapters, userId);
@@ -1132,7 +1100,7 @@ export async function dryRunVolume(
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
   const arcs = coverage.activeEntries
-    .filter((e) => e.meta.tier === 2 && !e.meta.isRoot)
+    .filter((e) => e.meta.tier === 2)
     .sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
   if (arcs.length === 0) throw new Error("No arcs to press yet");
   return assembleVolumePrompt(profile, settings.customPresets, chatId, arcs, userId);
@@ -1143,7 +1111,6 @@ async function nextSceneNumber(chatId: string, tier: 1 | 2 | 3, userId: string):
   let max = 0;
   for (const e of entries) {
     if (e.meta.tier !== tier) continue;
-    if (e.meta.isRoot) continue;
     const n = e.meta.sceneNumber;
     if (typeof n === "number" && n > max) max = n;
   }

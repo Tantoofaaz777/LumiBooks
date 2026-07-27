@@ -59,13 +59,7 @@ var DEFAULT_SETTINGS = {
   volumeNameTemplate: "Volume {{padded}} - {{title}}"
 };
 var LEGACY_CHAPTER_NAME_TEMPLATE = "#{{sceneNumber}} - {{title}} (msgs {{scene}})";
-var LEGACY_ARC_NAME_TEMPLATE = "{{rootPrefix}}Arc #{{sceneNumber}} - {{title}} (msgs {{scene}})";
-var LEGACY_VOLUME_NAME_TEMPLATE = "{{rootPrefix}}Volume #{{sceneNumber}} - {{title}} (msgs {{scene}})";
 var PRE_ORDER_CHAPTER_NAME_TEMPLATE = "#{{storyOrder}} - {{title}} (msgs {{scene}})";
-var PRE_PADDED_ARC_NAME_TEMPLATE = "{{rootPrefix}}Arc {{sceneNumberPadded}} - {{title}}";
-var PRE_PADDED_VOLUME_NAME_TEMPLATE = "{{rootPrefix}}Volume {{sceneNumberPadded}} - {{title}}";
-var PRE_ROOT_ARC_NAME_TEMPLATE = "{{rootPrefix}}Arc {{padded}} - {{title}}";
-var PRE_ROOT_VOLUME_NAME_TEMPLATE = "{{rootPrefix}}Volume {{padded}} - {{title}}";
 function diskVersionFor(raw) {
   const v = raw && typeof raw === "object" ? raw : {};
   return typeof v.version === "number" ? v.version : 1;
@@ -91,8 +85,8 @@ function normalizeSettings(raw) {
     memoryOutletName: normalizeOutletName(v.memoryOutletName, fallback.memoryOutletName),
     bookNameTemplate: normalizeTemplate(v.bookNameTemplate, fallback.bookNameTemplate),
     chapterNameTemplate: normalizeTemplate(v.chapterNameTemplate, fallback.chapterNameTemplate, LEGACY_CHAPTER_NAME_TEMPLATE, PRE_ORDER_CHAPTER_NAME_TEMPLATE),
-    arcNameTemplate: normalizeTemplate(v.arcNameTemplate, fallback.arcNameTemplate, LEGACY_ARC_NAME_TEMPLATE, PRE_PADDED_ARC_NAME_TEMPLATE, PRE_ROOT_ARC_NAME_TEMPLATE),
-    volumeNameTemplate: normalizeTemplate(v.volumeNameTemplate, fallback.volumeNameTemplate, LEGACY_VOLUME_NAME_TEMPLATE, PRE_PADDED_VOLUME_NAME_TEMPLATE, PRE_ROOT_VOLUME_NAME_TEMPLATE)
+    arcNameTemplate: normalizeTemplate(v.arcNameTemplate, fallback.arcNameTemplate),
+    volumeNameTemplate: normalizeTemplate(v.volumeNameTemplate, fallback.volumeNameTemplate)
   };
 }
 function normalizeTemplate(raw, fallback, ...legacyDefaults) {
@@ -185,9 +179,7 @@ function normalizeEntryMeta(raw) {
     sceneNumber: typeof v.sceneNumber === "number" && Number.isFinite(v.sceneNumber) && v.sceneNumber > 0 ? Math.floor(v.sceneNumber) : undefined,
     storyOrder: typeof v.storyOrder === "number" && Number.isFinite(v.storyOrder) && v.storyOrder > 0 ? Math.floor(v.storyOrder) : undefined,
     preserveComment: v.preserveComment === true ? true : undefined,
-    rawOutput: typeof v.rawOutput === "string" ? v.rawOutput : undefined,
-    isRoot: v.isRoot === true ? true : undefined,
-    rootOrigin: typeof v.rootOrigin === "string" && v.rootOrigin.trim() ? v.rootOrigin : undefined
+    rawOutput: typeof v.rawOutput === "string" ? v.rawOutput : undefined
   };
 }
 function clampInt(v, min, max, fallback) {
@@ -413,7 +405,6 @@ function applyLocalMacros(template, ctx) {
     tier: ctx.tier,
     chat: chatLabel,
     chatname: chatLabel,
-    rootprefix: ctx.isRoot ? "[Root] " : "",
     turns: typeof ctx.turnCount === "number" ? String(ctx.turnCount) : "",
     sources: typeof ctx.sourceCount === "number" ? String(ctx.sourceCount) : ""
   };
@@ -423,15 +414,14 @@ function applyLocalMacros(template, ctx) {
   });
 }
 function fallbackEntryName(ctx) {
-  const prefix = ctx.isRoot ? "[Root] " : "";
   const title = ctx.title.trim() || fallbackTitle(ctx);
   const range = sceneRange(ctx.firstMsgIdx, ctx.lastMsgIdx);
   const suffix = range ? ` (msgs ${range})` : "";
   if (ctx.tier === "chapter")
     return `#${ctx.sceneNumber} - ${title}${suffix}`;
   if (ctx.tier === "arc")
-    return `${prefix}Arc #${ctx.sceneNumber} - ${title}${suffix}`;
-  return `${prefix}Volume #${ctx.sceneNumber} - ${title}${suffix}`;
+    return `Arc #${ctx.sceneNumber} - ${title}${suffix}`;
+  return `Volume #${ctx.sceneNumber} - ${title}${suffix}`;
 }
 function fallbackTitle(ctx) {
   if (ctx.tier === "volume")
@@ -742,9 +732,6 @@ async function updateEntry(entryId, patch, userId) {
 async function deleteEntry(entryId, userId) {
   await spindle.world_books.entries.delete(entryId, userId);
 }
-async function setEntryDisabled(entryId, disabled, userId) {
-  return spindle.world_books.entries.update(entryId, { disabled }, userId);
-}
 async function releaseEntry(entry, userId) {
   const ext = entry.raw.extensions || {};
   const nextExt = { ...ext };
@@ -795,37 +782,6 @@ function invalidateAllBookCacheEntriesForBook(userId, bookId) {
   }
   for (const k of toDelete)
     chatBookCache.delete(k);
-}
-var ROOT_CANDIDATES_TTL_MS = 8000;
-var rootCandidatesCache = new Map;
-function invalidateRootCandidates(userId) {
-  rootCandidatesCache.delete(userId);
-}
-async function listRootCandidates(userId) {
-  const cached = rootCandidatesCache.get(userId);
-  if (cached && Date.now() - cached.at < ROOT_CANDIDATES_TTL_MS)
-    return cached.data;
-  const books = await listAllBooks(userId).catch(() => []);
-  const out = [];
-  for (const book of books) {
-    const meta = book.metadata;
-    const chatId = meta && typeof meta["lumibooks_chat_id"] === "string" ? meta["lumibooks_chat_id"] : null;
-    if (!chatId)
-      continue;
-    const entries = await listAllEntries(book.id, userId).catch(() => []);
-    let entryCount = 0;
-    for (const e of entries) {
-      const ext = e.extensions || {};
-      if (ext[EXTENSION_KEY] && !e.disabled)
-        entryCount++;
-    }
-    if (entryCount === 0)
-      continue;
-    const chat = await spindle.chats.get(chatId, userId).catch(() => null);
-    out.push({ chatId, chatName: chat?.name?.trim() || chatId.slice(0, 8), bookId: book.id, entryCount });
-  }
-  rootCandidatesCache.set(userId, { at: Date.now(), data: out });
-  return out;
 }
 
 // src/backend/coverage.ts
@@ -2458,22 +2414,6 @@ async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, re
     const storyOrder = typeof replacedArc?.meta.storyOrder === "number" ? replacedArc.meta.storyOrder : inheritedStoryOrder(selected, entriesForCoverage);
     const msgIds = selected.flatMap((c) => c.meta.msgIds);
     const sourceChapterEntryIds = selected.map((c) => c.raw.id);
-    const isRootArc = selected.length > 0 && selected.every((c) => c.meta.isRoot);
-    const rootOrigin = isRootArc ? selected.find((c) => c.meta.rootOrigin)?.meta.rootOrigin : undefined;
-    if (!isRootArc && selected.some((c) => c.meta.isRoot)) {
-      const own = selected.filter((c) => !c.meta.isRoot);
-      const fs = own.map((c) => c.meta.firstMsgIdx).filter((n) => typeof n === "number");
-      const ls = own.map((c) => c.meta.lastMsgIdx).filter((n) => typeof n === "number");
-      if (fs.length)
-        firstIdx = Math.min(...fs);
-      else if (firstIdx < 0)
-        firstIdx = 0;
-      if (ls.length)
-        lastIdx = Math.max(...ls);
-      else if (lastIdx < firstIdx)
-        lastIdx = firstIdx;
-    }
-    const arcTitle = isRootArc ? result.title?.trim() || "Inherited Arc" : deriveTitle(result);
     const meta = {
       tier: 2,
       chatId,
@@ -2486,13 +2426,12 @@ async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, re
       model: result.model,
       connectionId: result.connectionId,
       createdAt: Date.now(),
-      title: arcTitle,
+      title: deriveTitle(result),
       shortComment: result.shortComment,
       presetKey: result.presetKey,
       sceneNumber,
       storyOrder,
-      rawOutput: result.rawOutput,
-      ...isRootArc ? { isRoot: true, rootOrigin } : {}
+      rawOutput: result.rawOutput
     };
     const arcSettings = await loadSettings(userId);
     const comment = await formatEntryName(arcSettings, {
@@ -2505,8 +2444,7 @@ async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, re
       firstMsgIdx: meta.firstMsgIdx,
       lastMsgIdx: meta.lastMsgIdx,
       sourceCount: sourceChapterEntryIds.length,
-      turnCount: msgIds.length,
-      isRoot: isRootArc
+      turnCount: msgIds.length
     });
     const finalArcContent = savedMemoryContent(result.content);
     const arcEntry = await createChapterEntry(book.id, meta, finalArcContent, comment, userId, result.keywords ?? [], arcSettings.forceConstantEntries);
@@ -2636,22 +2574,6 @@ async function commitVolume(chatId, userId, selected, result, firstIdx, lastIdx,
     const storyOrder = typeof replacedVolume?.meta.storyOrder === "number" ? replacedVolume.meta.storyOrder : inheritedStoryOrder(selected, entriesForCoverage);
     const msgIds = selected.flatMap((a) => a.meta.msgIds);
     const sourceArcEntryIds = selected.map((a) => a.raw.id);
-    const isRootVolume = selected.length > 0 && selected.every((a) => a.meta.isRoot);
-    const rootOrigin = isRootVolume ? selected.find((a) => a.meta.rootOrigin)?.meta.rootOrigin : undefined;
-    if (!isRootVolume && selected.some((a) => a.meta.isRoot)) {
-      const own = selected.filter((a) => !a.meta.isRoot);
-      const fs = own.map((a) => a.meta.firstMsgIdx).filter((n) => typeof n === "number");
-      const ls = own.map((a) => a.meta.lastMsgIdx).filter((n) => typeof n === "number");
-      if (fs.length)
-        firstIdx = Math.min(...fs);
-      else if (firstIdx < 0)
-        firstIdx = 0;
-      if (ls.length)
-        lastIdx = Math.max(...ls);
-      else if (lastIdx < firstIdx)
-        lastIdx = firstIdx;
-    }
-    const volumeTitle = isRootVolume ? result.title?.trim() || "Inherited Volume" : deriveTitle(result);
     const meta = {
       tier: 3,
       chatId,
@@ -2664,13 +2586,12 @@ async function commitVolume(chatId, userId, selected, result, firstIdx, lastIdx,
       model: result.model,
       connectionId: result.connectionId,
       createdAt: Date.now(),
-      title: volumeTitle,
+      title: deriveTitle(result),
       shortComment: result.shortComment,
       presetKey: result.presetKey,
       sceneNumber,
       storyOrder,
-      rawOutput: result.rawOutput,
-      ...isRootVolume ? { isRoot: true, rootOrigin } : {}
+      rawOutput: result.rawOutput
     };
     const volumeSettings = await loadSettings(userId);
     const comment = await formatEntryName(volumeSettings, {
@@ -2683,8 +2604,7 @@ async function commitVolume(chatId, userId, selected, result, firstIdx, lastIdx,
       firstMsgIdx: meta.firstMsgIdx,
       lastMsgIdx: meta.lastMsgIdx,
       sourceCount: sourceArcEntryIds.length,
-      turnCount: msgIds.length,
-      isRoot: isRootVolume
+      turnCount: msgIds.length
     });
     const finalVolumeContent = savedMemoryContent(result.content);
     const volumeEntry = await createChapterEntry(book.id, meta, finalVolumeContent, comment, userId, result.keywords ?? [], volumeSettings.forceConstantEntries);
@@ -2818,7 +2738,7 @@ async function acceptPreview(chatId, draftId, profile, userId) {
 async function dryRunArc(chatId, profile, settings, userId) {
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
-  const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && !e.meta.isRoot).sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
+  const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1).sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
   if (chapters.length === 0)
     throw new Error("No chapters to bind yet");
   return assembleArcPrompt(profile, settings.customPresets, chatId, chapters, userId);
@@ -2826,7 +2746,7 @@ async function dryRunArc(chatId, profile, settings, userId) {
 async function dryRunVolume(chatId, profile, settings, userId) {
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
-  const arcs = coverage.activeEntries.filter((e) => e.meta.tier === 2 && !e.meta.isRoot).sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
+  const arcs = coverage.activeEntries.filter((e) => e.meta.tier === 2).sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
   if (arcs.length === 0)
     throw new Error("No arcs to press yet");
   return assembleVolumePrompt(profile, settings.customPresets, chatId, arcs, userId);
@@ -2836,8 +2756,6 @@ async function nextSceneNumber(chatId, tier, userId) {
   let max = 0;
   for (const e of entries) {
     if (e.meta.tier !== tier)
-      continue;
-    if (e.meta.isRoot)
       continue;
     const n = e.meta.sceneNumber;
     if (typeof n === "number" && n > max)
@@ -2977,112 +2895,6 @@ async function createClone(bookId, source, meta, userId, commentOverride) {
   }, userId);
 }
 
-// src/backend/rebase.ts
-var inFlight = new Set;
-function lockKey(userId, chatId) {
-  return `${userId}::${chatId}`;
-}
-function ownEntries(entries) {
-  return entries.filter((e) => !e.meta.isRoot);
-}
-function computeNegativeOrder(entries) {
-  const sorted = [...entries].sort((a, b) => (a.meta.firstMsgIdx ?? 0) - (b.meta.firstMsgIdx ?? 0));
-  const n = sorted.length;
-  const order = new Map;
-  sorted.forEach((e, i) => order.set(e.raw.id, -(n - i)));
-  return order;
-}
-async function seedRoot(targetChatId, sourceChatId, sourceEntries, existingRoots, userId) {
-  const book = await ensureBookForChat(targetChatId, userId);
-  const negIdx = computeNegativeOrder(sourceEntries);
-  const transform = (entry) => {
-    const idx = negIdx.get(entry.raw.id);
-    const baseComment = entry.raw.comment || "";
-    return {
-      msgIds: entry.meta.msgIds.slice(),
-      firstMsgIdx: idx,
-      lastMsgIdx: idx,
-      extra: { chatId: targetChatId, isRoot: true, rootOrigin: sourceChatId },
-      comment: baseComment.startsWith("[Root]") ? baseComment : `[Root] ${baseComment}`.trim()
-    };
-  };
-  const idMap = await copyLmbEntries(book.id, sourceEntries, userId, transform);
-  for (const r of existingRoots) {
-    await deleteEntry(r.raw.id, userId).catch((err) => warn(`rebase: failed to drop old root ${r.raw.id}: ${describeError(err)}`));
-  }
-  invalidateBookCache(userId, targetChatId);
-  invalidateRootCandidates(userId);
-  info(`rebased ${targetChatId.slice(0, 8)} onto root from ${sourceChatId.slice(0, 8)} (${idMap.size} entries)`);
-  return { count: idMap.size, newIds: new Set(idMap.values()) };
-}
-async function rebaseRoot(targetChatId, sourceChatId, userId) {
-  if (sourceChatId === targetChatId)
-    return { ok: false, reason: "same_chat" };
-  const key = lockKey(userId, targetChatId);
-  if (inFlight.has(key))
-    return { ok: false, reason: "busy" };
-  inFlight.add(key);
-  try {
-    const targetEntries = await listLmbEntries(targetChatId, userId);
-    if (ownEntries(targetEntries).some((e) => !e.raw.disabled))
-      return { ok: false, reason: "has_own" };
-    const sourceEntries = (await listLmbEntries(sourceChatId, userId)).filter((e) => !e.raw.disabled);
-    if (sourceEntries.length === 0)
-      return { ok: false, reason: "empty_source" };
-    const existingRoots = targetEntries.filter((e) => e.meta.isRoot);
-    const { count } = await seedRoot(targetChatId, sourceChatId, sourceEntries, existingRoots, userId);
-    return { ok: true, count };
-  } finally {
-    inFlight.delete(key);
-  }
-}
-async function rebuildRoot(targetChatId, sourceChatId, userId) {
-  if (sourceChatId === targetChatId)
-    return { ok: false, reason: "same_chat" };
-  const key = lockKey(userId, targetChatId);
-  if (inFlight.has(key))
-    return { ok: false, reason: "busy" };
-  inFlight.add(key);
-  try {
-    const sourceEntries = (await listLmbEntries(sourceChatId, userId)).filter((e) => !e.raw.disabled);
-    if (sourceEntries.length === 0)
-      return { ok: false, reason: "empty_source" };
-    const { count, newIds } = await seedRoot(targetChatId, sourceChatId, sourceEntries, [], userId);
-    const after = await listLmbEntries(targetChatId, userId);
-    const survivors = [];
-    for (const e of after) {
-      if (newIds.has(e.raw.id))
-        continue;
-      try {
-        await deleteEntry(e.raw.id, userId);
-      } catch (err) {
-        warn(`rebuild: failed to delete ${e.raw.id}: ${describeError(err)}`);
-        survivors.push(e);
-      }
-    }
-    for (const e of survivors) {
-      await setEntryDisabled(e.raw.id, true, userId).catch(() => {});
-    }
-    invalidateBookCache(userId, targetChatId);
-    invalidateRootCandidates(userId);
-    return { ok: true, count };
-  } finally {
-    inFlight.delete(key);
-  }
-}
-async function detachRoot(targetChatId, userId) {
-  const entries = await listLmbEntries(targetChatId, userId);
-  const roots = entries.filter((e) => e.meta.isRoot);
-  for (const r of roots) {
-    await deleteEntry(r.raw.id, userId).catch((err) => warn(`detach: failed to delete root ${r.raw.id}: ${describeError(err)}`));
-  }
-  if (roots.length > 0) {
-    invalidateBookCache(userId, targetChatId);
-    invalidateRootCandidates(userId);
-  }
-  return roots.length;
-}
-
 // src/backend/fork.ts
 var FORK_ADOPTED_FLAG = "lumibooks_fork_adopted";
 var MAX_ANCESTRY_HOPS = 100;
@@ -3191,14 +3003,6 @@ async function cloneShelfForFork(forkChatId, forkChatName, parentChatId, userId)
     };
   };
   const forkTransform = (entry, ctx) => {
-    if (entry.meta.isRoot) {
-      return {
-        msgIds: entry.meta.msgIds.slice(),
-        firstMsgIdx: entry.meta.firstMsgIdx,
-        lastMsgIdx: entry.meta.lastMsgIdx,
-        extra: { chatId: forkChatId }
-      };
-    }
     const { ids, first, last } = remap(entry.meta.msgIds);
     if (entry.meta.tier === 1) {
       if (ids.length === 0)
@@ -3276,10 +3080,9 @@ async function buildState(userId, requestedChatId) {
   } else {
     chat = await spindle.chats.getActive(userId).catch(() => null);
   }
-  const [connectionsRaw, regexScriptsRaw, rootCandidatesRaw] = await Promise.all([
+  const [connectionsRaw, regexScriptsRaw] = await Promise.all([
     listConnections(userId),
-    listRegexScripts(userId),
-    listRootCandidates(userId).catch(() => [])
+    listRegexScripts(userId)
   ]);
   const connections = connectionsRaw.map((c) => ({
     id: c.id,
@@ -3290,11 +3093,6 @@ async function buildState(userId, requestedChatId) {
     hasApiKey: c.has_api_key
   }));
   const regexScripts = regexScriptsRaw.map((s) => ({ id: s.id, name: s.name }));
-  const allRootCandidates = rootCandidatesRaw.map((c) => ({
-    chatId: c.chatId,
-    chatName: c.chatName,
-    entryCount: c.entryCount
-  }));
   const resolved = await resolveConnection(activeProfile, userId).catch(() => null);
   const baseState = {
     activeChatId: null,
@@ -3324,11 +3122,7 @@ async function buildState(userId, requestedChatId) {
     volumePresets: BUILTIN_VOLUME_PRESETS,
     customPresets: settings.customPresets,
     regexScripts,
-    pendingPreviews: [],
-    rootOrigin: null,
-    rootOriginName: null,
-    rootEntryCount: 0,
-    availableRoots: allRootCandidates
+    pendingPreviews: []
   };
   if (!chat)
     return baseState;
@@ -3367,8 +3161,7 @@ async function buildState(userId, requestedChatId) {
       active: !(supersededIds.has(e.raw.id) || e.raw.disabled),
       contentTokens: approximateTokensFromChars((e.raw.content || "").length),
       contentChars: (e.raw.content || "").length,
-      sourceTokensInput: e.meta.tokenCountInput || 0,
-      isRoot: !!e.meta.isRoot
+      sourceTokensInput: e.meta.tokenCountInput || 0
     };
     if (e.meta.tier === 3) {
       volumes.push({ ...view, sourceChapterEntryIds: e.meta.sourceChapterEntryIds ?? [] });
@@ -3407,9 +3200,6 @@ async function buildState(userId, requestedChatId) {
       characterName = character?.name ?? null;
     } catch (_) {}
   }
-  const rootEntries = entries.filter((e) => e.meta.isRoot);
-  const rootOrigin = rootEntries.find((e) => e.meta.rootOrigin)?.meta.rootOrigin ?? null;
-  const rootOriginName = rootOrigin ? allRootCandidates.find((c) => c.chatId === rootOrigin)?.chatName ?? rootOrigin.slice(0, 8) : null;
   return {
     ...baseState,
     activeChatId: chat.id,
@@ -3424,11 +3214,7 @@ async function buildState(userId, requestedChatId) {
     coverage: stats,
     lastFailure: getLastFailure(userId, chat.id),
     messages: messageStubs,
-    pendingPreviews: getPendingPreviews(userId, chat.id),
-    rootOrigin,
-    rootOriginName,
-    rootEntryCount: rootEntries.length,
-    availableRoots: allRootCandidates.filter((c) => c.chatId !== chat.id)
+    pendingPreviews: getPendingPreviews(userId, chat.id)
   };
 }
 
@@ -3528,8 +3314,7 @@ async function syncNamingForChat(chatId, userId) {
       firstMsgIdx: entry.meta.firstMsgIdx,
       lastMsgIdx: entry.meta.lastMsgIdx,
       sourceCount: entry.meta.sourceChapterEntryIds?.length,
-      turnCount: entry.meta.msgIds.length,
-      isRoot: entry.meta.isRoot
+      turnCount: entry.meta.msgIds.length
     });
     const patch = {};
     if (isAdoptedEntry(entry.meta)) {
@@ -3606,8 +3391,6 @@ async function confirmAdoptLorebook(chatId, userId, bookId, plan) {
     [3, 0]
   ]);
   for (const entry of existing) {
-    if (entry.meta.isRoot)
-      continue;
     sceneCounts.set(entry.meta.tier, Math.max(sceneCounts.get(entry.meta.tier) ?? 0, entry.meta.sceneNumber ?? 0));
   }
   const entries = await listAllEntries(bookId, userId);
@@ -3647,9 +3430,7 @@ async function confirmAdoptLorebook(chatId, userId, bookId, plan) {
       sceneNumber,
       storyOrder: item.storyOrder,
       preserveComment: true,
-      supersededByEntryId: null,
-      isRoot: undefined,
-      rootOrigin: undefined
+      supersededByEntryId: null
     };
     await spindle.world_books.entries.update(source.id, {
       constant: true,
@@ -3873,12 +3654,12 @@ async function handleExternalEntryDeletion(userId, bookId, isBookDeletion) {
 async function collectActiveChapterIds(chatId, userId) {
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
-  return coverage.activeEntries.filter((e) => e.meta.tier === 1 && !e.meta.isRoot).map((e) => e.raw.id);
+  return coverage.activeEntries.filter((e) => e.meta.tier === 1).map((e) => e.raw.id);
 }
 async function collectActiveArcIds(chatId, userId) {
   const entries = await listLmbEntries(chatId, userId);
   const coverage = await buildCoverage(chatId, userId, entries);
-  return coverage.activeEntries.filter((e) => e.meta.tier === 2 && !e.meta.isRoot).map((e) => e.raw.id);
+  return coverage.activeEntries.filter((e) => e.meta.tier === 2).map((e) => e.raw.id);
 }
 async function retryLastFailure(chatId, userId, profile, settings) {
   const last = getLastFailure(userId, chatId);
@@ -4180,10 +3961,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
           await notify(userId, "warn", `LumiBooks is already busy with a ${busyKind}`);
           break;
         }
-        if (entry.meta.isRoot && tier === 1) {
-          await notify(userId, "warn", "LumiBooks can't regenerate inherited chapters");
-          break;
-        }
         const isArc = tier === 2;
         const isVolume = tier === 3;
         const msgIds = entry.meta.msgIds.slice();
@@ -4242,8 +4019,8 @@ spindle.onFrontendMessage(async (raw, userId) => {
           await notify(userId, "warn", "LumiBooks can't find that chapter anymore");
           break;
         }
-        if (entry.meta.tier !== 1 || entry.meta.isRoot) {
-          await notify(userId, "warn", "Messages can only be bound directly to a local chapter");
+        if (entry.meta.tier !== 1) {
+          await notify(userId, "warn", "Messages can only be bound directly to a chapter");
           break;
         }
         const msgIds = ordered.map(({ message }) => message.id);
@@ -4384,43 +4161,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
         patchPendingPreview(userId, msg.chatId, msg.draftId, msg.patch);
         break;
       }
-      case "rebase_root": {
-        if (getBusy(userId).some((b) => b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "LumiBooks is busy, wait for it to finish");
-          break;
-        }
-        const result = await rebaseRoot(msg.chatId, msg.sourceChatId, userId);
-        if (!result.ok) {
-          const text = result.reason === "has_own" ? "This chat already has memories, use Rebuild instead" : result.reason === "empty_source" ? "That chat has no memories to inherit" : result.reason === "busy" ? "LumiBooks is already rebasing this chat" : "LumiBooks can't rebase a chat onto itself";
-          await notify(userId, "warn", text);
-        } else {
-          await notify(userId, "success", `LumiBooks seeded ${result.count} inherited memor${result.count === 1 ? "y" : "ies"} before the greeting`);
-        }
-        await pushState(userId, msg.chatId);
-        break;
-      }
-      case "rebuild_root": {
-        if (getBusy(userId).some((b) => b.chatId === msg.chatId)) {
-          await notify(userId, "warn", "LumiBooks is busy, wait for it to finish");
-          break;
-        }
-        const result = await rebuildRoot(msg.chatId, msg.sourceChatId, userId);
-        if (!result.ok) {
-          const text = result.reason === "empty_source" ? "That chat has no memories to inherit" : result.reason === "busy" ? "LumiBooks is already rebuilding this chat" : "LumiBooks can't rebuild a chat onto itself";
-          await notify(userId, "warn", text);
-          await pushState(userId, msg.chatId);
-          break;
-        }
-        await notify(userId, "success", `LumiBooks rebuilt onto ${result.count} inherited memor${result.count === 1 ? "y" : "ies"}`);
-        await pushState(userId, msg.chatId);
-        const cur = await loadSettings(userId);
-        const profile = cur.profiles.find((p) => p.id === cur.activeProfileId);
-        if (profile) {
-          await resyncVisibility(msg.chatId, userId, profile.hideCoveredMessages).catch((err) => warn(`rebuild visibility resync failed: ${describeError(err)}`));
-          await pushState(userId, msg.chatId);
-        }
-        break;
-      }
       case "set_message_excluded": {
         const ids = Array.isArray(msg.messageIds) ? msg.messageIds.filter((x) => typeof x === "string") : [];
         if (ids.length === 0)
@@ -4464,13 +4204,6 @@ spindle.onFrontendMessage(async (raw, userId) => {
           }
         }
         await notify(userId, "info", msg.excluded ? `LumiBooks will leave ${ids.length} message${ids.length === 1 ? "" : "s"} untouched` : `LumiBooks will compress ${ids.length} message${ids.length === 1 ? "" : "s"} again`);
-        await pushState(userId, msg.chatId);
-        break;
-      }
-      case "detach_root": {
-        const removed = await detachRoot(msg.chatId, userId);
-        const text = removed === 0 ? "This chat has no inherited memories to detach" : `LumiBooks detached ${removed} inherited memor${removed === 1 ? "y" : "ies"}`;
-        await notify(userId, "info", text);
         await pushState(userId, msg.chatId);
         break;
       }

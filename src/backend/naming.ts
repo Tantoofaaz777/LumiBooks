@@ -17,7 +17,6 @@ export interface EntryNameContext {
   lastMsgIdx?: number;
   sourceCount?: number;
   turnCount?: number;
-  isRoot?: boolean;
 }
 
 interface TemplateContext extends EntryNameContext {
@@ -99,7 +98,6 @@ function applyLocalMacros(template: string, ctx: TemplateContext): string {
     tier: ctx.tier,
     chat: chatLabel,
     chatname: chatLabel,
-    rootprefix: ctx.isRoot ? "[Root] " : "",
     turns: typeof ctx.turnCount === "number" ? String(ctx.turnCount) : "",
     sources: typeof ctx.sourceCount === "number" ? String(ctx.sourceCount) : "",
   };
@@ -110,13 +108,12 @@ function applyLocalMacros(template: string, ctx: TemplateContext): string {
 }
 
 function fallbackEntryName(ctx: EntryNameContext): string {
-  const prefix = ctx.isRoot ? "[Root] " : "";
   const title = ctx.title.trim() || fallbackTitle(ctx);
   const range = sceneRange(ctx.firstMsgIdx, ctx.lastMsgIdx);
   const suffix = range ? ` (msgs ${range})` : "";
   if (ctx.tier === "chapter") return `#${ctx.sceneNumber} - ${title}${suffix}`;
-  if (ctx.tier === "arc") return `${prefix}Arc #${ctx.sceneNumber} - ${title}${suffix}`;
-  return `${prefix}Volume #${ctx.sceneNumber} - ${title}${suffix}`;
+  if (ctx.tier === "arc") return `Arc #${ctx.sceneNumber} - ${title}${suffix}`;
+  return `Volume #${ctx.sceneNumber} - ${title}${suffix}`;
 }
 
 function fallbackTitle(ctx: Pick<EntryNameContext, "tier">): string {

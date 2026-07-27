@@ -212,9 +212,9 @@ function renderEntries(
     host.appendChild(sec.wrap);
     return;
   }
-  const chapters = state.chapters.filter((c) => !c.isRoot);
-  const arcs = state.arcs.filter((a) => !a.isRoot);
-  const volumes = state.volumes.filter((v) => !v.isRoot);
+  const chapters = state.chapters;
+  const arcs = state.arcs;
+  const volumes = state.volumes;
   if (chapters.length + arcs.length + volumes.length === 0) {
     sec.body.appendChild(textNode("No entries yet. File or adopt a chapter to begin.", "lmb-empty"));
     host.appendChild(sec.wrap);
@@ -266,10 +266,9 @@ function renderEntryItem(
   state: FrontendState,
   ctx: SpindleFrontendContext,
   send: (m: FrontendToBackend) => void,
-  readOnly = false,
 ): HTMLLIElement {
   const li = document.createElement("li");
-  li.className = `lmb-entry ${kind}${view.active ? "" : " superseded"}${readOnly ? " root" : ""}`;
+  li.className = `lmb-entry ${kind}${view.active ? "" : " superseded"}`;
 
   const head = document.createElement("div");
   head.className = "lmb-entry-head";
@@ -282,7 +281,6 @@ function renderEntryItem(
   head.append(tag, title);
   li.appendChild(head);
 
-  if (!readOnly) {
   const chatId = state.activeChatId;
   const actions = document.createElement("div");
   actions.className = "lmb-entry-actions";
@@ -321,16 +319,13 @@ function renderEntryItem(
     }, { small: true, danger: true }),
   );
   head.appendChild(actions);
-  }
 
   const meta = document.createElement("div");
   meta.className = "lmb-entry-meta";
   const range =
-    view.isRoot
-      ? "inherited"
-      : view.meta.firstMsgIdx !== undefined && view.meta.lastMsgIdx !== undefined
-        ? `msgs ${view.meta.firstMsgIdx + 1}-${view.meta.lastMsgIdx + 1}`
-        : `${view.meta.msgIds.length} msgs`;
+    view.meta.firstMsgIdx !== undefined && view.meta.lastMsgIdx !== undefined
+      ? `msgs ${view.meta.firstMsgIdx + 1}-${view.meta.lastMsgIdx + 1}`
+      : `${view.meta.msgIds.length} msgs`;
   const before = view.sourceTokensInput || 0;
   const tokenStr = before > 0
     ? `${formatTokens(before)}→${formatTokens(view.contentTokens)} tokens`
