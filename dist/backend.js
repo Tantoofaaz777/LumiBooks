@@ -468,6 +468,15 @@ function setBookCache(key, value) {
 function cacheKey(userId, chatId) {
   return `${userId}::${chatId}`;
 }
+function makeBookMetadata(chatId, bookName, extra = {}) {
+  return {
+    ...extra,
+    lumibooks_chat_id: chatId,
+    lumibooks_created_at: Date.now(),
+    lumibooks_preserve_name: true,
+    lumibooks_initial_name: bookName
+  };
+}
 async function listAllBooks(userId) {
   const out = [];
   let offset = 0;
@@ -573,10 +582,7 @@ async function doEnsureBookForChat(chatId, userId) {
   const book = await spindle.world_books.create({
     name: bookName,
     description: "LumiBooks memory book for this chat. Chapters and arcs live here.",
-    metadata: {
-      lumibooks_chat_id: chatId,
-      lumibooks_created_at: Date.now()
-    }
+    metadata: makeBookMetadata(chatId, bookName)
   }, userId);
   await bindBookToChat(chatId, book.id, userId).catch(() => {});
   setBookCache(cacheKey(userId, chatId), { bookId: book.id, expiresAt: Date.now() + BOOK_INDEX_CACHE_TTL_MS });
@@ -3222,11 +3228,9 @@ async function cloneShelfForFork(forkChatId, forkChatName, parentChatId, userId)
   const newBook = await spindle.world_books.create({
     name: newBookName,
     description: "LumiBooks memory book for this chat. Chapters and arcs live here.",
-    metadata: {
-      lumibooks_chat_id: forkChatId,
-      lumibooks_created_at: Date.now(),
+    metadata: makeBookMetadata(forkChatId, newBookName, {
       lumibooks_forked_from: parentChatId
-    }
+    })
   }, userId);
   let cloned = 0;
   try {
@@ -3496,15 +3500,18 @@ async function syncNamingForChat(chatId, userId) {
   const bookId = await findBookForChat(chatId, userId);
   if (!bookId)
     return;
-  const chat = await spindle.chats.get(chatId, userId).catch(() => null);
   const book = await spindle.world_books.get(bookId, userId).catch(() => null);
   if (book) {
     const bookMeta = book.metadata && typeof book.metadata === "object" ? book.metadata : {};
-    const preserveBookName = bookMeta["lumibooks_preserve_name"] === true;
-    const nextName = preserveBookName ? "" : await formatBookName(settings, chatId, userId, chat?.name);
-    if (!preserveBookName && nextName && nextName !== book.name) {
-      await spindle.world_books.update(book.id, { name: nextName }, userId).catch((err) => {
-        warn(`book rename failed: ${describeError(err)}`);
+    if (bookMeta["lumibooks_preserve_name"] !== true || typeof bookMeta["lumibooks_initial_name"] !== "string") {
+      await spindle.world_books.update(book.id, {
+        metadata: {
+          ...bookMeta,
+          lumibooks_preserve_name: true,
+          lumibooks_initial_name: book.name
+        }
+      }, userId).catch((err) => {
+        warn(`book name snapshot failed: ${describeError(err)}`);
       });
     }
   }

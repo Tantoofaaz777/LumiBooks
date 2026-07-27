@@ -1,6 +1,6 @@
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
-import { formatBookName, formatEntryName } from "./naming";
+import { formatEntryName } from "./naming";
 import { EXTENSION_KEY } from "../shared";
 import { describeError, warn } from "./runtime";
 import { loadSettings } from "./storage";
@@ -11,15 +11,22 @@ export async function syncNamingForChat(chatId: string, userId: string): Promise
   const bookId = await findBookForChat(chatId, userId);
   if (!bookId) return;
 
-  const chat = await spindle.chats.get(chatId, userId).catch(() => null);
   const book = await spindle.world_books.get(bookId, userId).catch(() => null);
   if (book) {
     const bookMeta = (book.metadata && typeof book.metadata === "object") ? (book.metadata as Record<string, unknown>) : {};
-    const preserveBookName = bookMeta["lumibooks_preserve_name"] === true;
-    const nextName = preserveBookName ? "" : await formatBookName(settings, chatId, userId, chat?.name);
-    if (!preserveBookName && nextName && nextName !== book.name) {
-      await spindle.world_books.update(book.id, { name: nextName }, userId).catch((err) => {
-        warn(`book rename failed: ${describeError(err)}`);
+    if (bookMeta["lumibooks_preserve_name"] !== true || typeof bookMeta["lumibooks_initial_name"] !== "string") {
+      await spindle.world_books.update(
+        book.id,
+        {
+          metadata: {
+            ...bookMeta,
+            lumibooks_preserve_name: true,
+            lumibooks_initial_name: book.name,
+          },
+        },
+        userId,
+      ).catch((err) => {
+        warn(`book name snapshot failed: ${describeError(err)}`);
       });
     }
   }

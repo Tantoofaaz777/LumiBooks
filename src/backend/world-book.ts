@@ -44,6 +44,16 @@ export interface LMBEntry {
   meta: LMBEntryMeta;
 }
 
+export function makeBookMetadata(chatId: string, bookName: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    ...extra,
+    lumibooks_chat_id: chatId,
+    lumibooks_created_at: Date.now(),
+    lumibooks_preserve_name: true,
+    lumibooks_initial_name: bookName,
+  };
+}
+
 export async function listAllBooks(userId: string): Promise<WorldBookDTO[]> {
   const out: WorldBookDTO[] = [];
   let offset = 0;
@@ -174,10 +184,7 @@ async function doEnsureBookForChat(chatId: string, userId: string): Promise<Worl
     {
       name: bookName,
       description: "LumiBooks memory book for this chat. Chapters and arcs live here.",
-      metadata: {
-        lumibooks_chat_id: chatId,
-        lumibooks_created_at: Date.now(),
-      },
+      metadata: makeBookMetadata(chatId, bookName),
     },
     userId,
   );

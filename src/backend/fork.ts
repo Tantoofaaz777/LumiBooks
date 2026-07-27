@@ -1,6 +1,6 @@
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
-import { findBookForChat, invalidateBookCache, listLmbEntries } from "./world-book";
+import { findBookForChat, invalidateBookCache, listLmbEntries, makeBookMetadata } from "./world-book";
 import { copyLmbEntries, type CopyTransform } from "./book-copy";
 import { loadSettings } from "./storage";
 import { resyncVisibility } from "./coverage";
@@ -158,11 +158,9 @@ async function cloneShelfForFork(
     {
       name: newBookName,
       description: "LumiBooks memory book for this chat. Chapters and arcs live here.",
-      metadata: {
-        lumibooks_chat_id: forkChatId,
-        lumibooks_created_at: Date.now(),
+      metadata: makeBookMetadata(forkChatId, newBookName, {
         lumibooks_forked_from: parentChatId,
-      },
+      }),
     },
     userId,
   );
