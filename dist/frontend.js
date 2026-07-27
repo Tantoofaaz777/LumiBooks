@@ -955,7 +955,12 @@ function openExpandedTextEditor(ctx, title, source) {
   root.appendChild(editor);
   const actions = document.createElement("div");
   actions.className = "lmb-modal-actions";
-  actions.append(makeButton("Close", () => handle.dismiss(), { primary: true }));
+  actions.append(makeButton("Close", () => {
+    source.selectionStart = editor.selectionStart;
+    source.selectionEnd = editor.selectionEnd;
+    source.dispatchEvent(new FocusEvent("blur", { bubbles: false }));
+    handle.dismiss();
+  }, { primary: true }));
   root.appendChild(actions);
   setTimeout(() => editor.focus(), 0);
 }
@@ -2551,14 +2556,15 @@ function renderCategory(host, state, ctx, send, category, selectedKey, setKey) {
     }));
     sec.body.appendChild(nameField.wrap);
     const textField = field("Prompt");
-    textField.body.appendChild(textArea({
+    const { wrap } = expandableTextArea(ctx, `${category} prompt`, {
       value: draft.prompt,
       rows: 14,
       onBlur: (v) => {
         draft.prompt = v;
         flush();
       }
-    }));
+    });
+    textField.body.appendChild(wrap);
     sec.body.appendChild(textField.wrap);
   } else {
     const lbl = document.createElement("div");

@@ -6,10 +6,9 @@ import {
   makeButton,
   section,
   select,
-  textArea,
   textInput,
 } from "../components";
-import { confirmDelete, promptForString } from "../modals";
+import { confirmDelete, expandableTextArea, promptForString } from "../modals";
 
 export function renderPromptsTab(
   host: HTMLElement,
@@ -148,13 +147,12 @@ function renderCategory(
     sec.body.appendChild(nameField.wrap);
 
     const textField = field("Prompt");
-    textField.body.appendChild(
-      textArea({
-        value: draft.prompt,
-        rows: 14,
-        onBlur: (v) => { draft.prompt = v; flush(); },
-      }),
-    );
+    const { wrap } = expandableTextArea(ctx, `${category} prompt`, {
+      value: draft.prompt,
+      rows: 14,
+      onBlur: (v) => { draft.prompt = v; flush(); },
+    });
+    textField.body.appendChild(wrap);
     sec.body.appendChild(textField.wrap);
   } else {
     const lbl = document.createElement("div");

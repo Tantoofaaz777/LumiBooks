@@ -63,7 +63,12 @@ function openExpandedTextEditor(ctx: SpindleFrontendContext, title: string, sour
 
   const actions = document.createElement("div");
   actions.className = "lmb-modal-actions";
-  actions.append(makeButton("Close", () => handle.dismiss(), { primary: true }));
+  actions.append(makeButton("Close", () => {
+    source.selectionStart = editor.selectionStart;
+    source.selectionEnd = editor.selectionEnd;
+    source.dispatchEvent(new FocusEvent("blur", { bubbles: false }));
+    handle.dismiss();
+  }, { primary: true }));
   root.appendChild(actions);
   setTimeout(() => editor.focus(), 0);
 }
