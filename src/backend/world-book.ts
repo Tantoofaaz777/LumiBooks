@@ -55,10 +55,18 @@ function withOwnershipTransferLock<T>(userId: string, fn: () => Promise<T>): Pro
   return current;
 }
 
-export interface LMBEntry {
-  raw: WorldBookEntryDTO;
+export interface RawLmbEntryLike {
+  readonly id: string;
+  readonly world_book_id?: string;
+  readonly extensions?: Readonly<Record<string, unknown>> | null;
+}
+
+export interface ParsedLmbEntry<TRaw extends RawLmbEntryLike> {
+  raw: TRaw;
   meta: LMBEntryMeta;
 }
+
+export type LMBEntry = ParsedLmbEntry<WorldBookEntryDTO>;
 
 export function makeBookMetadata(chatId: string, bookName: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -462,10 +470,15 @@ export async function listLmbEntries(chatId: string, userId: string): Promise<LM
   return lmbEntriesFromRaw(raw, chatId);
 }
 
-export function lmbEntriesFromRaw(raw: WorldBookEntryDTO[], chatId: string): LMBEntry[] {
-  const out: LMBEntry[] = [];
+export function lmbEntriesFromRaw<TRaw extends RawLmbEntryLike>(
+  raw: readonly TRaw[],
+  chatId: string,
+  bookId?: string | null,
+): ParsedLmbEntry<TRaw>[] {
+  const out: ParsedLmbEntry<TRaw>[] = [];
   for (const entry of raw) {
-    const ext = (entry.extensions || {}) as Record<string, unknown>;
+    if (bookId && entry.world_book_id !== bookId) continue;
+    const ext = entry.extensions || {};
     const meta = normalizeEntryMeta(ext[EXTENSION_KEY]);
     if (!meta) continue;
     if (meta.chatId !== chatId) continue;

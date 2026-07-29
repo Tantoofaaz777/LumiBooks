@@ -811,9 +811,11 @@ async function listLmbEntries(chatId, userId) {
   const raw = await listAllEntries(bookId, userId);
   return lmbEntriesFromRaw(raw, chatId);
 }
-function lmbEntriesFromRaw(raw, chatId) {
+function lmbEntriesFromRaw(raw, chatId, bookId) {
   const out = [];
   for (const entry of raw) {
+    if (bookId && entry.world_book_id !== bookId)
+      continue;
     const ext = entry.extensions || {};
     const meta = normalizeEntryMeta(ext[EXTENSION_KEY]);
     if (!meta)
@@ -933,26 +935,54 @@ var VISIBILITY_FRONTIER_KEY = "lumibooks_hide_frontier";
 var VISIBILITY_IDS_KEY = "lumibooks_hidden_message_ids";
 var VISIBILITY_CHUNK_SIZE = 500;
 var visibilityChains = new Map;
-async function buildCoverage(chatId, userId, preloadedEntries) {
-  const allEntries = preloadedEntries ?? await listLmbEntries(chatId, userId);
-  const entries = allEntries.filter((e) => !e.raw.disabled);
-  const chapters = entries.filter((e) => e.meta.tier === 1);
-  const arcs = entries.filter((e) => e.meta.tier === 2);
-  const volumes = entries.filter((e) => e.meta.tier === 3);
-  const chapterById = new Map(chapters.map((c) => [c.raw.id, c]));
-  const arcById = new Map(arcs.map((a) => [a.raw.id, a]));
+function resolveActiveHierarchy(allEntries) {
+  const entries = allEntries.filter((entry) => !entry.raw.disabled);
+  const chapters = entries.filter((entry) => entry.meta.tier === 1);
+  const arcs = entries.filter((entry) => entry.meta.tier === 2);
+  const volumes = entries.filter((entry) => entry.meta.tier === 3);
   const supersededArcIds = new Set;
-  for (const vol of volumes) {
-    for (const aid of vol.meta.sourceChapterEntryIds ?? []) {
-      supersededArcIds.add(aid);
+  for (const volume of volumes) {
+    for (const arcId of volume.meta.sourceChapterEntryIds ?? []) {
+      supersededArcIds.add(arcId);
     }
   }
   const supersededChapterIds = new Set;
   for (const arc of arcs) {
-    for (const cid of arc.meta.sourceChapterEntryIds ?? []) {
-      supersededChapterIds.add(cid);
+    for (const chapterId of arc.meta.sourceChapterEntryIds ?? []) {
+      supersededChapterIds.add(chapterId);
     }
   }
+  const activeEntries = [
+    ...volumes,
+    ...arcs.filter((arc) => !supersededArcIds.has(arc.raw.id)),
+    ...chapters.filter((chapter) => !supersededChapterIds.has(chapter.raw.id))
+  ];
+  return {
+    entries,
+    chapters,
+    arcs,
+    volumes,
+    supersededArcIds,
+    supersededChapterIds,
+    activeEntries
+  };
+}
+function activeHierarchyEntryIds(entries) {
+  return new Set(resolveActiveHierarchy(entries).activeEntries.map((entry) => entry.raw.id));
+}
+async function buildCoverage(chatId, userId, preloadedEntries) {
+  const allEntries = preloadedEntries ?? await listLmbEntries(chatId, userId);
+  const {
+    entries,
+    chapters,
+    arcs,
+    volumes,
+    supersededArcIds,
+    supersededChapterIds,
+    activeEntries
+  } = resolveActiveHierarchy(allEntries);
+  const chapterById = new Map(chapters.map((c) => [c.raw.id, c]));
+  const arcById = new Map(arcs.map((a) => [a.raw.id, a]));
   const coveredBy = new Map;
   for (const vol of volumes) {
     for (const msgId of vol.meta.msgIds) {
@@ -1003,11 +1033,6 @@ async function buildCoverage(chatId, userId, preloadedEntries) {
         coveredBy.set(msgId, chapter.raw.id);
     }
   }
-  const activeEntries = [
-    ...volumes,
-    ...arcs.filter((a) => !supersededArcIds.has(a.raw.id)),
-    ...chapters.filter((c) => !supersededChapterIds.has(c.raw.id))
-  ];
   const entryById = new Map(entries.map((entry) => [entry.raw.id, entry]));
   const frontierMemo = new Map;
   const inheritedFrontier = (entry, visiting = new Set) => {
@@ -4055,9 +4080,9 @@ spindle.registerWorldInfoInterceptor(async (ctx) => {
   const outletMode = !!settings?.enabled;
   let activeOutletIds = null;
   if (outletMode && userId && ctx.chatId) {
-    const allEntries = await listLmbEntries(ctx.chatId, userId).catch(() => []);
-    const coverage = await buildCoverage(ctx.chatId, userId, allEntries).catch(() => null);
-    activeOutletIds = coverage ? new Set(coverage.activeEntries.map((entry) => entry.raw.id)) : null;
+    const claimedBookId = typeof ctx.chatMetadata["lumibooks_book_id"] === "string" ? ctx.chatMetadata["lumibooks_book_id"] : null;
+    const allEntries = lmbEntriesFromRaw(ctx.entries, ctx.chatId, claimedBookId);
+    activeOutletIds = activeHierarchyEntryIds(allEntries);
   }
   const disabled = [];
   for (const entry of ctx.entries) {

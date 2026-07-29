@@ -1,7 +1,7 @@
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 import type { CoverageStats } from "../types";
-import { approximateTokensFromChars } from "../shared";
+import { approximateTokensFromChars, type LMBEntryMeta } from "../shared";
 import { listLmbEntries, type LMBEntry } from "./world-book";
 import { describeError, warn } from "./runtime";
 
@@ -29,30 +29,81 @@ export const VISIBILITY_IDS_KEY = "lumibooks_hidden_message_ids";
 const VISIBILITY_CHUNK_SIZE = 500;
 const visibilityChains = new Map<string, Promise<unknown>>();
 
-export async function buildCoverage(chatId: string, userId: string, preloadedEntries?: LMBEntry[]): Promise<CoverageMap> {
-  const allEntries = preloadedEntries ?? (await listLmbEntries(chatId, userId));
-  const entries = allEntries.filter((e) => !e.raw.disabled);
-  const chapters = entries.filter((e) => e.meta.tier === 1);
-  const arcs = entries.filter((e) => e.meta.tier === 2);
-  const volumes = entries.filter((e) => e.meta.tier === 3);
-  const chapterById = new Map(chapters.map((c) => [c.raw.id, c] as const));
-  const arcById = new Map(arcs.map((a) => [a.raw.id, a] as const));
+export interface HierarchyLmbEntry {
+  readonly raw: {
+    readonly id: string;
+    readonly disabled: boolean;
+  };
+  readonly meta: Pick<LMBEntryMeta, "tier" | "sourceChapterEntryIds">;
+}
+
+interface ActiveHierarchy<TEntry extends HierarchyLmbEntry> {
+  entries: TEntry[];
+  chapters: TEntry[];
+  arcs: TEntry[];
+  volumes: TEntry[];
+  supersededArcIds: Set<string>;
+  supersededChapterIds: Set<string>;
+  activeEntries: TEntry[];
+}
+
+function resolveActiveHierarchy<TEntry extends HierarchyLmbEntry>(
+  allEntries: readonly TEntry[],
+): ActiveHierarchy<TEntry> {
+  const entries = allEntries.filter((entry) => !entry.raw.disabled);
+  const chapters = entries.filter((entry) => entry.meta.tier === 1);
+  const arcs = entries.filter((entry) => entry.meta.tier === 2);
+  const volumes = entries.filter((entry) => entry.meta.tier === 3);
 
   const supersededArcIds = new Set<string>();
-  for (const vol of volumes) {
-    for (const aid of vol.meta.sourceChapterEntryIds ?? []) {
-      supersededArcIds.add(aid);
+  for (const volume of volumes) {
+    for (const arcId of volume.meta.sourceChapterEntryIds ?? []) {
+      supersededArcIds.add(arcId);
     }
   }
 
-  // All arcs supersede their chapters, including arcs that are themselves
-  // superseded by a volume - those chapters stay covered by the volume.
+  // Arcs keep superseding their chapters even when a volume supersedes the arc.
   const supersededChapterIds = new Set<string>();
   for (const arc of arcs) {
-    for (const cid of arc.meta.sourceChapterEntryIds ?? []) {
-      supersededChapterIds.add(cid);
+    for (const chapterId of arc.meta.sourceChapterEntryIds ?? []) {
+      supersededChapterIds.add(chapterId);
     }
   }
+
+  const activeEntries = [
+    ...volumes,
+    ...arcs.filter((arc) => !supersededArcIds.has(arc.raw.id)),
+    ...chapters.filter((chapter) => !supersededChapterIds.has(chapter.raw.id)),
+  ];
+
+  return {
+    entries,
+    chapters,
+    arcs,
+    volumes,
+    supersededArcIds,
+    supersededChapterIds,
+    activeEntries,
+  };
+}
+
+export function activeHierarchyEntryIds(entries: readonly HierarchyLmbEntry[]): Set<string> {
+  return new Set(resolveActiveHierarchy(entries).activeEntries.map((entry) => entry.raw.id));
+}
+
+export async function buildCoverage(chatId: string, userId: string, preloadedEntries?: LMBEntry[]): Promise<CoverageMap> {
+  const allEntries = preloadedEntries ?? (await listLmbEntries(chatId, userId));
+  const {
+    entries,
+    chapters,
+    arcs,
+    volumes,
+    supersededArcIds,
+    supersededChapterIds,
+    activeEntries,
+  } = resolveActiveHierarchy(allEntries);
+  const chapterById = new Map(chapters.map((c) => [c.raw.id, c] as const));
+  const arcById = new Map(arcs.map((a) => [a.raw.id, a] as const));
 
   const coveredBy = new Map<string, string>();
 
@@ -97,11 +148,6 @@ export async function buildCoverage(chatId: string, userId: string, preloadedEnt
     }
   }
 
-  const activeEntries: LMBEntry[] = [
-    ...volumes,
-    ...arcs.filter((a) => !supersededArcIds.has(a.raw.id)),
-    ...chapters.filter((c) => !supersededChapterIds.has(c.raw.id)),
-  ];
   const entryById = new Map(entries.map((entry) => [entry.raw.id, entry] as const));
   const frontierMemo = new Map<string, number | null>();
   const inheritedFrontier = (entry: LMBEntry, visiting = new Set<string>()): number | null => {

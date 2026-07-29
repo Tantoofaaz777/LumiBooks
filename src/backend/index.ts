@@ -26,6 +26,7 @@ import {
   releaseEntry,
   updateEntry,
   listLmbEntries,
+  lmbEntriesFromRaw,
   invalidateBookCache,
   findChatIdForBook,
   findCachedChatIdForBook,
@@ -48,7 +49,7 @@ import {
   patchPendingPreview,
   registerPipelineCallbacks,
 } from "./pipeline";
-import { buildCoverage, reconcileVisibility } from "./coverage";
+import { activeHierarchyEntryIds, buildCoverage, reconcileVisibility } from "./coverage";
 import { invalidateConnectionsCache } from "./summarizer";
 import { invalidateRegexCache } from "./regex";
 import { registerHookEndpoints } from "./hooks";
@@ -150,9 +151,12 @@ spindle.registerWorldInfoInterceptor(async (ctx) => {
   const outletMode = !!settings?.enabled;
   let activeOutletIds: Set<string> | null = null;
   if (outletMode && userId && ctx.chatId) {
-    const allEntries = await listLmbEntries(ctx.chatId, userId).catch(() => []);
-    const coverage = await buildCoverage(ctx.chatId, userId, allEntries).catch(() => null);
-    activeOutletIds = coverage ? new Set(coverage.activeEntries.map((entry) => entry.raw.id)) : null;
+    const claimedBookId =
+      typeof ctx.chatMetadata["lumibooks_book_id"] === "string"
+        ? ctx.chatMetadata["lumibooks_book_id"]
+        : null;
+    const allEntries = lmbEntriesFromRaw(ctx.entries, ctx.chatId, claimedBookId);
+    activeOutletIds = activeHierarchyEntryIds(allEntries);
   }
   const disabled: string[] = [];
   for (const entry of ctx.entries) {

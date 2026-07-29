@@ -5,13 +5,13 @@
     "": {
       "name": "lumiverse-memory-books",
       "devDependencies": {
-        "lumiverse-spindle-types": "^0.6.8",
+        "lumiverse-spindle-types": "0.6.10",
         "typescript": "^5.9.3",
       },
     },
   },
   "packages": {
-    "lumiverse-spindle-types": ["lumiverse-spindle-types@0.6.8", "", {}, "sha512-CGRhLCjefnFAhQKDPwDbA44WS1rWZaR54lZV6RtHr0U8QawfwM4EhB1gBP579meN3OHOhO883MiYGM/Ua3Uh0g=="],
+    "lumiverse-spindle-types": ["lumiverse-spindle-types@0.6.10", "", {}, "sha512-0PPqBb0fFskdqsYSAcNYMswEsacKsxuAqJeAV47pKxeWdyk+eXjm5Y0rEPKLfGZ+kg1V1PA8+uu9SaFGXA2ZSw=="],
 
     "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
   }
