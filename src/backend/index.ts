@@ -74,9 +74,13 @@ async function notify(
 }
 
 const PUSH_DEBOUNCE_MS = 30;
-const pushTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const pendingPushChatIds = new Map<string, string | null>();
-const pendingPushResolvers = new Map<string, Array<() => void>>();
+interface PushQueue {
+  timer: ReturnType<typeof setTimeout> | null;
+  running: boolean;
+  pendingChatId: string | null;
+  resolvers: Array<() => void>;
+}
+const pushQueues = new Map<string, PushQueue>();
 
 async function doPushState(userId: string, chatId?: string | null): Promise<void> {
   try {
@@ -109,27 +113,43 @@ async function doPushState(userId: string, chatId?: string | null): Promise<void
   }
 }
 
+function schedulePush(userId: string, queue: PushQueue): void {
+  if (queue.running) return;
+  if (queue.timer) clearTimeout(queue.timer);
+  queue.timer = setTimeout(() => {
+    queue.timer = null;
+    const chatId = queue.pendingChatId;
+    const waiting = queue.resolvers.splice(0);
+    queue.running = true;
+    void doPushState(userId, chatId).finally(() => {
+      queue.running = false;
+      for (const resolve of waiting) {
+        try { resolve(); } catch (_) { void _; }
+      }
+      if (queue.resolvers.length > 0) {
+        schedulePush(userId, queue);
+      } else if (pushQueues.get(userId) === queue) {
+        pushQueues.delete(userId);
+      }
+    });
+  }, PUSH_DEBOUNCE_MS);
+}
+
 function pushState(userId: string, chatId?: string | null): Promise<void> {
-  pendingPushChatIds.set(userId, chatId ?? null);
-  const prev = pushTimers.get(userId);
-  if (prev) clearTimeout(prev);
+  let queue = pushQueues.get(userId);
+  if (!queue) {
+    queue = {
+      timer: null,
+      running: false,
+      pendingChatId: null,
+      resolvers: [],
+    };
+    pushQueues.set(userId, queue);
+  }
+  queue.pendingChatId = chatId ?? null;
   return new Promise((resolve) => {
-    const resolvers = pendingPushResolvers.get(userId) ?? [];
-    resolvers.push(resolve);
-    pendingPushResolvers.set(userId, resolvers);
-    const timer = setTimeout(() => {
-      pushTimers.delete(userId);
-      const finalChatId = pendingPushChatIds.get(userId) ?? null;
-      pendingPushChatIds.delete(userId);
-      const waiting = pendingPushResolvers.get(userId) ?? [];
-      pendingPushResolvers.delete(userId);
-      doPushState(userId, finalChatId).finally(() => {
-        for (const r of waiting) {
-          try { r(); } catch (_) { void _; }
-        }
-      });
-    }, PUSH_DEBOUNCE_MS);
-    pushTimers.set(userId, timer);
+    queue!.resolvers.push(resolve);
+    schedulePush(userId, queue!);
   });
 }
 

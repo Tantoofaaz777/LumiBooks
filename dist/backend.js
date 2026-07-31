@@ -176,6 +176,7 @@ function normalizeEntryMeta(raw) {
     presetKey: typeof v.presetKey === "string" ? v.presetKey : undefined,
     sceneNumber: typeof v.sceneNumber === "number" && Number.isFinite(v.sceneNumber) && v.sceneNumber > 0 ? Math.floor(v.sceneNumber) : undefined,
     storyOrder: typeof v.storyOrder === "number" && Number.isFinite(v.storyOrder) && v.storyOrder > 0 ? Math.floor(v.storyOrder) : undefined,
+    outletName: typeof v.outletName === "string" ? v.outletName : undefined,
     preserveComment: v.preserveComment === true ? true : undefined,
     forkMode: v.forkMode === "baseline" || v.forkMode === "range" ? v.forkMode : undefined,
     rawOutput: typeof v.rawOutput === "string" ? v.rawOutput : undefined
@@ -3623,7 +3624,10 @@ async function syncProjectionEntry(chatId, userId, context) {
       if (!meta || meta.chatId !== chatId)
         continue;
       const orderValue = orderValueFor(meta, entry.order_value);
-      const currentOutletName = (entry.outlet_name ?? "").trim();
+      const exposedOutletName = entry.outlet_name;
+      const targetOutletName = outletMode ? outletName : "";
+      const outletMarkerChanged = meta.outletName !== targetOutletName;
+      const exposedOutletChanged = typeof exposedOutletName === "string" && exposedOutletName.trim() !== targetOutletName;
       const patch = outletMode ? {
         position: 8,
         outlet_name: outletName,
@@ -3634,9 +3638,15 @@ async function syncProjectionEntry(chatId, userId, context) {
         outlet_name: "",
         order_value: orderValue
       };
-      const needsPatch = entry.position !== patch.position || entry.order_value !== orderValue || outletMode && entry.constant !== desiredConstant || currentOutletName !== patch.outlet_name;
+      const needsPatch = entry.position !== patch.position || entry.order_value !== orderValue || outletMode && entry.constant !== desiredConstant || outletMarkerChanged || exposedOutletChanged;
       if (!needsPatch)
         continue;
+      if (outletMarkerChanged) {
+        patch.extensions = {
+          ...ext,
+          [EXTENSION_KEY]: { ...meta, outletName: targetOutletName }
+        };
+      }
       const updated = await updateEntry2(entry, patch, userId);
       Object.assign(entry, updated);
       touched = true;
@@ -4002,9 +4012,7 @@ async function notify(userId, tone, text) {
   }
 }
 var PUSH_DEBOUNCE_MS = 30;
-var pushTimers = new Map;
-var pendingPushChatIds = new Map;
-var pendingPushResolvers = new Map;
+var pushQueues = new Map;
 async function doPushState(userId, chatId) {
   try {
     let refreshContext;
@@ -4037,30 +4045,46 @@ async function doPushState(userId, chatId) {
     send({ type: "error", text: `LumiBooks state refresh failed: ${describeError(err)}` }, userId);
   }
 }
+function schedulePush(userId, queue) {
+  if (queue.running)
+    return;
+  if (queue.timer)
+    clearTimeout(queue.timer);
+  queue.timer = setTimeout(() => {
+    queue.timer = null;
+    const chatId = queue.pendingChatId;
+    const waiting = queue.resolvers.splice(0);
+    queue.running = true;
+    doPushState(userId, chatId).finally(() => {
+      queue.running = false;
+      for (const resolve of waiting) {
+        try {
+          resolve();
+        } catch (_) {}
+      }
+      if (queue.resolvers.length > 0) {
+        schedulePush(userId, queue);
+      } else if (pushQueues.get(userId) === queue) {
+        pushQueues.delete(userId);
+      }
+    });
+  }, PUSH_DEBOUNCE_MS);
+}
 function pushState(userId, chatId) {
-  pendingPushChatIds.set(userId, chatId ?? null);
-  const prev = pushTimers.get(userId);
-  if (prev)
-    clearTimeout(prev);
+  let queue = pushQueues.get(userId);
+  if (!queue) {
+    queue = {
+      timer: null,
+      running: false,
+      pendingChatId: null,
+      resolvers: []
+    };
+    pushQueues.set(userId, queue);
+  }
+  queue.pendingChatId = chatId ?? null;
   return new Promise((resolve) => {
-    const resolvers = pendingPushResolvers.get(userId) ?? [];
-    resolvers.push(resolve);
-    pendingPushResolvers.set(userId, resolvers);
-    const timer = setTimeout(() => {
-      pushTimers.delete(userId);
-      const finalChatId = pendingPushChatIds.get(userId) ?? null;
-      pendingPushChatIds.delete(userId);
-      const waiting = pendingPushResolvers.get(userId) ?? [];
-      pendingPushResolvers.delete(userId);
-      doPushState(userId, finalChatId).finally(() => {
-        for (const r of waiting) {
-          try {
-            r();
-          } catch (_) {}
-        }
-      });
-    }, PUSH_DEBOUNCE_MS);
-    pushTimers.set(userId, timer);
+    queue.resolvers.push(resolve);
+    schedulePush(userId, queue);
   });
 }
 registerPipelineCallbacks({

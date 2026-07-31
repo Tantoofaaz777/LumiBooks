@@ -62,8 +62,18 @@ export async function syncProjectionEntry(
       if (!meta || meta.chatId !== chatId) continue;
 
       const orderValue = orderValueFor(meta, entry.order_value);
-      const currentOutletName = ((entry as unknown as { outlet_name?: string }).outlet_name ?? "").trim();
-      const patch = outletMode
+      const exposedOutletName = (entry as unknown as { outlet_name?: string | null }).outlet_name;
+      const targetOutletName = outletMode ? outletName : "";
+      const outletMarkerChanged = meta.outletName !== targetOutletName;
+      const exposedOutletChanged =
+        typeof exposedOutletName === "string" && exposedOutletName.trim() !== targetOutletName;
+      const patch: {
+        position: number;
+        outlet_name: string;
+        order_value: number;
+        constant?: boolean;
+        extensions?: Record<string, unknown>;
+      } = outletMode
         ? {
             position: 8,
             outlet_name: outletName,
@@ -79,8 +89,15 @@ export async function syncProjectionEntry(
         entry.position !== patch.position ||
         entry.order_value !== orderValue ||
         (outletMode && entry.constant !== desiredConstant) ||
-        currentOutletName !== patch.outlet_name;
+        outletMarkerChanged ||
+        exposedOutletChanged;
       if (!needsPatch) continue;
+      if (outletMarkerChanged) {
+        patch.extensions = {
+          ...ext,
+          [EXTENSION_KEY]: { ...meta, outletName: targetOutletName },
+        };
+      }
       const updated = await updateEntry(entry, patch, userId);
       Object.assign(entry, updated);
       touched = true;

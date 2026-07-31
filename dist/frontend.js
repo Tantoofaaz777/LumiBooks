@@ -2922,7 +2922,7 @@ function setup(ctx) {
     if (!active || !content.contains(active))
       return false;
     const tag = active.tagName;
-    if (tag === "TEXTAREA")
+    if (tag === "TEXTAREA" || tag === "SELECT")
       return true;
     if (tag !== "INPUT")
       return false;

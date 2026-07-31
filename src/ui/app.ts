@@ -80,7 +80,7 @@ export function setup(ctx: SpindleFrontendContext): () => void {
     const active = document.activeElement;
     if (!active || !content.contains(active)) return false;
     const tag = active.tagName;
-    if (tag === "TEXTAREA") return true;
+    if (tag === "TEXTAREA" || tag === "SELECT") return true;
     if (tag !== "INPUT") return false;
     const type = ((active as HTMLInputElement).type || "text").toLowerCase();
     return type === "text" || type === "number" || type === "search"

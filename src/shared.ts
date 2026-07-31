@@ -78,6 +78,8 @@ export interface LMBEntryMeta {
   presetKey?: string;
   sceneNumber?: number;
   storyOrder?: number;
+  /** Last outlet applied by LumiBooks; Spindle 0.6.x omits outlet_name from entry DTOs. */
+  outletName?: string;
   preserveComment?: boolean;
   forkMode?: "baseline" | "range";
   rawOutput?: string;
@@ -272,6 +274,7 @@ export function normalizeEntryMeta(raw: unknown): LMBEntryMeta | null {
       typeof v.storyOrder === "number" && Number.isFinite(v.storyOrder) && v.storyOrder > 0
         ? Math.floor(v.storyOrder)
         : undefined,
+    outletName: typeof v.outletName === "string" ? v.outletName : undefined,
     preserveComment: v.preserveComment === true ? true : undefined,
     forkMode: v.forkMode === "baseline" || v.forkMode === "range" ? v.forkMode : undefined,
     rawOutput: typeof v.rawOutput === "string" ? v.rawOutput : undefined,
