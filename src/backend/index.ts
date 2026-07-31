@@ -23,6 +23,8 @@ import {
   ensureBookForChat,
   deleteEntry,
   patchEntryMeta,
+  setEntrySuperseded,
+  syncSupersededEntryStates,
   releaseEntry,
   updateEntry,
   listLmbEntries,
@@ -84,27 +86,32 @@ const pushQueues = new Map<string, PushQueue>();
 
 async function doPushState(userId: string, chatId?: string | null): Promise<void> {
   try {
+    let resolvedChatId = chatId ?? null;
     let refreshContext: ChatRefreshContext | undefined;
-    if (chatId) {
-      const active = await spindle.chats.getActive(userId).catch(() => null);
-      if (active && active.id !== chatId) return;
-      refreshContext = await loadChatRefreshContext(userId, chatId);
+    const active = await spindle.chats.getActive(userId).catch(() => null);
+    if (resolvedChatId && active && active.id !== resolvedChatId) return;
+    if (!resolvedChatId) resolvedChatId = active?.id ?? null;
+    if (resolvedChatId) {
+      refreshContext = await loadChatRefreshContext(userId, resolvedChatId);
       if (refreshContext.chat) {
-        await syncStoryOrderForChat(chatId, userId, refreshContext.entries).catch((err) => {
+        await syncSupersededEntryStates(refreshContext.entries, userId).catch((err) => {
+          warn(`hierarchy entry state sync before state failed: ${describeError(err)}`);
+        });
+        await syncStoryOrderForChat(resolvedChatId, userId, refreshContext.entries).catch((err) => {
           warn(`story order sync before state failed: ${describeError(err)}`);
         });
-        await syncNamingForChat(chatId, userId, refreshContext).catch((err) => {
+        await syncNamingForChat(resolvedChatId, userId, refreshContext).catch((err) => {
           warn(`naming sync before state failed: ${describeError(err)}`);
         });
-        await syncProjectionEntry(chatId, userId, refreshContext).catch((err) => {
+        await syncProjectionEntry(resolvedChatId, userId, refreshContext).catch((err) => {
           warn(`projection sync before state failed: ${describeError(err)}`);
         });
       }
     }
-    const state = await buildState(userId, chatId, refreshContext);
-    if (chatId) {
-      const active = await spindle.chats.getActive(userId).catch(() => null);
-      if (active && active.id !== chatId) return;
+    const state = await buildState(userId, resolvedChatId, refreshContext);
+    if (resolvedChatId) {
+      const latestActive = await spindle.chats.getActive(userId).catch(() => null);
+      if (latestActive && latestActive.id !== resolvedChatId) return;
     }
     send({ type: "state", state }, userId);
   } catch (err) {
@@ -554,7 +561,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
             if (!sourceIds.has(src.raw.id)) continue;
             if (src.meta.supersededByEntryId !== msg.entryId) continue;
             try {
-              await patchEntryMeta(src, { supersededByEntryId: null }, userId);
+              await setEntrySuperseded(src, null, userId);
             } catch (err) {
               warn(`failed to clear supersededByEntryId on entry ${src.raw.id}: ${describeError(err)}`);
             }
@@ -586,7 +593,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
             if (!sourceIds.has(src.raw.id)) continue;
             if (src.meta.supersededByEntryId !== msg.entryId) continue;
             try {
-              await patchEntryMeta(src, { supersededByEntryId: null }, userId);
+              await setEntrySuperseded(src, null, userId);
             } catch (err) {
               warn(`failed to clear supersededByEntryId on entry ${src.raw.id}: ${describeError(err)}`);
             }

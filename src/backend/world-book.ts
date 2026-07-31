@@ -606,6 +606,50 @@ export async function patchEntryMeta(
   );
 }
 
+export async function setEntrySuperseded(
+  entry: LMBEntry,
+  supersededByEntryId: string | null,
+  userId: string,
+): Promise<WorldBookEntryDTO> {
+  const next: LMBEntryMeta = { ...entry.meta, supersededByEntryId };
+  const ext = (entry.raw.extensions || {}) as Record<string, unknown>;
+  const updated = await spindle.world_books.entries.update(
+    entry.raw.id,
+    {
+      disabled: supersededByEntryId !== null,
+      extensions: { ...ext, [EXTENSION_KEY]: next },
+    },
+    userId,
+  );
+  Object.assign(entry.raw, updated);
+  entry.meta = next;
+  return updated;
+}
+
+export async function syncSupersededEntryStates(
+  entries: LMBEntry[],
+  userId: string,
+): Promise<void> {
+  const byId = new Map(entries.map((entry) => [entry.raw.id, entry] as const));
+  for (const entry of entries) {
+    const supersederId = entry.meta.supersededByEntryId ?? null;
+    if (!supersederId) continue;
+    const superseder = byId.get(supersederId);
+    const validTier =
+      superseder
+      && ((entry.meta.tier === 1 && superseder.meta.tier === 2)
+        || (entry.meta.tier === 2 && superseder.meta.tier === 3));
+    const validSource =
+      validTier
+      && (superseder.meta.sourceChapterEntryIds ?? []).includes(entry.raw.id);
+    const nextSupersederId = validSource ? supersederId : null;
+    if (entry.raw.disabled === (nextSupersederId !== null) && nextSupersederId === supersederId) {
+      continue;
+    }
+    await setEntrySuperseded(entry, nextSupersederId, userId);
+  }
+}
+
 export function invalidateBookCache(userId: string, chatId: string): void {
   chatBookCache.delete(cacheKey(userId, chatId));
 }

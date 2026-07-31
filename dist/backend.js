@@ -894,6 +894,33 @@ async function patchEntryMeta(entry, metaPatch, userId) {
     extensions: { ...ext, [EXTENSION_KEY]: next }
   }, userId);
 }
+async function setEntrySuperseded(entry, supersededByEntryId, userId) {
+  const next = { ...entry.meta, supersededByEntryId };
+  const ext = entry.raw.extensions || {};
+  const updated = await spindle.world_books.entries.update(entry.raw.id, {
+    disabled: supersededByEntryId !== null,
+    extensions: { ...ext, [EXTENSION_KEY]: next }
+  }, userId);
+  Object.assign(entry.raw, updated);
+  entry.meta = next;
+  return updated;
+}
+async function syncSupersededEntryStates(entries, userId) {
+  const byId = new Map(entries.map((entry) => [entry.raw.id, entry]));
+  for (const entry of entries) {
+    const supersederId = entry.meta.supersededByEntryId ?? null;
+    if (!supersederId)
+      continue;
+    const superseder = byId.get(supersederId);
+    const validTier = superseder && (entry.meta.tier === 1 && superseder.meta.tier === 2 || entry.meta.tier === 2 && superseder.meta.tier === 3);
+    const validSource = validTier && (superseder.meta.sourceChapterEntryIds ?? []).includes(entry.raw.id);
+    const nextSupersederId = validSource ? supersederId : null;
+    if (entry.raw.disabled === (nextSupersederId !== null) && nextSupersederId === supersederId) {
+      continue;
+    }
+    await setEntrySuperseded(entry, nextSupersederId, userId);
+  }
+}
 function invalidateBookCache(userId, chatId) {
   chatBookCache.delete(cacheKey(userId, chatId));
 }
@@ -2213,6 +2240,23 @@ function capMap(map, cap) {
     map.delete(oldest);
   }
 }
+function selectGroupSources(entries, activeEntries, wanted, sourceTier, replacesEntryId) {
+  const eligibleIds = new Set(activeEntries.filter((entry) => entry.meta.tier === sourceTier && wanted.has(entry.raw.id)).map((entry) => entry.raw.id));
+  if (replacesEntryId) {
+    const replacedTier = sourceTier === 1 ? 2 : 3;
+    const replaced = entries.find((entry) => entry.raw.id === replacesEntryId && entry.meta.tier === replacedTier);
+    const declaredSourceIds = new Set(replaced?.meta.sourceChapterEntryIds ?? []);
+    for (const entry of entries) {
+      if (entry.meta.tier !== sourceTier || !wanted.has(entry.raw.id))
+        continue;
+      if (!declaredSourceIds.has(entry.raw.id))
+        continue;
+      if (entry.meta.supersededByEntryId === replacesEntryId)
+        eligibleIds.add(entry.raw.id);
+    }
+  }
+  return entries.filter((entry) => eligibleIds.has(entry.raw.id)).sort((left, right) => storyOrderOf(left) - storyOrderOf(right));
+}
 function busyKey(userId, chatId, kind) {
   return `${userId}::${chatId}::${kind}`;
 }
@@ -2620,7 +2664,7 @@ async function createArcFromChapters(chatId, chapterEntryIds, profile, settings,
     const entriesForSelection = opts.replacesEntryId ? entries.filter((e) => e.raw.id !== opts.replacesEntryId) : entries;
     const coverage = await buildCoverage(chatId, userId, entriesForSelection);
     const wanted = new Set(chapterEntryIds);
-    const chapters = coverage.activeEntries.filter((e) => e.meta.tier === 1 && wanted.has(e.raw.id)).sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
+    const chapters = selectGroupSources(entries, coverage.activeEntries, wanted, 1, opts.replacesEntryId);
     if (chapters.length === 0)
       return null;
     return await runArc(chatId, profile, settings, userId, chapters, { replacesEntryId: opts.replacesEntryId });
@@ -2686,13 +2730,14 @@ async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, re
     const freshEntries = await listLmbEntries(chatId, userId);
     const entriesForCoverage = replacesEntryId ? freshEntries.filter((e) => e.raw.id !== replacesEntryId) : freshEntries;
     const freshCoverage = await buildCoverage(chatId, userId, entriesForCoverage);
-    const stillActive = new Set(freshCoverage.activeEntries.filter((e) => e.meta.tier === 1).map((e) => e.raw.id));
-    const filtered = selected.filter((c) => stillActive.has(c.raw.id));
+    const wanted = new Set(selected.map((entry) => entry.raw.id));
+    const filtered = selectGroupSources(freshEntries, freshCoverage.activeEntries, wanted, 1, replacesEntryId);
     if (filtered.length === 0) {
       throw new Error("All source chapters were already bound by another arc or deleted");
     }
-    if (filtered.length < selected.length) {
-      selected = filtered;
+    const selectionShrank = filtered.length < selected.length;
+    selected = filtered;
+    if (selectionShrank) {
       const firstIdxs = selected.map((c) => c.meta.firstMsgIdx).filter((n) => typeof n === "number");
       const lastIdxs = selected.map((c) => c.meta.lastMsgIdx).filter((n) => typeof n === "number");
       firstIdx = firstIdxs.length ? Math.min(...firstIdxs) : 0;
@@ -2743,7 +2788,7 @@ async function commitArc(chatId, userId, selected, result, firstIdx, lastIdx, re
     const failedSupersedes = [];
     for (const ch of selected) {
       try {
-        await patchEntryMeta(ch, { supersededByEntryId: arcEntry.id }, userId);
+        await setEntrySuperseded(ch, arcEntry.id, userId);
       } catch (err) {
         failedSupersedes.push(ch.raw.id);
         warn(`failed to mark chapter ${ch.raw.id} superseded by arc ${arcEntry.id}: ${describeError(err)}`);
@@ -2786,7 +2831,7 @@ async function createVolumeFromArcs(chatId, arcEntryIds, profile, settings, user
     const entriesForSelection = opts.replacesEntryId ? entries.filter((e) => e.raw.id !== opts.replacesEntryId) : entries;
     const coverage = await buildCoverage(chatId, userId, entriesForSelection);
     const wanted = new Set(arcEntryIds);
-    const arcs = coverage.activeEntries.filter((e) => e.meta.tier === 2 && wanted.has(e.raw.id)).sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
+    const arcs = selectGroupSources(entries, coverage.activeEntries, wanted, 2, opts.replacesEntryId);
     if (arcs.length === 0)
       return null;
     return await runVolume(chatId, profile, settings, userId, arcs, opts.replacesEntryId);
@@ -2851,13 +2896,14 @@ async function commitVolume(chatId, userId, selected, result, firstIdx, lastIdx,
     const freshEntries = await listLmbEntries(chatId, userId);
     const entriesForCoverage = replacesEntryId ? freshEntries.filter((e) => e.raw.id !== replacesEntryId) : freshEntries;
     const freshCoverage = await buildCoverage(chatId, userId, entriesForCoverage);
-    const stillActive = new Set(freshCoverage.activeEntries.filter((e) => e.meta.tier === 2).map((e) => e.raw.id));
-    const filtered = selected.filter((a) => stillActive.has(a.raw.id));
+    const wanted = new Set(selected.map((entry) => entry.raw.id));
+    const filtered = selectGroupSources(freshEntries, freshCoverage.activeEntries, wanted, 2, replacesEntryId);
     if (filtered.length === 0) {
       throw new Error("All source arcs were already bound by another volume or deleted");
     }
-    if (filtered.length < selected.length) {
-      selected = filtered;
+    const selectionShrank = filtered.length < selected.length;
+    selected = filtered;
+    if (selectionShrank) {
       const firstIdxs = selected.map((a) => a.meta.firstMsgIdx).filter((n) => typeof n === "number");
       const lastIdxs = selected.map((a) => a.meta.lastMsgIdx).filter((n) => typeof n === "number");
       firstIdx = firstIdxs.length ? Math.min(...firstIdxs) : 0;
@@ -2908,7 +2954,7 @@ async function commitVolume(chatId, userId, selected, result, firstIdx, lastIdx,
     const failedSupersedes = [];
     for (const arc of selected) {
       try {
-        await patchEntryMeta(arc, { supersededByEntryId: volumeEntry.id }, userId);
+        await setEntrySuperseded(arc, volumeEntry.id, userId);
       } catch (err) {
         failedSupersedes.push(arc.raw.id);
         warn(`failed to mark arc ${arc.raw.id} superseded by volume ${volumeEntry.id}: ${describeError(err)}`);
@@ -3000,7 +3046,7 @@ async function acceptPreview(chatId, draftId, profile, userId) {
     const coverage = await buildCoverage(chatId, userId, groupSelectionEntries);
     const wanted = new Set(preview.sourceChapterEntryIds ?? []);
     const sourceTier = isVolume ? 2 : 1;
-    const selected = coverage.activeEntries.filter((e) => e.meta.tier === sourceTier && wanted.has(e.raw.id));
+    const selected = selectGroupSources(entries, coverage.activeEntries, wanted, sourceTier, preview.replacesEntryId);
     if (selected.length === 0) {
       dropPendingPreview(userId, chatId, draftId);
       cb?.onToast(userId, "warn", isVolume ? "LumiBooks can't save this volume, its arcs were deleted or already bound" : "LumiBooks can't save this arc, its chapters were deleted or already bound");
@@ -3948,6 +3994,7 @@ async function confirmAdoptLorebook(chatId, userId, bookId, plan) {
         supersededByEntryId: claimedSources.get(source.id) ?? null
       };
       await spindle.world_books.entries.update(source.id, {
+        disabled: claimedSources.has(source.id),
         constant: settings.forceConstantEntries,
         position: 8,
         outlet_name: normalizeOutletName(settings.memoryOutletName),
@@ -3963,6 +4010,7 @@ async function confirmAdoptLorebook(chatId, userId, bookId, plan) {
       const source = updatedEntries[i];
       const outletName = source.outlet_name;
       await spindle.world_books.entries.update(source.id, {
+        disabled: source.disabled,
         constant: source.constant,
         position: source.position,
         outlet_name: typeof outletName === "string" ? outletName : "",
@@ -4015,28 +4063,34 @@ var PUSH_DEBOUNCE_MS = 30;
 var pushQueues = new Map;
 async function doPushState(userId, chatId) {
   try {
+    let resolvedChatId = chatId ?? null;
     let refreshContext;
-    if (chatId) {
-      const active = await spindle.chats.getActive(userId).catch(() => null);
-      if (active && active.id !== chatId)
-        return;
-      refreshContext = await loadChatRefreshContext(userId, chatId);
+    const active = await spindle.chats.getActive(userId).catch(() => null);
+    if (resolvedChatId && active && active.id !== resolvedChatId)
+      return;
+    if (!resolvedChatId)
+      resolvedChatId = active?.id ?? null;
+    if (resolvedChatId) {
+      refreshContext = await loadChatRefreshContext(userId, resolvedChatId);
       if (refreshContext.chat) {
-        await syncStoryOrderForChat(chatId, userId, refreshContext.entries).catch((err) => {
+        await syncSupersededEntryStates(refreshContext.entries, userId).catch((err) => {
+          warn(`hierarchy entry state sync before state failed: ${describeError(err)}`);
+        });
+        await syncStoryOrderForChat(resolvedChatId, userId, refreshContext.entries).catch((err) => {
           warn(`story order sync before state failed: ${describeError(err)}`);
         });
-        await syncNamingForChat(chatId, userId, refreshContext).catch((err) => {
+        await syncNamingForChat(resolvedChatId, userId, refreshContext).catch((err) => {
           warn(`naming sync before state failed: ${describeError(err)}`);
         });
-        await syncProjectionEntry(chatId, userId, refreshContext).catch((err) => {
+        await syncProjectionEntry(resolvedChatId, userId, refreshContext).catch((err) => {
           warn(`projection sync before state failed: ${describeError(err)}`);
         });
       }
     }
-    const state = await buildState(userId, chatId, refreshContext);
-    if (chatId) {
-      const active = await spindle.chats.getActive(userId).catch(() => null);
-      if (active && active.id !== chatId)
+    const state = await buildState(userId, resolvedChatId, refreshContext);
+    if (resolvedChatId) {
+      const latestActive = await spindle.chats.getActive(userId).catch(() => null);
+      if (latestActive && latestActive.id !== resolvedChatId)
         return;
     }
     send({ type: "state", state }, userId);
@@ -4469,7 +4523,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
             if (src.meta.supersededByEntryId !== msg.entryId)
               continue;
             try {
-              await patchEntryMeta(src, { supersededByEntryId: null }, userId);
+              await setEntrySuperseded(src, null, userId);
             } catch (err) {
               warn(`failed to clear supersededByEntryId on entry ${src.raw.id}: ${describeError(err)}`);
             }
@@ -4498,7 +4552,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
             if (src.meta.supersededByEntryId !== msg.entryId)
               continue;
             try {
-              await patchEntryMeta(src, { supersededByEntryId: null }, userId);
+              await setEntrySuperseded(src, null, userId);
             } catch (err) {
               warn(`failed to clear supersededByEntryId on entry ${src.raw.id}: ${describeError(err)}`);
             }

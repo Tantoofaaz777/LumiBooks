@@ -9,7 +9,15 @@ import {
   isExcluded,
   reconcileVisibility,
 } from "./coverage";
-import { createChapterEntry, deleteEntry, ensureBookForChat, invalidateBookCache, listLmbEntries, patchEntryMeta, type LMBEntry } from "./world-book";
+import {
+  createChapterEntry,
+  deleteEntry,
+  ensureBookForChat,
+  invalidateBookCache,
+  listLmbEntries,
+  setEntrySuperseded,
+  type LMBEntry,
+} from "./world-book";
 import { loadSettings } from "./storage";
 import { formatEntryName, resolveChatName, savedMemoryContent } from "./naming";
 import { inheritedStoryOrder, nextStoryOrder, storyOrderOf } from "./story-order";
@@ -76,6 +84,37 @@ function capMap<K, V>(map: Map<K, V>, cap: number): void {
     if (oldest === undefined) break;
     map.delete(oldest);
   }
+}
+
+function selectGroupSources(
+  entries: LMBEntry[],
+  activeEntries: LMBEntry[],
+  wanted: Set<string>,
+  sourceTier: 1 | 2,
+  replacesEntryId?: string,
+): LMBEntry[] {
+  const eligibleIds = new Set(
+    activeEntries
+      .filter((entry) => entry.meta.tier === sourceTier && wanted.has(entry.raw.id))
+      .map((entry) => entry.raw.id),
+  );
+
+  if (replacesEntryId) {
+    const replacedTier = sourceTier === 1 ? 2 : 3;
+    const replaced = entries.find(
+      (entry) => entry.raw.id === replacesEntryId && entry.meta.tier === replacedTier,
+    );
+    const declaredSourceIds = new Set(replaced?.meta.sourceChapterEntryIds ?? []);
+    for (const entry of entries) {
+      if (entry.meta.tier !== sourceTier || !wanted.has(entry.raw.id)) continue;
+      if (!declaredSourceIds.has(entry.raw.id)) continue;
+      if (entry.meta.supersededByEntryId === replacesEntryId) eligibleIds.add(entry.raw.id);
+    }
+  }
+
+  return entries
+    .filter((entry) => eligibleIds.has(entry.raw.id))
+    .sort((left, right) => storyOrderOf(left) - storyOrderOf(right));
 }
 type BusyKind = BusyEntry["kind"];
 
@@ -570,9 +609,13 @@ export async function createArcFromChapters(
       : entries;
     const coverage = await buildCoverage(chatId, userId, entriesForSelection);
     const wanted = new Set(chapterEntryIds);
-    const chapters = coverage.activeEntries
-      .filter((e) => e.meta.tier === 1 && wanted.has(e.raw.id))
-      .sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
+    const chapters = selectGroupSources(
+      entries,
+      coverage.activeEntries,
+      wanted,
+      1,
+      opts.replacesEntryId,
+    );
     if (chapters.length === 0) return null;
     return await runArc(chatId, profile, settings, userId, chapters, { replacesEntryId: opts.replacesEntryId });
   } finally {
@@ -662,13 +705,20 @@ async function commitArc(
     ? freshEntries.filter((e) => e.raw.id !== replacesEntryId)
     : freshEntries;
   const freshCoverage = await buildCoverage(chatId, userId, entriesForCoverage);
-  const stillActive = new Set(freshCoverage.activeEntries.filter((e) => e.meta.tier === 1).map((e) => e.raw.id));
-  const filtered = selected.filter((c) => stillActive.has(c.raw.id));
+  const wanted = new Set(selected.map((entry) => entry.raw.id));
+  const filtered = selectGroupSources(
+    freshEntries,
+    freshCoverage.activeEntries,
+    wanted,
+    1,
+    replacesEntryId,
+  );
   if (filtered.length === 0) {
     throw new Error("All source chapters were already bound by another arc or deleted");
   }
-  if (filtered.length < selected.length) {
-    selected = filtered;
+  const selectionShrank = filtered.length < selected.length;
+  selected = filtered;
+  if (selectionShrank) {
     const firstIdxs = selected.map((c) => c.meta.firstMsgIdx).filter((n): n is number => typeof n === "number");
     const lastIdxs = selected.map((c) => c.meta.lastMsgIdx).filter((n): n is number => typeof n === "number");
     firstIdx = firstIdxs.length ? Math.min(...firstIdxs) : 0;
@@ -724,7 +774,7 @@ async function commitArc(
   const failedSupersedes: string[] = [];
   for (const ch of selected) {
     try {
-      await patchEntryMeta(ch, { supersededByEntryId: arcEntry.id }, userId);
+      await setEntrySuperseded(ch, arcEntry.id, userId);
     } catch (err) {
       failedSupersedes.push(ch.raw.id);
       warn(`failed to mark chapter ${ch.raw.id} superseded by arc ${arcEntry.id}: ${describeError(err)}`);
@@ -780,9 +830,13 @@ export async function createVolumeFromArcs(
       : entries;
     const coverage = await buildCoverage(chatId, userId, entriesForSelection);
     const wanted = new Set(arcEntryIds);
-    const arcs = coverage.activeEntries
-      .filter((e) => e.meta.tier === 2 && wanted.has(e.raw.id))
-      .sort((a, b) => storyOrderOf(a) - storyOrderOf(b));
+    const arcs = selectGroupSources(
+      entries,
+      coverage.activeEntries,
+      wanted,
+      2,
+      opts.replacesEntryId,
+    );
     if (arcs.length === 0) return null;
     return await runVolume(chatId, profile, settings, userId, arcs, opts.replacesEntryId);
   } finally {
@@ -871,13 +925,20 @@ async function commitVolume(
     ? freshEntries.filter((e) => e.raw.id !== replacesEntryId)
     : freshEntries;
   const freshCoverage = await buildCoverage(chatId, userId, entriesForCoverage);
-  const stillActive = new Set(freshCoverage.activeEntries.filter((e) => e.meta.tier === 2).map((e) => e.raw.id));
-  const filtered = selected.filter((a) => stillActive.has(a.raw.id));
+  const wanted = new Set(selected.map((entry) => entry.raw.id));
+  const filtered = selectGroupSources(
+    freshEntries,
+    freshCoverage.activeEntries,
+    wanted,
+    2,
+    replacesEntryId,
+  );
   if (filtered.length === 0) {
     throw new Error("All source arcs were already bound by another volume or deleted");
   }
-  if (filtered.length < selected.length) {
-    selected = filtered;
+  const selectionShrank = filtered.length < selected.length;
+  selected = filtered;
+  if (selectionShrank) {
     const firstIdxs = selected.map((a) => a.meta.firstMsgIdx).filter((n): n is number => typeof n === "number");
     const lastIdxs = selected.map((a) => a.meta.lastMsgIdx).filter((n): n is number => typeof n === "number");
     firstIdx = firstIdxs.length ? Math.min(...firstIdxs) : 0;
@@ -933,7 +994,7 @@ async function commitVolume(
   const failedSupersedes: string[] = [];
   for (const arc of selected) {
     try {
-      await patchEntryMeta(arc, { supersededByEntryId: volumeEntry.id }, userId);
+      await setEntrySuperseded(arc, volumeEntry.id, userId);
     } catch (err) {
       failedSupersedes.push(arc.raw.id);
       warn(`failed to mark arc ${arc.raw.id} superseded by volume ${volumeEntry.id}: ${describeError(err)}`);
@@ -1040,7 +1101,13 @@ export async function acceptPreview(
     const coverage = await buildCoverage(chatId, userId, groupSelectionEntries);
     const wanted = new Set(preview.sourceChapterEntryIds ?? []);
     const sourceTier = isVolume ? 2 : 1;
-    const selected = coverage.activeEntries.filter((e) => e.meta.tier === sourceTier && wanted.has(e.raw.id));
+    const selected = selectGroupSources(
+      entries,
+      coverage.activeEntries,
+      wanted,
+      sourceTier,
+      preview.replacesEntryId,
+    );
     if (selected.length === 0) {
       dropPendingPreview(userId, chatId, draftId);
       cb?.onToast(userId, "warn", isVolume

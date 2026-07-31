@@ -202,6 +202,7 @@ export async function confirmAdoptLorebook(
       await spindle.world_books.entries.update(
         source.id,
         {
+          disabled: claimedSources.has(source.id),
           constant: settings.forceConstantEntries,
           position: 8,
           outlet_name: normalizeOutletName(settings.memoryOutletName),
@@ -221,6 +222,7 @@ export async function confirmAdoptLorebook(
       await spindle.world_books.entries.update(
         source.id,
         {
+          disabled: source.disabled,
           constant: source.constant,
           position: source.position,
           outlet_name: typeof outletName === "string" ? outletName : "",
